@@ -1,0 +1,212 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique user auth ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoUrl": { "type": "string", "description": "Profile photo URL or base64 data URI" },
+        "avatarUrl": { "type": "string", "description": "Custom artist avatar URL or base64 data URI" },
+        "phoneNumber": { "type": "string", "description": "Artist primary contact or WhatsApp number" },
+        "city": { "type": "string", "description": "Artist city or studio location" },
+        "instagramHandle": { "type": "string", "description": "Instagram handle or portfolio URL" },
+        "portfolioLinks": { "type": "array", "items": { "type": "string" }, "description": "List of artist portfolio, showreel, or social URLs" },
+        "specialty": { "type": "string", "description": "Artist creative specialty (e.g. Fashion Model, Photographer)" },
+        "bio": { "type": "string", "description": "Short artist biography and studio experience" },
+        "role": { "type": "string", "enum": ["user", "admin"], "description": "User role" },
+        "fcmToken": { "type": "string", "description": "Firebase Cloud Messaging device token" },
+        "fcmTokenUpdatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of token refresh" },
+        "announcementsOptIn": { "type": "boolean", "description": "Whether the user opted into studio announcements FCM topic" },
+        "appointmentPushOptIn": { "type": "boolean", "description": "Whether the user opted into real-time appointment push alerts" },
+        "favoritePackageIds": { "type": "array", "items": { "type": "string" }, "description": "Saved favorite studio service package IDs" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of update" }
+      },
+      "required": ["userId", "email", "createdAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Admin authorization entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Admin user ID" },
+        "email": { "type": "string", "description": "Admin email" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["userId", "email"]
+    },
+    "ModelRegistration": {
+      "title": "ModelRegistration",
+      "description": "Model portfolio application for studio representation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Submitter auth UID" },
+        "fullName": { "type": "string", "description": "Model full name" },
+        "age": { "type": "integer", "description": "Model age, must be 18 or older" },
+        "gender": { "type": "string", "description": "Gender identity" },
+        "city": { "type": "string", "description": "City of residence" },
+        "phoneNumber": { "type": "string", "description": "Contact phone number" },
+        "skills": { "type": "string", "description": "Modeling skills and experience summary" },
+        "portfolioUrls": { "type": "string", "description": "Comma separated or main portfolio image URL" },
+        "consentGiven": { "type": "boolean", "description": "Consent to terms and data processing" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Approval status" },
+        "adminNotes": { "type": "string", "description": "Optional notes from studio admin" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["userId", "fullName", "age", "city", "phoneNumber", "consentGiven", "status", "createdAt"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Shoot booking appointment for photography/video production",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Booking client auth UID" },
+        "clientName": { "type": "string", "description": "Client full name" },
+        "contactNumber": { "type": "string", "description": "Client phone number" },
+        "serviceType": { "type": "string", "description": "Requested service" },
+        "preferredDate": { "type": "string", "description": "Preferred shoot date" },
+        "preferredTime": { "type": "string", "description": "Preferred shoot time" },
+        "location": { "type": "string", "description": "Studio or outdoor shoot location" },
+        "notes": { "type": "string", "description": "Special requirements or instructions" },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Completed", "Cancelled"], "description": "Booking status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["userId", "clientName", "contactNumber", "serviceType", "preferredDate", "status", "createdAt"]
+    },
+    "GalleryItem": {
+      "title": "GalleryItem",
+      "description": "Portfolio photo or video reel displayed in the studio gallery",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Uploader auth UID" },
+        "title": { "type": "string", "description": "Item title" },
+        "category": { "type": "string", "description": "Fashion, Commercial, Portfolio, Video Reel, Bridal, Editorial" },
+        "mediaType": { "type": "string", "enum": ["photo", "video"], "description": "Type of media" },
+        "mediaUrl": { "type": "string", "description": "Media HTTPS URL or high-quality base64 data URI" },
+        "thumbnailUrl": { "type": "string", "description": "Optional thumbnail preview URL" },
+        "isDemo": { "type": "boolean", "description": "Whether this is marked as DEMO content" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Admin approval status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["userId", "title", "category", "mediaType", "mediaUrl", "isDemo", "status", "createdAt"]
+    },
+    "BlogPost": {
+      "title": "BlogPost",
+      "description": "Studio news, photography tips, and behind-the-scenes articles published by admins",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "description": "Admin author UID" },
+        "authorName": { "type": "string", "description": "Admin author display name" },
+        "title": { "type": "string", "description": "Post title" },
+        "category": { "type": "string", "enum": ["Studio News", "Photography Tips", "Behind The Scenes", "Gear & Lighting", "Model Spotlight"], "description": "Article category" },
+        "content": { "type": "string", "description": "Main post content body" },
+        "summary": { "type": "string", "description": "Short excerpt summary" },
+        "imageUrl": { "type": "string", "description": "Cover image URL" },
+        "tags": { "type": "string", "description": "Comma separated search tags" },
+        "status": { "type": "string", "enum": ["published", "draft"], "description": "Publication status" },
+        "readTimeMinutes": { "type": "integer", "description": "Estimated read time in minutes" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["authorId", "title", "category", "content", "status", "createdAt"]
+    },
+    "ServiceReview": {
+      "title": "ServiceReview",
+      "description": "Star rating and written review submitted by a client for a completed studio service",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Reviewer auth UID" },
+        "bookingId": { "type": "string", "description": "Associated completed booking document ID" },
+        "reviewerName": { "type": "string", "description": "Reviewer display name" },
+        "reviewerAvatarUrl": { "type": "string", "description": "Reviewer avatar URL or base64 data URI" },
+        "serviceType": { "type": "string", "description": "Reviewed studio service category or package" },
+        "rating": { "type": "integer", "description": "Star rating from 1 to 5" },
+        "comment": { "type": "string", "description": "Written client review feedback" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of update" }
+      },
+      "required": ["userId", "bookingId", "reviewerName", "serviceType", "rating", "comment", "createdAt"]
+    },
+    "StudioAnnouncement": {
+      "title": "StudioAnnouncement",
+      "description": "Studio-wide announcement broadcast via Firebase Cloud Messaging topic and persisted in Firestore",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "description": "Admin broadcaster UID" },
+        "authorName": { "type": "string", "description": "Admin broadcaster name" },
+        "title": { "type": "string", "description": "Announcement headline" },
+        "message": { "type": "string", "description": "Announcement detailed body" },
+        "category": { "type": "string", "enum": ["Studio Update", "Casting Call", "Offer & Discount", "Schedule Alert", "Workshop & Gear"], "description": "Announcement category" },
+        "priority": { "type": "string", "enum": ["normal", "urgent"], "description": "Delivery priority" },
+        "targetTopic": { "type": "string", "description": "Target FCM topic name" },
+        "actionRoute": { "type": "string", "enum": ["home", "bookings", "catalog", "portfolio", "models"], "description": "Deep-link destination route" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of update" }
+      },
+      "required": ["authorId", "title", "message", "category", "priority", "createdAt"]
+    },
+    "AppointmentNotification": {
+      "title": "AppointmentNotification",
+      "description": "Targeted real-time appointment status update notification sent to an individual user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Recipient user UID" },
+        "bookingId": { "type": "string", "description": "Associated booking ID" },
+        "title": { "type": "string", "description": "Notification title" },
+        "message": { "type": "string", "description": "Notification body message" },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Completed", "Cancelled", "Rescheduled"], "description": "Appointment status" },
+        "serviceType": { "type": "string", "description": "Booked shoot service type" },
+        "targetFcmToken": { "type": "string", "description": "Client device FCM token snapshot" },
+        "isRead": { "type": "boolean", "description": "Whether user has read the notification" },
+        "channelType": { "type": "string", "description": "FCM notification channel classifier" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of update" }
+      },
+      "required": ["userId", "bookingId", "title", "message", "status", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile information"
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppointmentNotification" },
+      "description": "Per-user real-time appointment status update notifications"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Studio authorized administrators"
+    },
+    "/models/{modelId}": {
+      "schema": { "$ref": "#/entities/ModelRegistration" },
+      "description": "Model registrations submitted for review"
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Shoot and production bookings"
+    },
+    "/gallery/{galleryId}": {
+      "schema": { "$ref": "#/entities/GalleryItem" },
+      "description": "Studio gallery media items"
+    },
+    "/posts/{postId}": {
+      "schema": { "$ref": "#/entities/BlogPost" },
+      "description": "Studio blog posts, photography tips, and behind-the-scenes content"
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/ServiceReview" },
+      "description": "Client star ratings and written reviews for completed studio services"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/StudioAnnouncement" },
+      "description": "Studio-wide announcements broadcast to subscribed FCM users"
+    }
+  }
+}

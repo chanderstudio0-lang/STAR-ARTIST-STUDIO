@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0C0C0C" />
+  <meta name="background-color" content="#0C0C0C" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Star Artist" />
+  <meta name="description" content="STAR ARTIST STUDIO — Premium Modeling, Photography & 4K Cinema Video Production Studio in Talwara Khurd, Sirsa, Haryana." />
+
+  <title>STAR ARTIST STUDIO — Luxury Photography, Modeling & 4K Cinema PWA</title>
+
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "LocalBusiness",
+      "@id": "https://gen-lang-client-0548683163.web.app/#localbusiness",
+      "name": "STAR ARTIST STUDIO",
+      "alternateName": "Star Artist Studio",
+      "description": "Premium Photography, Modeling Portfolio, Editorial Bridal & 4K Cinema Video Production Studio serving Sirsa, Ellenabad, Talwara Khurd, and Haryana.",
+      "url": "https://gen-lang-client-0548683163.web.app/",
+      "image": "https://gen-lang-client-0548683163.web.app/images/hero-banner.jpg",
+      "logo": "https://gen-lang-client-0548683163.web.app/icons/icon-512.png",
+      "telephone": "+91-9812890081",
+      "email": "chanderstudio0@gmail.com",
+      "priceRange": "₹₹",
+      "currenciesAccepted": "INR",
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "Star Artist Studio, Talwara Khurd, Tehsil Ellenabad",
+        "addressLocality": "Sirsa",
+        "addressRegion": "Haryana",
+        "postalCode": "125102",
+        "addressCountry": "IN"
+      },
+      "areaServed": [
+        {
+          "@type": "City",
+          "name": "Sirsa"
+        },
+        {
+          "@type": "City",
+          "name": "Ellenabad"
+        },
+        {
+          "@type": "State",
+          "name": "Haryana"
+        }
+      ],
+      "hasMap": "https://www.google.com/maps/search/?api=1&query=Star%20Artist%20Studio%2C%20Talwara%20Khurd%2C%20Tehsil%20Ellenabad%2C%20District%20Sirsa%2C%20Haryana%2C%20India%20-%20125102.",
+      "openingHoursSpecification": [
+        {
+          "@type": "OpeningHoursSpecification",
+          "dayOfWeek": [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday"
+          ],
+          "opens": "10:00",
+          "closes": "20:00"
+        }
+      ],
+      "hasOfferCatalog": {
+        "@type": "OfferCatalog",
+        "name": "Photography, Modeling & 4K Cinema Services",
+        "itemListElement": [
+          {
+            "@type": "Offer",
+            "itemOffered": {
+              "@type": "Service",
+              "name": "High-Fashion Editorial Photography",
+              "areaServed": "Sirsa, Haryana"
+            }
+          },
+          {
+            "@type": "Offer",
+            "itemOffered": {
+              "@type": "Service",
+              "name": "Model Portfolio Shoot",
+              "areaServed": "Sirsa, Haryana"
+            }
+          },
+          {
+            "@type": "Offer",
+            "itemOffered": {
+              "@type": "Service",
+              "name": "Bridal & Couture Photography",
+              "areaServed": "Sirsa, Haryana"
+            }
+          },
+          {
+            "@type": "Offer",
+            "itemOffered": {
+              "@type": "Service",
+              "name": "4K Cinema Music Video & Commercial Production",
+              "areaServed": "Sirsa, Haryana"
+            }
+          }
+        ]
+      },
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "telephone": "+91-9812890081",
+        "contactType": "customer service",
+        "email": "chanderstudio0@gmail.com",
+        "availableLanguage": ["English", "Hindi"]
+      },
+      "sameAs": [
+        "https://www.instagram.com/starartiststudio",
+        "https://www.facebook.com/starartiststudio",
+        "https://www.linkedin.com/company/star-artist-studio"
+      ]
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a href="#home" class="brand" data-route="home">
+        <img src="/icons/icon-192.png" alt="STAR ARTIST STUDIO Logo" class="brand-logo" />
+        <div class="brand-text">
+          <h1 data-i18n="brandName">STAR ARTIST STUDIO</h1>
+          <span data-i18n="locationShort">Talwara Khurd, Sirsa, Haryana</span>
+        </div>
+      </a>
+
+      <nav class="desktop-nav" aria-label="Primary Navigation">
+        <button class="nav-pill active" data-route="home" data-i18n="navHome">Home</button>
+        <button class="nav-pill" data-route="catalog" data-i18n="navCatalog">Catalog</button>
+        <button class="nav-pill" data-route="booking" data-i18n="navBooking">Book Shoot</button>
+        <button class="nav-pill" data-route="models" data-i18n="navModels">Models 18+</button>
+        <button class="nav-pill" data-route="gallery" data-i18n="navGallery">Gallery</button>
+        <button class="nav-pill hidden" id="desktopAdminNavBtn" data-route="admin" data-i18n="navAdmin">Admin</button>
+      </nav>
+
+      <div class="topbar-actions">
+        <button id="installAppBtn" class="icon-btn hidden" type="button" title="Install PWA">
+          <span>+</span>
+          <span data-i18n="installBtn">Install App</span>
+        </button>
+        <button id="langToggleBtn" class="icon-btn" type="button" aria-label="Switch Language">EN / HI</button>
+        <button id="themeToggleBtn" class="icon-btn" type="button" aria-label="Toggle Theme">Studio Light</button>
+        <button id="authActionBtn" class="btn-gold" type="button" style="min-height: 44px; padding: 8px 14px;" data-i18n="signInBtn">Sign In</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="status-strip">
+      <div>
+        <span id="firebaseStatusDot" class="status-dot"></span>
+        <span id="firebaseStatusText" style="font-size: 0.88rem; color: var(--text-secondary);">Checking Firebase Studio Sync...</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span id="signedInUserLabel" class="badge hidden"></span>
+        <button id="openAdminConsoleQuickBtn" class="chip-btn hidden" style="min-height: 36px; padding: 4px 12px;" data-route="admin" data-i18n="navAdmin">Admin</button>
+        <button id="openFirebaseSetupBtn" class="chip-btn" style="min-height: 36px; padding: 4px 12px;" type="button" data-i18n="setupFirebaseBtn">Firebase Setup</button>
+      </div>
+    </div>
+
+    <div id="installPromptBanner" class="install-banner hidden">
+      <div>
+        <strong style="color: var(--gold);" data-i18n="installBannerTitle">Install STAR ARTIST STUDIO on your phone</strong>
+        <p style="margin: 4px 0 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="installBannerDesc">
+          Fast offline-ready access, instant shoot booking &amp; full-screen luxury experience.
+        </p>
+        <p id="installHintText" style="margin: 4px 0 0; font-size: 0.78rem; color: var(--text-muted);" data-i18n="installHowTo"></p>
+      </div>
+      <button id="bannerInstallCtaBtn" class="btn-gold" type="button" data-i18n="installBtn">Install App</button>
+    </div>
+
+    <!-- HOME VIEW -->
+    <section id="view-home" class="view-section">
+      <div class="hero-grid">
+        <div class="hero-card">
+          <span class="eyebrow" data-i18n="heroBadge">BESPOKE LUXURY PRODUCTION</span>
+          <h2 data-i18n="heroTitle">Crafting Iconic Visuals &amp; Modeling Careers</h2>
+          <p style="color: var(--text-secondary); margin: 0;" data-i18n="heroDesc">
+            Full-service studio for high-fashion editorial photography, modeling comp-cards, bridal stories, and 4K cinema music video direction.
+          </p>
+          <div class="hero-cta-row">
+            <button class="btn-gold" type="button" data-route="booking" data-i18n="heroBookCta">Book a Session</button>
+            <button class="btn-outline" type="button" data-route="models" data-i18n="heroModelCta">Apply as Model (18+)</button>
+          </div>
+        </div>
+        <div class="hero-media">
+          <img src="/images/hero-banner.jpg" alt="Star Artist Studio Luxury Production Floor" />
+          <div class="hero-media-caption">
+            <div style="color: var(--gold-light); font-size: 0.8rem;">TALWARA KHURD • SIRSA</div>
+            <div>Editorial Stills • Modeling • 4K Music Videos</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="studio-card">
+          <div class="stat-value">8+</div>
+          <div class="stat-label" data-i18n="statsPackages">Signature Packages</div>
+        </div>
+        <div class="studio-card">
+          <div class="stat-value">4K 120fps</div>
+          <div class="stat-label" data-i18n="statsQuality">Cinema Production</div>
+        </div>
+        <div class="studio-card">
+          <div class="stat-value">18+</div>
+          <div class="stat-label" data-i18n="statsAge">Verified Model Policy</div>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <h2 data-i18n="servicesHeading">Signature Studio Services</h2>
+        <p data-i18n="servicesSubheading">Compare Essential, Pro &amp; Flagship packages with instant booking prefill.</p>
+      </div>
+      <div id="homeFeaturedServicesGrid" class="cards-grid"></div>
+      <div style="margin-top: 18px;">
+        <button class="btn-outline" type="button" data-route="catalog" data-i18n="viewFullCatalog">Explore Full Catalog</button>
+      </div>
+
+      <div class="section-header" style="margin-top: 34px;">
+        <h2 data-i18n="portfolioStripHeading">Studio Showcase</h2>
+      </div>
+      <div id="homeShowcaseGrid" class="cards-grid"></div>
+
+      <div class="studio-card" style="margin-top: 32px;">
+        <h3 style="margin: 0; color: var(--gold);" data-i18n="contactHeading">Visit &amp; Connect With Us</h3>
+        <p style="margin: 0; color: var(--text-secondary);">
+          Star Artist Studio, Talwara Khurd, Tehsil Ellenabad, District Sirsa, Haryana, India - 125102
+        </p>
+        <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted);" data-i18n="contactHours">Open Daily: 10:00 AM – 8:00 PM</p>
+        <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">
+          <span data-i18n="studioEmailLabel">Official Studio Email:</span>
+          <a href="mailto:chanderstudio0@gmail.com" style="color: var(--gold-light); font-weight: 700; text-decoration: underline;">chanderstudio0@gmail.com</a>
+        </p>
+        <div class="hero-cta-row">
+          <a href="tel:+919812890081" class="btn-gold" data-i18n="callStudio">Call +91 9812890081</a>
+          <a href="https://wa.me/919541020948" target="_blank" rel="noopener noreferrer" class="btn-whatsapp" data-i18n="whatsappStudio">WhatsApp Studio</a>
+          <a href="mailto:chanderstudio0@gmail.com" class="btn-outline" data-i18n="emailStudio">Email Studio</a>
+          <a id="openMapsLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-outline" data-i18n="openMaps">Open Google Maps</a>
+        </div>
+      </div>
+
+      <section id="homeConnectSection" class="studio-card connect-section" aria-labelledby="connectHeading" style="margin-top: 20px;">
+        <div class="connect-header">
+          <div>
+            <h3 id="connectHeading" style="margin: 0; color: var(--gold);" data-i18n="connectHeading">Connect</h3>
+            <p style="margin: 6px 0 0; font-size: 0.9rem; color: var(--text-secondary);" data-i18n="connectSubheading">
+              Follow Star Artist Studio on Instagram, Facebook &amp; LinkedIn for castings, shoots and reels.
+            </p>
+          </div>
+          <span class="badge">@starartiststudio</span>
+        </div>
+
+        <div class="social-connect-grid" role="list" aria-label="Star Artist Studio social media profiles">
+          <a
+            id="socialInstagramLink"
+            href="https://www.instagram.com/starartiststudio"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="social-link-btn"
+            aria-label="Star Artist Studio on Instagram"
+            role="listitem"
+          >
+            <span class="social-icon-badge is-instagram" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+              </svg>
+            </span>
+            <span class="social-link-copy">
+              <strong data-i18n="connectInstagram">Instagram</strong>
+              <small>@starartiststudio</small>
+            </span>
+          </a>
+
+          <a
+            id="socialFacebookLink"
+            href="https://www.facebook.com/starartiststudio"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="social-link-btn"
+            aria-label="Star Artist Studio on Facebook"
+            role="listitem"
+          >
+            <span class="social-icon-badge is-facebook" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M14 13.5h2.5l1-4H14v-2c0-1.03 0-2 2-2h1.5V2.14c-.326-.043-1.557-.14-2.857-.14C11.928 2 10 3.657 10 6.7v2.8H7v4h3V22h4v-8.5z"></path>
+              </svg>
+            </span>
+            <span class="social-link-copy">
+              <strong data-i18n="connectFacebook">Facebook</strong>
+              <small>Star Artist Studio</small>
+            </span>
+          </a>
+
+          <a
+            id="socialLinkedinLink"
+            href="https://www.linkedin.com/company/star-artist-studio"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="social-link-btn"
+            aria-label="Star Artist Studio on LinkedIn"
+            role="listitem"
+          >
+            <span class="social-icon-badge is-linkedin" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M6.94 8.5H3.56V19.5H6.94V8.5ZM5.25 3.5C4.14 3.5 3.25 4.39 3.25 5.5C3.25 6.6 4.14 7.5 5.25 7.5C6.35 7.5 7.25 6.6 7.25 5.5C7.25 4.39 6.35 3.5 5.25 3.5ZM20.44 13.02C20.44 9.88 18.76 8.22 16.16 8.22C14.37 8.22 13.48 9.21 13.02 9.93V8.5H9.65C9.7 9.48 9.65 19.5 9.65 19.5H13.02V13.36C13.02 13.02 13.05 12.69 13.15 12.45C13.42 11.78 14.03 11.09 15.07 11.09C16.41 11.09 17.06 12.11 17.06 13.6V19.5H20.44V13.02Z"></path>
+              </svg>
+            </span>
+            <span class="social-link-copy">
+              <strong data-i18n="connectLinkedin">LinkedIn</strong>
+              <small>Company Profile</small>
+            </span>
+          </a>
+        </div>
+      </section>
+    </section>
+
+    <!-- CATALOG VIEW -->
+    <section id="view-catalog" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow">STAR ARTIST STUDIO</span>
+        <h2 data-i18n="catalogHeading">Studio Service Catalog</h2>
+      </div>
+      <div class="filter-bar">
+        <input id="catalogSearchInput" type="search" class="input" style="max-width: 340px;" placeholder="Search bridal, editorial, 4K video, catalog..." />
+        <button class="chip-btn active" data-cat-filter="all" data-i18n="filterAll">All</button>
+        <button class="chip-btn" data-cat-filter="photography" data-i18n="filterPhoto">Photography</button>
+        <button class="chip-btn" data-cat-filter="modeling" data-i18n="filterModel">Modeling</button>
+        <button class="chip-btn" data-cat-filter="production" data-i18n="filterVideo">Video Production</button>
+      </div>
+      <div id="catalogGrid" class="cards-grid"></div>
+    </section>
+
+    <!-- SHOOT BOOKING VIEW -->
+    <section id="view-booking" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow">PRODUCTION DESK</span>
+        <h2 data-i18n="bookingHeading">Book Your Studio Shoot</h2>
+        <p data-i18n="bookingSubheading">Reserve studio lighting bays, camera crew, or outdoor locations synced directly to our studio desk.</p>
+      </div>
+      <div class="split-grid">
+        <form id="bookingForm" class="studio-card form-grid two-col">
+          <div class="field">
+            <label for="bookingName" data-i18n="clientNameLabel">Client Full Name</label>
+            <input id="bookingName" class="input" required minlength="2" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="bookingPhone" data-i18n="phoneLabel">Contact Number (8–20 digits)</label>
+            <input id="bookingPhone" class="input" type="tel" required minlength="8" maxlength="20" placeholder="+91 98128..." />
+          </div>
+          <div class="field full">
+            <label for="bookingService" data-i18n="serviceLabel">Service Package</label>
+            <select id="bookingService" class="input" required></select>
+          </div>
+          <div class="field">
+            <label for="bookingDate" data-i18n="dateLabel">Preferred Shoot Date</label>
+            <input id="bookingDate" class="input" type="date" required />
+          </div>
+          <div class="field">
+            <label for="bookingTime" data-i18n="timeLabel">Preferred Session Time</label>
+            <select id="bookingTime" class="input">
+              <option value="10:00 AM">10:00 AM (Morning Gold)</option>
+              <option value="11:30 AM" selected>11:30 AM (Main Bay)</option>
+              <option value="02:00 PM">02:00 PM (Afternoon Cinema)</option>
+              <option value="04:30 PM">04:30 PM (Golden Hour)</option>
+              <option value="06:30 PM">06:30 PM (Studio Gel Night)</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label for="bookingLocation" data-i18n="locationLabel">Shoot Location</label>
+            <input id="bookingLocation" class="input" value="Studio (Talwara Khurd)" maxlength="200" />
+          </div>
+          <div class="field full">
+            <label for="bookingNotes" data-i18n="notesLabel">Creative Brief &amp; Outfit Notes</label>
+            <textarea id="bookingNotes" rows="3" class="input" maxlength="1000"></textarea>
+          </div>
+          <div class="field full">
+            <button type="submit" class="btn-gold" data-i18n="submitBookingBtn">Confirm Shoot Request</button>
+          </div>
+        </form>
+
+        <div class="studio-card">
+          <h3 style="margin: 0; color: var(--gold);" data-i18n="myBookingsHeading">My Shoot Bookings</h3>
+          <div id="myBookingsStatusBar" class="booking-status-bar hidden" role="tablist" aria-label="Filter bookings by status"></div>
+          <div id="myBookingsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODEL REGISTRATION 18+ VIEW -->
+    <section id="view-models" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow">18+ ROSTER VERIFICATION</span>
+        <h2 data-i18n="modelsHeading">18+ Model &amp; Talent Registration</h2>
+        <p data-i18n="modelsSubheading">Join our curated regional &amp; national roster. Strict 18+ age verification and written consent enforced.</p>
+      </div>
+      <div class="split-grid">
+        <form id="modelForm" class="studio-card form-grid two-col">
+          <div class="field">
+            <label for="modelName" data-i18n="fullNameLabel">Artist Full Name</label>
+            <input id="modelName" class="input" required minlength="2" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="modelAge" data-i18n="ageLabel">Age (Minimum 18 Years)</label>
+            <input id="modelAge" class="input" type="number" min="18" max="100" required />
+          </div>
+          <div class="field">
+            <label for="modelGender" data-i18n="genderLabel">Gender</label>
+            <select id="modelGender" class="input">
+              <option value="Female">Female</option>
+              <option value="Male">Male</option>
+              <option value="Non-Binary / Prefer not to say">Other / Non-Binary</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="modelCity" data-i18n="cityLabel">City / State</label>
+            <input id="modelCity" class="input" required maxlength="100" placeholder="Sirsa, Haryana" />
+          </div>
+          <div class="field">
+            <label for="modelPhone" data-i18n="phoneLabel">Contact Number (8–20 digits)</label>
+            <input id="modelPhone" class="input" type="tel" required minlength="8" maxlength="20" />
+          </div>
+          <div class="field">
+            <label for="modelSkills" data-i18n="skillsLabel">Skills (Runway, Print, Commercial, Acting)</label>
+            <input id="modelSkills" class="input" maxlength="1000" placeholder="Runway, Music Video, Bridal" />
+          </div>
+          <div class="field full">
+            <label for="modelPortfolio" data-i18n="portfolioUrlLabel">Portfolio / Instagram URL</label>
+            <input id="modelPortfolio" class="input" type="url" maxlength="2000" placeholder="https://instagram.com/..." />
+          </div>
+          <div class="field full">
+            <label class="checkbox-row">
+              <input id="modelConsent" type="checkbox" required />
+              <span data-i18n="consentLabel">
+                I confirm I am 18+ years old and consent to Star Artist Studio reviewing my portfolio for casting &amp; modeling bookings.
+              </span>
+            </label>
+          </div>
+          <div class="field full">
+            <button type="submit" class="btn-gold" data-i18n="submitModelBtn">Submit 18+ Application</button>
+          </div>
+        </form>
+
+        <div class="studio-card">
+          <h3 style="margin: 0; color: var(--gold);" data-i18n="myModelsHeading">My Model Applications</h3>
+          <div id="myModelsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- GALLERY VIEW -->
+    <section id="view-gallery" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow">PORTFOLIO &amp; 4K STILLS</span>
+        <h2 data-i18n="galleryHeading">Studio Gallery &amp; Showcase</h2>
+        <p data-i18n="gallerySubheading">Curated photography &amp; 4K cinema stills. Authenticated members may submit portfolio links for admin approval.</p>
+      </div>
+      <div id="galleryFilterBar" class="filter-bar"></div>
+      <div id="galleryGrid" class="cards-grid"></div>
+
+      <form id="galleryUploadForm" class="studio-card form-grid two-col" style="margin-top: 28px;">
+        <div class="field full">
+          <h3 style="margin: 0; color: var(--gold);" data-i18n="galleryUploadTitle">Submit Artwork to Gallery</h3>
+        </div>
+        <div class="field">
+          <label for="galleryTitle" data-i18n="artworkTitleLabel">Artwork Title</label>
+          <input id="galleryTitle" class="input" required maxlength="120" />
+        </div>
+        <div class="field">
+          <label for="galleryCategory" data-i18n="categoryLabel">Category</label>
+          <select id="galleryCategory" class="input">
+            <option value="Fashion">Fashion</option>
+            <option value="Editorial">Editorial</option>
+            <option value="Portrait">Portrait</option>
+            <option value="Bridal">Bridal</option>
+            <option value="Commercial">Commercial</option>
+            <option value="Video Reel">Video Reel</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="galleryMediaType" data-i18n="mediaTypeLabel">Media Type</label>
+          <select id="galleryMediaType" class="input">
+            <option value="photo">Photo</option>
+            <option value="video">Video</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="galleryMediaUrl" data-i18n="mediaUrlLabel">Image or Video URL</label>
+          <input id="galleryMediaUrl" class="input" type="url" required placeholder="https://..." />
+        </div>
+        <div class="field full">
+          <button type="submit" class="btn-gold" data-i18n="submitGalleryBtn">Submit for Gallery</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ADMIN DASHBOARD VIEW -->
+    <section id="view-admin" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow">SECURITY-RULE ENFORCED CONSOLE</span>
+        <h2 data-i18n="adminHeading">Authorized Admin Console</h2>
+      </div>
+      <div id="adminLockedPanel" class="studio-card">
+        <h3 style="margin: 0; color: var(--gold);" data-i18n="adminLockedTitle">Restricted to Authorized Studio Admin</h3>
+        <p style="margin: 0; color: var(--text-secondary);" data-i18n="adminLockedDesc">
+          Admin access is enforced by Firebase Firestore security rules. Client-side overrides are blocked.
+        </p>
+      </div>
+      <div id="adminConsoleContent" class="hidden">
+        <div id="adminStatsGrid" class="stats-grid"></div>
+        <div class="filter-bar">
+          <button class="chip-btn active" data-admin-tab="bookings" data-i18n="adminTabBookings">Bookings</button>
+          <button class="chip-btn" data-admin-tab="models" data-i18n="adminTabModels">Models</button>
+          <button class="chip-btn" data-admin-tab="gallery" data-i18n="adminTabGallery">Gallery</button>
+          <button class="chip-btn" data-admin-tab="announcements" data-i18n="adminTabAnnouncements">Announcements</button>
+        </div>
+        <div id="adminTabBody" style="display: flex; flex-direction: column; gap: 14px;"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="siteFooter" class="site-footer" aria-labelledby="newsletterHeading">
+    <div class="container">
+      <section id="footerNewsletterSection" class="studio-card newsletter-card">
+        <div class="newsletter-grid">
+          <div class="newsletter-copy">
+            <span class="eyebrow" data-i18n="newsletterBadge">WORKSHOPS &amp; STUDIO DISPATCH</span>
+            <h2 id="newsletterHeading" style="margin: 8px 0 6px; color: var(--gold);" data-i18n="newsletterHeading">Newsletter</h2>
+            <p style="margin: 0; color: var(--text-secondary); font-size: 0.92rem;" data-i18n="newsletterSubheading">
+              Subscribe for upcoming photography, studio lighting, 18+ modeling &amp; 4K cinema workshop dates at Star Artist Studio.
+            </p>
+            <div class="newsletter-topics" aria-label="Workshop topics">
+              <span class="badge" data-i18n="newsletterTagLighting">Studio Lighting</span>
+              <span class="badge" data-i18n="newsletterTagModeling">Posing &amp; Runway</span>
+              <span class="badge" data-i18n="newsletterTagCinema">4K Cinema</span>
+            </div>
+          </div>
+
+          <form id="newsletterForm" class="newsletter-form" novalidate>
+            <label for="newsletterEmail" data-i18n="newsletterEmailLabel">Email address for workshop updates</label>
+            <div class="newsletter-input-row">
+              <input
+                id="newsletterEmail"
+                name="email"
+                type="email"
+                class="input newsletter-email-input"
+                autocomplete="email"
+                inputmode="email"
+                required
+                maxlength="128"
+                placeholder="you@example.com"
+                aria-invalid="false"
+                aria-describedby="newsletterErrorMsg newsletterStatusMsg"
+              />
+              <button id="newsletterSubscribeBtn" type="submit" class="btn-gold newsletter-submit-btn" data-i18n="newsletterSubscribeBtn">
+                Subscribe
+              </button>
+            </div>
+            <p id="newsletterErrorMsg" class="newsletter-error hidden" role="alert" aria-live="assertive"></p>
+            <div id="newsletterStatusMsg" class="newsletter-status" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </section>
+
+      <div class="footer-meta-bar">
+        <span data-i18n="footerLocationCopy">STAR ARTIST STUDIO • Talwara Khurd, Sirsa, Haryana - 125102</span>
+        <div class="footer-meta-links">
+          <a href="#home" data-route="home" data-i18n="navHome">Home</a>
+          <a href="#catalog" data-route="catalog" data-i18n="navCatalog">Catalog</a>
+          <a href="#booking" data-route="booking" data-i18n="navBooking">Book Shoot</a>
+          <a href="mailto:chanderstudio0@gmail.com">chanderstudio0@gmail.com</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- MOBILE BOTTOM NAVIGATION -->
+  <nav class="bottom-nav" aria-label="Mobile Navigation">
+    <button class="bottom-nav-btn active" data-route="home">
+      <span>★</span>
+      <span data-i18n="navHome">Home</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="catalog">
+      <span>◈</span>
+      <span data-i18n="navCatalog">Catalog</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="booking">
+      <span>◷</span>
+      <span data-i18n="navBooking">Book Shoot</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="models">
+      <span>❖</span>
+      <span data-i18n="navModels">Models 18+</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="gallery">
+      <span>▣</span>
+      <span data-i18n="navGallery">Gallery</span>
+    </button>
+  </nav>
+
+  <!-- AUTH MODAL -->
+  <div id="authModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0; color: var(--gold);" data-i18n="accountTitle">Studio Member Account</h3>
+        <button id="closeAuthModalBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="authRequiredNotice"></p>
+      <button id="googleSignInBtn" class="btn-gold" type="button" data-i18n="signInWithGoogle">Continue with Google</button>
+      <div style="text-align: center; font-size: 0.8rem; color: var(--text-muted);" data-i18n="orEmail">or sign in with email</div>
+      <form id="emailAuthForm" class="form-grid">
+        <div class="field">
+          <label for="authEmail" data-i18n="emailLabel">Email Address</label>
+          <input id="authEmail" type="email" class="input" required />
+        </div>
+        <div class="field">
+          <label for="authPassword" data-i18n="passwordLabel">Password</label>
+          <input id="authPassword" type="password" class="input" required minlength="6" />
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button type="submit" class="btn-gold" style="flex: 1;" data-i18n="signInSubmit">Sign In</button>
+          <button id="emailRegisterBtn" type="button" class="btn-outline" style="flex: 1;" data-i18n="registerSubmit">Create Account</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- FIREBASE WEB CONFIG MODAL (Optional Local/Preview Overrides) -->
+  <div id="firebaseSetupModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <form id="firebaseConfigForm" class="modal-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0; color: var(--gold);">Firebase Web App Setup (Free Spark)</h3>
+        <button id="closeFirebaseSetupBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p style="margin: 0; font-size: 0.84rem; color: var(--text-secondary);">
+        When hosted on Firebase Hosting (free Spark plan), config loads automatically from <code>/__/firebase/init.json</code>. For local preview, paste your Web App keys here (stored only in your browser localStorage).
+      </p>
+      <div class="field">
+        <label for="cfgProjectId">Project ID</label>
+        <input id="cfgProjectId" class="input" value="gen-lang-client-0548683163" required />
+      </div>
+      <div class="field">
+        <label for="cfgDatabaseId">Firestore Database ID</label>
+        <input id="cfgDatabaseId" class="input" value="ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b" required />
+      </div>
+      <div class="field">
+        <label for="cfgApiKey">Web API Key</label>
+        <input id="cfgApiKey" class="input" placeholder="AIza..." required />
+      </div>
+      <div class="field">
+        <label for="cfgAppId">Firebase Web App ID</label>
+        <input id="cfgAppId" class="input" placeholder="1:634443186065:web:..." required />
+      </div>
+      <div class="field">
+        <label for="cfgRecaptcha">App Check reCAPTCHA v3 Site Key (Optional)</label>
+        <input id="cfgRecaptcha" class="input" placeholder="6L..." />
+      </div>
+      <button type="submit" class="btn-gold">Save &amp; Connect Firebase</button>
+    </form>
+  </div>
+
+  <!-- GALLERY LIGHTBOX MODAL -->
+  <div id="lightboxModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card" style="max-width: 720px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 id="lightboxTitle" style="margin: 0; color: var(--gold);"></h3>
+        <button id="closeLightboxBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <img id="lightboxImg" src="" alt="Gallery preview" style="border-radius: 14px; max-height: 65vh; object-fit: contain; background: #000;" />
+      <div id="lightboxMeta" style="color: var(--text-secondary); font-size: 0.9rem;"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

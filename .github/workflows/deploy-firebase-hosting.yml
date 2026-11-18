@@ -1,0 +1,38 @@
+name: Deploy STAR ARTIST STUDIO PWA to Firebase Hosting
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "web/**"
+      - "firebase.json"
+      - ".firebaserc"
+
+jobs:
+  build_verify_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate PWA build files and tests
+        run: |
+          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js
+          node --test web/tests/pwa.test.mjs
+
+      - name: Deploy to Firebase Hosting (Free Spark Tier Live Channel)
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 != '' }}
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}
+          channelId: live
+          projectId: gen-lang-client-0548683163

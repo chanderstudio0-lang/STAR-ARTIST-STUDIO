@@ -1,0 +1,300 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email == 'chanderstudio0@gmail.com' &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() <= 128 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500000)) &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500000)) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30)) &&
+             (!('city' in data) || (data.city is string && data.city.size() <= 100)) &&
+             (!('instagramHandle' in data) || (data.instagramHandle is string && data.instagramHandle.size() <= 100)) &&
+             (!('portfolioLinks' in data) || (data.portfolioLinks is list && data.portfolioLinks.size() <= 10)) &&
+             (!('specialty' in data) || (data.specialty is string && data.specialty.size() <= 100)) &&
+             (!('bio' in data) || (data.bio is string && data.bio.size() <= 500)) &&
+             (!('role' in data) || (data.role is string && (data.role == 'user' || data.role == 'admin'))) &&
+             (!('fcmToken' in data) || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
+             (!('fcmTokenUpdatedAt' in data) || (data.fcmTokenUpdatedAt is timestamp && data.fcmTokenUpdatedAt <= request.time)) &&
+             (!('announcementsOptIn' in data) || data.announcementsOptIn is bool) &&
+             (!('appointmentPushOptIn' in data) || data.appointmentPushOptIn is bool) &&
+             (!('favoritePackageIds' in data) || (data.favoritePackageIds is list && data.favoritePackageIds.size() <= 30)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidModel(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.age is int && data.age >= 18 && data.age <= 100 &&
+             (!('gender' in data) || (data.gender is string && data.gender.size() <= 50)) &&
+             data.city is string && data.city.size() > 0 && data.city.size() <= 100 &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 8 && data.phoneNumber.size() <= 20 &&
+             (!('skills' in data) || (data.skills is string && data.skills.size() <= 1000)) &&
+             (!('portfolioUrls' in data) || (data.portfolioUrls is string && data.portfolioUrls.size() <= 2000)) &&
+             data.consentGiven == true &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidBooking(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.clientName is string && data.clientName.size() >= 2 && data.clientName.size() <= 100 &&
+             data.contactNumber is string && data.contactNumber.size() >= 8 && data.contactNumber.size() <= 20 &&
+             data.serviceType is string && data.serviceType.size() > 0 && data.serviceType.size() <= 100 &&
+             data.preferredDate is string && data.preferredDate.size() > 0 && data.preferredDate.size() <= 50 &&
+             (!('preferredTime' in data) || (data.preferredTime is string && data.preferredTime.size() <= 50)) &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000)) &&
+             data.status in ['Pending', 'Confirmed', 'Completed', 'Cancelled'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidGallery(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 120 &&
+             data.category is string && data.category.size() <= 60 &&
+             data.mediaType in ['photo', 'video'] &&
+             data.mediaUrl is string && data.mediaUrl.size() > 0 && data.mediaUrl.size() <= 850000 &&
+             (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 200000)) &&
+             data.isDemo is bool &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidBlogPost(data) {
+      return data.authorId is string && data.authorId.size() > 0 && data.authorId.size() <= 128 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.category in ['Studio News', 'Photography Tips', 'Behind The Scenes', 'Gear & Lighting', 'Model Spotlight'] &&
+             data.content is string && data.content.size() >= 10 && data.content.size() <= 20000 &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 1000)) &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000)) &&
+             (!('authorName' in data) || (data.authorName is string && data.authorName.size() <= 100)) &&
+             (!('tags' in data) || (data.tags is string && data.tags.size() <= 200)) &&
+             data.status in ['published', 'draft'] &&
+             (!('readTimeMinutes' in data) || (data.readTimeMinutes is int && data.readTimeMinutes >= 1 && data.readTimeMinutes <= 60)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidReview(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.bookingId is string && data.bookingId.size() > 0 && data.bookingId.size() <= 128 &&
+             data.reviewerName is string && data.reviewerName.size() >= 2 && data.reviewerName.size() <= 100 &&
+             (!('reviewerAvatarUrl' in data) || (data.reviewerAvatarUrl is string && data.reviewerAvatarUrl.size() <= 500000)) &&
+             data.serviceType is string && data.serviceType.size() > 0 && data.serviceType.size() <= 100 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() >= 5 && data.comment.size() <= 1000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidAnnouncement(data) {
+      return data.authorId is string && data.authorId.size() > 0 && data.authorId.size() <= 128 &&
+             (!('authorName' in data) || (data.authorName is string && data.authorName.size() <= 100)) &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 140 &&
+             data.message is string && data.message.size() >= 5 && data.message.size() <= 2000 &&
+             data.category in ['Studio Update', 'Casting Call', 'Offer & Discount', 'Schedule Alert', 'Workshop & Gear'] &&
+             data.priority in ['normal', 'urgent'] &&
+             (!('targetTopic' in data) || (data.targetTopic is string && data.targetTopic.size() <= 100)) &&
+             (!('actionRoute' in data) || (data.actionRoute in ['home', 'bookings', 'catalog', 'portfolio', 'models'])) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidAppointmentNotification(data, userId) {
+      return data.userId == userId &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.bookingId is string && data.bookingId.size() > 0 && data.bookingId.size() <= 128 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 160 &&
+             data.message is string && data.message.size() >= 3 && data.message.size() <= 2000 &&
+             data.status in ['Pending', 'Confirmed', 'Completed', 'Cancelled', 'Rescheduled'] &&
+             (!('serviceType' in data) || (data.serviceType is string && data.serviceType.size() <= 120)) &&
+             (!('targetFcmToken' in data) || (data.targetFcmToken is string && data.targetFcmToken.size() <= 512)) &&
+             data.isRead is bool &&
+             (!('channelType' in data) || (data.channelType is string && data.channelType.size() <= 60)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    // Default deny all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       (!('role' in incoming()) || incoming().role == 'user' || isAdmin()) &&
+                       isValidUser(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (request.auth.uid == userId && incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt &&
+                        (!('role' in incoming()) || incoming().role == existing().role) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly([
+                          'displayName', 'photoUrl', 'avatarUrl',
+                          'phoneNumber', 'city', 'instagramHandle', 'portfolioLinks', 'specialty', 'bio',
+                          'fcmToken', 'fcmTokenUpdatedAt', 'announcementsOptIn', 'appointmentPushOptIn',
+                          'favoritePackageIds', 'updatedAt'
+                        ]))
+                     ) && isValidUser(incoming());
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      match /history/{historyId} {
+        allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      }
+
+      match /notifications/{notificationId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isValidId(notificationId) &&
+                         (isAdmin() || (isSignedIn() && request.auth.uid == userId)) &&
+                         isValidAppointmentNotification(incoming(), userId);
+        allow update: if isValidId(notificationId) && (
+                         isAdmin() ||
+                         (isSignedIn() && request.auth.uid == userId &&
+                          incoming().userId == existing().userId &&
+                          incoming().bookingId == existing().bookingId &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'updatedAt']))
+                       ) && isValidAppointmentNotification(incoming(), userId);
+        allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      }
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /models/{modelId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'pending' &&
+                       isValidModel(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (resource.data.userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt &&
+                        incoming().status == existing().status &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'city', 'phoneNumber', 'skills', 'portfolioUrls', 'updatedAt']))
+                     ) && isValidModel(incoming());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /bookings/{bookingId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       (incoming().status == 'Pending' || isAdmin()) &&
+                       isValidBooking(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (resource.data.userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['clientName', 'contactNumber', 'preferredDate', 'preferredTime', 'location', 'notes', 'status', 'updatedAt']))
+                     ) && isValidBooking(incoming());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /gallery/{itemId} {
+      allow get: if resource.data.status == 'approved' || (isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin()));
+      allow list: if resource.data.status == 'approved' || (isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin()));
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       (!('status' in incoming()) || incoming().status == 'pending' || isAdmin()) &&
+                       isValidGallery(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (resource.data.userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt &&
+                        incoming().status == existing().status &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'thumbnailUrl', 'updatedAt']))
+                     ) && isValidGallery(incoming());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /posts/{postId} {
+      allow get, list: if resource.data.status == 'published' || isAdmin();
+      allow create: if isAdmin() &&
+                       incoming().authorId == request.auth.uid &&
+                       isValidBlogPost(incoming());
+      allow update: if isAdmin() &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidBlogPost(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       isValidReview(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (resource.data.userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().bookingId == existing().bookingId &&
+                        incoming().createdAt == existing().createdAt &&
+                        incoming().diff(existing()).affectedKeys().hasOnly([
+                          'rating', 'comment', 'reviewerName', 'reviewerAvatarUrl', 'updatedAt'
+                        ]))
+                     ) && isValidReview(incoming());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /announcements/{announcementId} {
+      allow get, list: if isSignedIn();
+      allow create: if isAdmin() &&
+                       isValidId(announcementId) &&
+                       incoming().authorId == request.auth.uid &&
+                       isValidAnnouncement(incoming());
+      allow update: if isAdmin() &&
+                       isValidId(announcementId) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidAnnouncement(incoming());
+      allow delete: if isAdmin();
+    }
+  }
+}
