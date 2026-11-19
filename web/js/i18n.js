@@ -145,6 +145,8 @@ export const TRANSLATIONS = {
     newsletterAlready: "This email is already subscribed to workshop updates.",
     newsletterInvalidEmail: "Please enter a valid email address for studio workshop updates.",
     newsletterValidReady: "Valid email format — tap Subscribe for workshop alerts.",
+    newsletterThankYouHeading: "Thank you for subscribing!",
+    newsletterThankYouDetail: "We will notify you about upcoming Star Artist Studio workshops.",
     footerLocationCopy: "STAR ARTIST STUDIO • Talwara Khurd, Sirsa, Haryana - 125102"
   },
   hi: {
@@ -293,6 +295,8 @@ export const TRANSLATIONS = {
     newsletterAlready: "यह ईमेल पहले से ही वर्कशॉप अपडेट्स के लिए सब्सक्राइब है।",
     newsletterInvalidEmail: "कृपया वर्कशॉप अपडेट्स के लिए सही ईमेल पता दर्ज करें।",
     newsletterValidReady: "सही ईमेल प्रारूप — वर्कशॉप अपडेट्स के लिए Subscribe दबाएं।",
+    newsletterThankYouHeading: "सदस्यता लेने के लिए धन्यवाद! (Thank you for subscribing!)",
+    newsletterThankYouDetail: "हम आपको आगामी Star Artist Studio वर्कशॉप की जानकारी ईमेल करेंगे।",
     footerLocationCopy: "STAR ARTIST STUDIO • तलवाड़ा खुर्द, सिरसा, हरियाणा - 125102"
   }
 };

@@ -23,7 +23,8 @@ import {
 import {
   evaluateNewsletterEmailInput,
   loadNewsletterSubscribers,
-  saveNewsletterSubscription
+  saveNewsletterSubscription,
+  showTemporaryNewsletterSuccess
 } from "./newsletter.js";
 import {
   subscribeAuthState,
@@ -1156,15 +1157,28 @@ function wireEvents() {
     if (emailInput) {
       emailInput.classList.remove("is-invalid", "is-valid");
       emailInput.setAttribute("aria-invalid", "false");
-      if (!result.alreadySubscribed) {
-        emailInput.value = "";
-      }
+      emailInput.value = "";
     }
     if (statusEl) {
       statusEl.textContent = message;
       statusEl.className = "newsletter-status is-success";
     }
-    showToast(message);
+
+    const fieldsEl = document.getElementById("newsletterFormFields");
+    const successEl = document.getElementById("newsletterSuccessNotice");
+    const detailEl = document.getElementById("newsletterSuccessDetail");
+    const detailText = `${t("newsletterThankYouDetail")} (${result.entry.email})`;
+    showTemporaryNewsletterSuccess({
+      fieldsEl,
+      successEl,
+      detailEl,
+      detailText,
+      onRestore: () => {
+        renderSavedNewsletterStatus();
+      }
+    });
+    successEl?.focus?.();
+    showToast(t("newsletterThankYouHeading"));
   });
 
   document.addEventListener("submit", async (e) => {

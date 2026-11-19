@@ -25,14 +25,28 @@ jobs:
 
       - name: Validate PWA build files and tests
         run: |
-          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js
+          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js
           node --test web/tests/pwa.test.mjs
 
+      - name: Check Firebase Service Account Secret
+        id: check_firebase_secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}'
+        run: |
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to Firebase Hosting (Free Spark Tier Live Channel)
-        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 != '' }}
+        if: steps.check_firebase_secret.outputs.configured == 'true'
         uses: FirebaseExtended/action-hosting-deploy@v0
+        env:
+          CI: "true"
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}'
           channelId: live
           projectId: gen-lang-client-0548683163

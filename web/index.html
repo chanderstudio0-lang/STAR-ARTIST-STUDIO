@@ -550,27 +550,39 @@
           </div>
 
           <form id="newsletterForm" class="newsletter-form" novalidate>
-            <label for="newsletterEmail" data-i18n="newsletterEmailLabel">Email address for workshop updates</label>
-            <div class="newsletter-input-row">
-              <input
-                id="newsletterEmail"
-                name="email"
-                type="email"
-                class="input newsletter-email-input"
-                autocomplete="email"
-                inputmode="email"
-                required
-                maxlength="128"
-                placeholder="you@example.com"
-                aria-invalid="false"
-                aria-describedby="newsletterErrorMsg newsletterStatusMsg"
-              />
-              <button id="newsletterSubscribeBtn" type="submit" class="btn-gold newsletter-submit-btn" data-i18n="newsletterSubscribeBtn">
-                Subscribe
-              </button>
+            <div id="newsletterFormFields" class="newsletter-form-fields">
+              <label for="newsletterEmail" data-i18n="newsletterEmailLabel">Email address for workshop updates</label>
+              <div class="newsletter-input-row">
+                <input
+                  id="newsletterEmail"
+                  name="email"
+                  type="email"
+                  class="input newsletter-email-input"
+                  autocomplete="email"
+                  inputmode="email"
+                  required
+                  maxlength="128"
+                  placeholder="you@example.com"
+                  aria-invalid="false"
+                  aria-describedby="newsletterErrorMsg newsletterStatusMsg"
+                />
+                <button id="newsletterSubscribeBtn" type="submit" class="btn-gold newsletter-submit-btn" data-i18n="newsletterSubscribeBtn">
+                  Subscribe
+                </button>
+              </div>
+              <p id="newsletterErrorMsg" class="newsletter-error hidden" role="alert" aria-live="assertive"></p>
+              <div id="newsletterStatusMsg" class="newsletter-status" role="status" aria-live="polite"></div>
             </div>
-            <p id="newsletterErrorMsg" class="newsletter-error hidden" role="alert" aria-live="assertive"></p>
-            <div id="newsletterStatusMsg" class="newsletter-status" role="status" aria-live="polite"></div>
+
+            <div id="newsletterSuccessNotice" class="newsletter-success-notice hidden" role="status" aria-live="polite" tabindex="-1">
+              <span class="newsletter-success-icon" aria-hidden="true">✓</span>
+              <div class="newsletter-success-copy">
+                <strong data-i18n="newsletterThankYouHeading">Thank you for subscribing!</strong>
+                <p id="newsletterSuccessDetail" class="newsletter-success-detail" data-i18n="newsletterThankYouDetail">
+                  We will notify you about upcoming Star Artist Studio workshops.
+                </p>
+              </div>
+            </div>
           </form>
         </div>
       </section>

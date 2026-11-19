@@ -465,6 +465,8 @@ test("Footer Newsletter section exists in index.html and captures workshop email
   assert.ok(html.includes('id="footerNewsletterSection"'), "Footer must contain Newsletter section");
   assert.ok(html.includes('id="newsletterHeading"'), "Newsletter section must have heading");
   assert.ok(html.includes('id="newsletterForm"'), "Newsletter section must include form");
+  assert.ok(html.includes('id="newsletterFormFields"'), "Newsletter form must wrap inputs in #newsletterFormFields");
+  assert.ok(html.includes('id="newsletterSuccessNotice"') && html.includes("Thank you for subscribing!"), "Newsletter must include Thank you for subscribing! notice");
   assert.ok(html.includes('id="newsletterEmail"') && html.includes('type="email"'), "Newsletter must include email input");
   assert.ok(html.includes('id="newsletterErrorMsg"') && html.includes('role="alert"'), "Newsletter must include accessible error display");
   assert.ok(html.includes('id="newsletterSubscribeBtn"') && html.includes("Subscribe"), "Newsletter must include Subscribe button");
@@ -513,6 +515,52 @@ test("Footer Newsletter section exists in index.html and captures workshop email
   assert.equal(duplicate.alreadySubscribed, true);
   assert.equal(duplicate.subscribers.length, 1);
 
+  // Temporary success state replaces form inputs and restores after timer
+  const makeFakeEl = (initialClasses = []) => {
+    const set = new Set(initialClasses);
+    return {
+      textContent: "",
+      classList: {
+        add: (c) => set.add(c),
+        remove: (c) => set.delete(c),
+        contains: (c) => set.has(c)
+      }
+    };
+  };
+  const fieldsEl = makeFakeEl([]);
+  const successEl = makeFakeEl(["hidden"]);
+  const detailEl = makeFakeEl([]);
+  let scheduledCb = null;
+  let scheduledMs = 0;
+  let restoredCalled = false;
+
+  newsletterMod.showTemporaryNewsletterSuccess({
+    fieldsEl,
+    successEl,
+    detailEl,
+    detailText: "Workshop updates enabled (artist@example.com)",
+    durationMs: 4000,
+    scheduleTimeout: (cb, ms) => {
+      scheduledCb = cb;
+      scheduledMs = ms;
+      return 101;
+    },
+    cancelTimeout: () => {},
+    onRestore: () => {
+      restoredCalled = true;
+    }
+  });
+
+  assert.equal(fieldsEl.classList.contains("hidden"), true, "Form fields must be hidden during temporary success state");
+  assert.equal(successEl.classList.contains("hidden"), false, "Success notice must be visible during temporary success state");
+  assert.equal(detailEl.textContent, "Workshop updates enabled (artist@example.com)");
+  assert.equal(scheduledMs, 4000);
+
+  scheduledCb();
+  assert.equal(successEl.classList.contains("hidden"), true, "Success notice must hide after timeout");
+  assert.equal(fieldsEl.classList.contains("hidden"), false, "Form fields must reappear after timeout");
+  assert.equal(restoredCalled, true, "onRestore callback must run after timeout");
+
   const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
   for (const selector of [
     ".site-footer",
@@ -521,6 +569,8 @@ test("Footer Newsletter section exists in index.html and captures workshop email
     ".newsletter-email-input.is-invalid",
     ".newsletter-email-input.is-valid",
     ".newsletter-error",
+    ".newsletter-success-notice",
+    ".newsletter-success-icon",
     ".newsletter-status"
   ]) {
     assert.ok(css.includes(selector), `CSS missing footer newsletter rule for ${selector}`);

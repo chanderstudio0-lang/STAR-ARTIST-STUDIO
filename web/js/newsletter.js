@@ -156,3 +156,65 @@ export function saveNewsletterSubscription({
     subscribers: nextSubscribers
   };
 }
+
+export const NEWSLETTER_SUCCESS_DURATION_MS = 5000;
+
+let activeNewsletterSuccessTimer = null;
+
+export function showTemporaryNewsletterSuccess({
+  fieldsEl,
+  successEl,
+  detailEl = null,
+  detailText = "",
+  durationMs = NEWSLETTER_SUCCESS_DURATION_MS,
+  scheduleTimeout = setTimeout,
+  cancelTimeout = clearTimeout,
+  onRestore = null
+} = {}) {
+  if (activeNewsletterSuccessTimer !== null) {
+    cancelTimeout(activeNewsletterSuccessTimer);
+    activeNewsletterSuccessTimer = null;
+  }
+
+  if (detailEl && detailText) {
+    detailEl.textContent = detailText;
+  }
+
+  fieldsEl?.classList?.add("hidden");
+  successEl?.classList?.remove("hidden");
+
+  const restoreNow = () => {
+    if (activeNewsletterSuccessTimer !== null) {
+      cancelTimeout(activeNewsletterSuccessTimer);
+      activeNewsletterSuccessTimer = null;
+    }
+    successEl?.classList?.add("hidden");
+    fieldsEl?.classList?.remove("hidden");
+    if (typeof onRestore === "function") {
+      onRestore();
+    }
+  };
+
+  const timerId = scheduleTimeout(() => {
+    activeNewsletterSuccessTimer = null;
+    successEl?.classList?.add("hidden");
+    fieldsEl?.classList?.remove("hidden");
+    if (typeof onRestore === "function") {
+      onRestore();
+    }
+  }, durationMs);
+
+  activeNewsletterSuccessTimer = timerId;
+
+  return {
+    timerId,
+    restoreNow,
+    cancel: () => {
+      if (activeNewsletterSuccessTimer !== null) {
+        cancelTimeout(activeNewsletterSuccessTimer);
+        activeNewsletterSuccessTimer = null;
+      }
+    }
+  };
+}
+
