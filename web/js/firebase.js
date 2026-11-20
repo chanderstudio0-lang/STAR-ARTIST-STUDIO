@@ -293,6 +293,23 @@ export async function createShootBooking(payload) {
   return ref.id;
 }
 
+export async function getBookingSyncContext() {
+  const projectId = activeConfig?.projectId || FIREBASE_PROJECT_DEFAULTS.projectId;
+  const databaseId = activeConfig?.databaseId || FIREBASE_PROJECT_DEFAULTS.databaseId;
+  const user = authInstance?.currentUser || null;
+  if (!user) {
+    return { uid: "", idToken: "", projectId, databaseId };
+  }
+  let idToken = "";
+  try {
+    // Use cached ID token (forceRefresh=false) so queueing succeeds even while completely offline
+    idToken = await user.getIdToken(false);
+  } catch {
+    idToken = user.accessToken || "";
+  }
+  return { uid: user.uid, idToken, projectId, databaseId };
+}
+
 export async function cancelMyBooking(bookingId) {
   const ctx = await initFirebaseClient();
   if (!ctx.ready || !ctx.auth.currentUser) throw new Error("Sign in required.");

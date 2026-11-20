@@ -1176,6 +1176,17 @@ fun HomeScreen(
         }
 
         // =====================================================================
+        // 7B. CLIENT & MODEL TESTIMONIAL CAROUSEL
+        // =====================================================================
+        item(key = "home_testimonial_carousel") {
+            HomeTestimonialCarousel(
+                reviews = studioReviews,
+                language = language,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+
+        // =====================================================================
         // 8. CONNECT SECTION (Instagram, Facebook, LinkedIn)
         // =====================================================================
         item(key = "home_connect_section") {

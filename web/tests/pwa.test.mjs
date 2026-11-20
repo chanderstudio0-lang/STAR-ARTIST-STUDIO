@@ -101,9 +101,12 @@ test("No hardcoded API keys inside web source files", () => {
     path.join(webDir, "js/catalog-reviews.js"),
     path.join(webDir, "js/data.js"),
     path.join(webDir, "js/firebase.js"),
+    path.join(webDir, "js/gallery-share.js"),
     path.join(webDir, "js/i18n.js"),
     path.join(webDir, "js/lazy-images.js"),
     path.join(webDir, "js/newsletter.js"),
+    path.join(webDir, "js/offline-sync.js"),
+    path.join(webDir, "js/testimonials.js"),
     path.join(webDir, "js/tier-info.js")
   ];
   for (const file of filesToScan) {
@@ -416,7 +419,9 @@ test("Homepage Connect section includes Instagram, Facebook, and LinkedIn icons 
     ".social-link-btn",
     ".social-icon-badge.is-instagram",
     ".social-icon-badge.is-facebook",
-    ".social-icon-badge.is-linkedin"
+    ".social-icon-badge.is-linkedin",
+    "@keyframes socialBtnPulse",
+    "@keyframes socialIconShake"
   ]) {
     assert.ok(css.includes(selector), `CSS missing Connect rule for ${selector}`);
   }
@@ -653,4 +658,314 @@ test("Lazy-load blur-up placeholder module covers all catalog and gallery images
     assert.ok(css.includes(selector), `CSS missing blur-up rule for ${selector}`);
   }
 });
+
+test("Homepage testimonial carousel renders client and model feedback, wraps slides, and merges verified reviews", async () => {
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="homeTestimonialsSection"'), "Homepage must contain testimonial carousel section");
+  assert.ok(html.includes('id="homeTestimonialCarousel"'), "Homepage must include testimonial carousel mount");
+  assert.ok(html.includes('aria-roledescription="carousel"'), "Testimonial section must expose carousel landmark");
+
+  const testiMod = await import(pathToFileURL(path.join(webDir, "js/testimonials.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  assert.ok(testiMod.STUDIO_TESTIMONIALS.length >= 4, "Must include multiple curated client & model testimonials");
+  assert.ok(testiMod.STUDIO_TESTIMONIALS.some((x) => x.roleType === "model"), "Must include model testimonials");
+  assert.ok(testiMod.STUDIO_TESTIMONIALS.some((x) => x.roleType === "client"), "Must include client testimonials");
+
+  // Index wrapping both forward and backward
+  assert.equal(testiMod.getNextSlideIndex(4, 5, 1), 0);
+  assert.equal(testiMod.getNextSlideIndex(0, 5, -1), 4);
+  assert.equal(testiMod.getNextSlideIndex(2, 5, 1), 3);
+
+  // Merges positive 4-5 star live reviews and excludes low-rating/short noise
+  const merged = testiMod.buildCarouselTestimonials(
+    [
+      {
+        id: "rev_1",
+        reviewerName: "Neha Sharma",
+        serviceType: "Modeling (Portfolio & Comp-Card Shoot)",
+        rating: 5,
+        comment: "Incredible strobe setup and super supportive casting team!"
+      },
+      {
+        id: "rev_low",
+        reviewerName: "Skip",
+        serviceType: "Portrait",
+        rating: 2,
+        comment: "Too short or low rating"
+      }
+    ],
+    "en"
+  );
+  assert.equal(merged.length, testiMod.STUDIO_TESTIMONIALS.length + 1);
+  assert.equal(merged[0].name, "Neha Sharma");
+  assert.equal(merged[0].roleType, "model");
+
+  const rendered = testiMod.renderTestimonialCarouselHtml({
+    items: merged,
+    activeIndex: 0,
+    autoplay: true,
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(rendered.includes("Neha Sharma"));
+  assert.ok(rendered.includes("Incredible strobe setup and super supportive casting team!"));
+  assert.ok(rendered.includes("data-testimonial-prev"));
+  assert.ok(rendered.includes("data-testimonial-next"));
+  assert.ok(rendered.includes('data-testimonial-dot="0"'));
+  assert.ok(rendered.includes("data-testimonial-autoplay"));
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".testimonial-section",
+    ".testimonial-slide",
+    ".testimonial-quote",
+    ".testimonial-nav-btn",
+    ".testimonial-dot.active"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing testimonial rule for ${selector}`);
+  }
+});
+
+test("Service Worker Background Sync API & offline booking queue validate, register sync tag, format Firestore REST docs, and flush cleanly", async () => {
+  const swText = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swText.includes('self.addEventListener("sync"'), "sw.js must listen for Background Sync 'sync' events");
+  assert.ok(swText.includes('const BOOKING_SYNC_TAG = "star-artist-sync-bookings"'), "sw.js must define booking sync tag");
+  assert.ok(swText.includes("star-artist-offline-sync-v1"), "sw.js must use shared IndexedDB offline sync database");
+  assert.ok(swText.includes("pending_bookings"), "sw.js must read/write pending_bookings store");
+  assert.ok(swText.includes("https://firestore.googleapis.com/v1/projects/"), "sw.js must push queued bookings to Firestore REST API");
+  assert.ok(swText.includes("BOOKING_SYNC_COMPLETE"), "sw.js must notify clients after Background Sync completes");
+
+  const offlineMod = await import(pathToFileURL(path.join(webDir, "js/offline-sync.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // Validation mirrors firestore.rules isValidBooking()
+  assert.ok(
+    offlineMod.validateOfflineBookingPayload({
+      clientName: "A",
+      contactNumber: "9812890081",
+      serviceType: "Editorial Portrait",
+      preferredDate: "2026-12-01"
+    }),
+    "Name shorter than 2 chars must fail validation"
+  );
+  assert.ok(
+    offlineMod.validateOfflineBookingPayload({
+      clientName: "Priya Sharma",
+      contactNumber: "12345",
+      serviceType: "Editorial Portrait",
+      preferredDate: "2026-12-01"
+    }),
+    "Phone shorter than 8 chars must fail validation"
+  );
+  assert.equal(
+    offlineMod.validateOfflineBookingPayload({
+      clientName: "Priya Sharma",
+      contactNumber: "+91 9812890081",
+      serviceType: "Cinematic Wedding Package - Pro",
+      preferredDate: "2026-12-15",
+      preferredTime: "11:30 AM",
+      location: "Studio (Talwara Khurd)",
+      notes: "Golden hour portraits"
+    }),
+    null
+  );
+
+  // Endpoint & Firestore REST v1 document formatting
+  const endpoint = offlineMod.buildFirestoreBookingsEndpoint();
+  assert.equal(
+    endpoint,
+    "https://firestore.googleapis.com/v1/projects/gen-lang-client-0548683163/databases/ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b/documents/bookings"
+  );
+
+  const record = offlineMod.createQueuedBookingRecord({
+    payload: {
+      clientName: "Priya Sharma",
+      contactNumber: "+91 9812890081",
+      serviceType: "Editorial Portrait - Pro",
+      preferredDate: "2026-12-20",
+      preferredTime: "04:30 PM",
+      location: "Studio (Talwara Khurd)",
+      notes: "Warm rim lighting"
+    },
+    userId: "uid_demo_123",
+    authToken: "eyJ_mock_token"
+  });
+
+  const fsDoc = offlineMod.buildFirestoreBookingDocument(record, "2026-11-19T12:00:00.000Z");
+  assert.equal(fsDoc.fields.userId.stringValue, "uid_demo_123");
+  assert.equal(fsDoc.fields.status.stringValue, "Pending");
+  assert.equal(fsDoc.fields.clientName.stringValue, "Priya Sharma");
+  assert.equal(fsDoc.fields.createdAt.timestampValue, "2026-11-19T12:00:00.000Z");
+  assert.equal(fsDoc.fields.updatedAt.timestampValue, "2026-11-19T12:00:00.000Z");
+
+  // Offline error detection
+  assert.equal(offlineMod.isLikelyOfflineError(null, false), true);
+  assert.equal(offlineMod.isLikelyOfflineError(new Error("Failed to fetch"), true), true);
+  assert.equal(offlineMod.isLikelyOfflineError({ code: "unavailable", message: "client is offline" }, true), true);
+  assert.equal(offlineMod.isLikelyOfflineError(new Error("Permission denied"), true), false);
+
+  // Background Sync API registration
+  const registeredTags = [];
+  const syncResult = await offlineMod.registerBookingBackgroundSync({
+    ready: Promise.resolve({
+      sync: {
+        register: async (tag) => {
+          registeredTags.push(tag);
+        }
+      }
+    })
+  });
+  assert.deepEqual(syncResult, { registered: true, mode: "background-sync" });
+  assert.deepEqual(registeredTags, [offlineMod.BOOKING_SYNC_TAG]);
+
+  // Client fallback flush pushes queued booking and removes it from queue
+  const pushed = [];
+  const removed = [];
+  const flushResult = await offlineMod.flushQueuedBookingsFromClient({
+    queuedRecords: [record],
+    isOnline: true,
+    createBookingFn: async (payload) => {
+      pushed.push(payload);
+    },
+    removeFn: async (id) => {
+      removed.push(id);
+    }
+  });
+  assert.equal(flushResult.syncedCount, 1);
+  assert.equal(flushResult.remainingCount, 0);
+  assert.equal(pushed.length, 1);
+  assert.equal(pushed[0].clientName, "Priya Sharma");
+  assert.deepEqual(removed, [record.id]);
+
+  // Queue UI markup & CSS selectors
+  const queueHtml = offlineMod.renderOfflineQueueHtml({
+    queuedBookings: [record],
+    isOnline: false,
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k,
+    escapeHtml: (v) => String(v ?? "")
+  });
+  assert.ok(queueHtml.includes("offline-queue-panel"));
+  assert.ok(queueHtml.includes("Editorial Portrait - Pro"));
+  assert.ok(queueHtml.includes("data-remove-offline-booking"));
+
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="offlineBookingsQueueBox"'), "index.html must include offline bookings queue container");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [".offline-queue-panel", ".offline-queue-item", ".offline-sync-pill", ".offline-net-chip"]) {
+    assert.ok(css.includes(selector), `CSS missing offline sync rule for ${selector}`);
+  }
+});
+
+test("Filter-bar pill count badges and gallery lightbox Web Share API work cleanly", async () => {
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+
+  // 1. Catalog category count badges
+  const allCounts = shareMod.countCatalogByCategory(dataMod.STUDIO_SERVICES, "");
+  assert.equal(allCounts.all, dataMod.STUDIO_SERVICES.length);
+  assert.equal(allCounts.photography + allCounts.modeling + allCounts.production, allCounts.all);
+  assert.ok(allCounts.photography > 0);
+  assert.ok(allCounts.modeling > 0);
+  assert.ok(allCounts.production > 0);
+
+  const bridalCounts = shareMod.countCatalogByCategory(dataMod.STUDIO_SERVICES, "bridal");
+  assert.ok(bridalCounts.all >= 1 && bridalCounts.all < allCounts.all);
+
+  // 2. Gallery category count badges
+  const galCats = ["All", "Fashion", "Editorial", "Portrait", "Bridal", "Commercial", "Video Reel"];
+  const galCounts = shareMod.countGalleryByCategory(dataMod.SHOWCASE_GALLERY_SEEDS, galCats);
+  assert.equal(galCounts.All, dataMod.SHOWCASE_GALLERY_SEEDS.length);
+  assert.ok(galCounts.Fashion >= 1);
+
+  // 3. Lightbox Web Share API (link share, image file share, AbortError, and clipboard fallback)
+  const sampleImg = dataMod.SHOWCASE_GALLERY_SEEDS[0];
+  const payload = shareMod.buildGallerySharePayload(sampleImg, "https://gen-lang-client-0548683163.web.app/");
+  assert.ok(payload.title.includes(sampleImg.title));
+  assert.ok(payload.url.startsWith("https://gen-lang-client-0548683163.web.app/"));
+
+  // Native Web Share link flow
+  const sharedCalls = [];
+  const linkRes = await shareMod.shareGalleryImage(sampleImg, {
+    nav: {
+      share: async (data) => {
+        sharedCalls.push(data);
+      }
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(linkRes.status, "shared-link");
+  assert.equal(sharedCalls.length, 1);
+  assert.equal(sharedCalls[0].title, payload.title);
+
+  // Native Web Share Level 2 file attachment flow
+  class MockFile {
+    constructor(parts, name, opts) {
+      this.parts = parts;
+      this.name = name;
+      this.type = opts?.type || "image/jpeg";
+    }
+  }
+  const fileSharedCalls = [];
+  const fileRes = await shareMod.shareGalleryImage(sampleImg, {
+    nav: {
+      canShare: (d) => Array.isArray(d?.files) && d.files.length === 1,
+      share: async (data) => {
+        fileSharedCalls.push(data);
+      }
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      blob: async () => ({ type: "image/jpeg" })
+    }),
+    FileCtor: MockFile,
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(fileRes.status, "shared-file");
+  assert.equal(fileSharedCalls.length, 1);
+  assert.equal(fileSharedCalls[0].files.length, 1);
+
+  // User cancels native share sheet (AbortError)
+  const cancelRes = await shareMod.shareGalleryImage(sampleImg, {
+    nav: {
+      share: async () => {
+        const err = new Error("Share canceled");
+        err.name = "AbortError";
+        throw err;
+      }
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(cancelRes.status, "cancelled");
+
+  // Desktop clipboard fallback when Web Share is unavailable
+  let copiedText = "";
+  const clipRes = await shareMod.shareGalleryImage(sampleImg, {
+    nav: {
+      clipboard: {
+        writeText: async (txt) => {
+          copiedText = txt;
+        }
+      }
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(clipRes.status, "copied");
+  assert.ok(copiedText.includes(payload.url));
+
+  // HTML & CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('data-cat-count="all"'), "Catalog All filter must include count pill badge");
+  assert.ok(html.includes('data-cat-count="photography"'), "Catalog Photography filter must include count pill badge");
+  assert.ok(html.includes('data-admin-count="bookings"'), "Admin filter bar must include count pill badge");
+  assert.ok(html.includes('id="lightboxShareBtn"'), "Gallery lightbox must include Share button");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [".filter-count-badge", ".chip-btn.active .filter-count-badge", ".lightbox-footer", ".lightbox-share-btn"]) {
+    assert.ok(css.includes(selector), `CSS missing rule for ${selector}`);
+  }
+});
+
+
+
 

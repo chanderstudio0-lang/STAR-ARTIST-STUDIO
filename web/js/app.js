@@ -27,6 +27,27 @@ import {
   showTemporaryNewsletterSuccess
 } from "./newsletter.js";
 import {
+  buildCarouselTestimonials,
+  getNextSlideIndex,
+  renderTestimonialCarouselHtml
+} from "./testimonials.js";
+import {
+  validateOfflineBookingPayload,
+  createQueuedBookingRecord,
+  isLikelyOfflineError,
+  enqueueOfflineBooking,
+  getQueuedBookings,
+  removeQueuedBooking,
+  registerBookingBackgroundSync,
+  flushQueuedBookingsFromClient,
+  renderOfflineQueueHtml
+} from "./offline-sync.js";
+import {
+  countCatalogByCategory,
+  countGalleryByCategory,
+  shareGalleryImage
+} from "./gallery-share.js";
+import {
   subscribeAuthState,
   signInWithGooglePopup,
   signInWithEmailPassword,
@@ -35,6 +56,7 @@ import {
   fetchApprovedGallery,
   fetchMyBookings,
   createShootBooking,
+  getBookingSyncContext,
   cancelMyBooking,
   fetchMyModels,
   submitModelRegistration,
@@ -72,12 +94,17 @@ const state = {
   adminModelDrafts: {},
   galleryItems: [...SHOWCASE_GALLERY_SEEDS],
   myBookings: [],
+  queuedOfflineBookings: [],
   myModels: [],
   reviews: [],
   expandedCatalogReviews: {},
   expandedTierGuides: {},
   catalogReviewDrafts: {},
   isSubmittingReview: false,
+  testimonialIndex: 0,
+  testimonialAutoplay: true,
+  testimonialTimer: null,
+  activeLightboxItem: null,
   adminData: { bookings: [], models: [], gallery: [], announcements: [] }
 };
 
@@ -241,6 +268,15 @@ function renderServiceCards(containerId, services) {
 
 function renderCatalog() {
   const q = state.catalogSearch.trim().toLowerCase();
+  const catCounts = countCatalogByCategory(STUDIO_SERVICES, q);
+  document.querySelectorAll("[data-cat-count]").forEach((badge) => {
+    const key = badge.getAttribute("data-cat-count");
+    if (key && Object.prototype.hasOwnProperty.call(catCounts, key)) {
+      badge.textContent = String(catCounts[key]);
+      badge.setAttribute("aria-label", `${catCounts[key]} items`);
+    }
+  });
+
   const filtered = STUDIO_SERVICES.filter((pkg) => {
     const catOk = state.catalogCategory === "all" || pkg.category === state.catalogCategory;
     const text = `${pkg.titleEn} ${pkg.titleHi} ${pkg.summaryEn} ${pkg.tagEn} ${pkg.recommendedServiceType}`.toLowerCase();
@@ -252,13 +288,14 @@ function renderCatalog() {
 
 function renderGallery() {
   const categories = ["All", "Fashion", "Editorial", "Portrait", "Bridal", "Commercial", "Video Reel"];
+  const galCounts = countGalleryByCategory(state.galleryItems, categories);
   const filterBar = document.getElementById("galleryFilterBar");
   if (filterBar) {
     filterBar.innerHTML = categories
-      .map(
-        (cat) =>
-          `<button type="button" class="chip-btn ${state.galleryFilter === cat ? "active" : ""}" data-gal-cat="${cat}">${cat}</button>`
-      )
+      .map((cat) => {
+        const count = galCounts[cat] ?? 0;
+        return `<button type="button" class="chip-btn ${state.galleryFilter === cat ? "active" : ""}" data-gal-cat="${escapeHtml(cat)}"><span>${escapeHtml(cat)}</span><span class="filter-count-badge" data-gal-count="${escapeHtml(cat)}" aria-label="${count} items">${count}</span></button>`;
+      })
       .join("");
   }
 
@@ -296,7 +333,103 @@ function renderGallery() {
   renderGrid("galleryGrid", visible);
 }
 
+function getActiveTestimonials() {
+  return buildCarouselTestimonials(state.reviews, state.lang);
+}
+
+function renderTestimonialCarousel() {
+  const mount = document.getElementById("homeTestimonialCarousel");
+  if (!mount) return;
+  const items = getActiveTestimonials();
+  if (!items.length) return;
+  state.testimonialIndex = getNextSlideIndex(state.testimonialIndex, items.length, 0);
+  mount.innerHTML = renderTestimonialCarouselHtml({
+    items,
+    activeIndex: state.testimonialIndex,
+    autoplay: state.testimonialAutoplay,
+    t,
+    escapeHtml
+  });
+}
+
+function stepTestimonialCarousel(delta) {
+  const items = getActiveTestimonials();
+  if (!items.length) return;
+  state.testimonialIndex = getNextSlideIndex(state.testimonialIndex, items.length, delta);
+  renderTestimonialCarousel();
+}
+
+function syncTestimonialAutoplayTimer() {
+  if (state.testimonialTimer) {
+    clearInterval(state.testimonialTimer);
+    state.testimonialTimer = null;
+  }
+  const prefersReduced =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!state.testimonialAutoplay || prefersReduced) return;
+  state.testimonialTimer = setInterval(() => {
+    if (state.route === "home" && !document.hidden) {
+      stepTestimonialCarousel(1);
+    }
+  }, 6000);
+}
+
+function renderOfflineBookingQueue() {
+  const box = document.getElementById("offlineBookingsQueueBox");
+  if (!box) return;
+  box.innerHTML = renderOfflineQueueHtml({
+    queuedBookings: state.queuedOfflineBookings,
+    isOnline: typeof navigator === "undefined" ? true : navigator.onLine,
+    t,
+    escapeHtml
+  });
+}
+
+async function refreshOfflineBookingQueue() {
+  state.queuedOfflineBookings = await getQueuedBookings();
+  renderOfflineBookingQueue();
+}
+
+async function syncQueuedBookings({ notifyIfNone = false } = {}) {
+  await refreshOfflineBookingQueue();
+  if (!state.queuedOfflineBookings.length) {
+    if (notifyIfNone) {
+      showToast("All bookings are already synced.");
+    }
+    return;
+  }
+
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    showToast(t("offlineQueueWaitingNet"));
+    return;
+  }
+
+  // Trigger Service Worker Background Sync if available
+  await registerBookingBackgroundSync();
+
+  // Also flush via Firebase SDK when authenticated online (handles Safari/Firefox & refreshed tokens)
+  if (state.user && state.firebaseReady) {
+    const result = await flushQueuedBookingsFromClient({
+      createBookingFn: createShootBooking,
+      isOnline: typeof navigator === "undefined" ? true : navigator.onLine
+    });
+    await refreshOfflineBookingQueue();
+    if (result.syncedCount > 0) {
+      showToast(t("offlineBookingSyncedToast"));
+      await refreshCloudData();
+    }
+  } else if (notifyIfNone) {
+    showToast(t("offlineBookingReauthToast"));
+    if (state.firebaseReady) {
+      document.getElementById("authModal")?.classList.remove("hidden");
+    }
+  }
+}
+
 function renderMyBookings() {
+  renderOfflineBookingQueue();
   const el = document.getElementById("myBookingsList");
   const statusBar = document.getElementById("myBookingsStatusBar");
   if (!el) return;
@@ -438,6 +571,20 @@ function renderAdminConsole() {
       <div class="studio-card"><div class="stat-value">${state.adminData.announcements.length}</div><div class="stat-label">Announcements</div></div>`;
   }
 
+  const adminCounts = {
+    bookings: state.adminData.bookings.length,
+    models: state.adminData.models.length,
+    gallery: state.adminData.gallery.length,
+    announcements: state.adminData.announcements.length
+  };
+  document.querySelectorAll("[data-admin-count]").forEach((badge) => {
+    const key = badge.getAttribute("data-admin-count");
+    if (key && Object.prototype.hasOwnProperty.call(adminCounts, key)) {
+      badge.textContent = String(adminCounts[key]);
+      badge.setAttribute("aria-label", `${adminCounts[key]} items`);
+    }
+  });
+
   const body = document.getElementById("adminTabBody");
   if (!body) return;
 
@@ -530,12 +677,14 @@ async function refreshCloudData() {
       renderMyBookings();
       renderMyModels();
       renderCatalog();
+      renderTestimonialCarousel();
       if (state.isAdmin && state.route === "admin") {
         await loadAdminConsole();
       }
     } else {
       state.reviews = [];
       renderCatalog();
+      renderTestimonialCarousel();
     }
   } catch (err) {
     console.warn("Cloud refresh warning:", err?.message || err);
@@ -626,7 +775,32 @@ function setupPwaInstall() {
         console.warn("Service worker registration failed:", err?.message || err);
       });
     });
+
+    navigator.serviceWorker.addEventListener("message", async (event) => {
+      const data = event.data || {};
+      if (data.type === "BOOKING_SYNC_COMPLETE") {
+        await refreshOfflineBookingQueue();
+        showToast(t("offlineBookingSyncedToast"));
+        await refreshCloudData();
+      } else if (data.type === "BOOKING_SYNC_REAUTH_REQUIRED") {
+        await refreshOfflineBookingQueue();
+        if (state.user && state.firebaseReady) {
+          await syncQueuedBookings();
+        } else {
+          showToast(t("offlineBookingReauthToast"));
+        }
+      }
+    });
   }
+
+  window.addEventListener("online", () => {
+    renderOfflineBookingQueue();
+    syncQueuedBookings();
+  });
+
+  window.addEventListener("offline", () => {
+    renderOfflineBookingQueue();
+  });
 }
 
 function wireEvents() {
@@ -655,6 +829,36 @@ function wireEvents() {
       const pkgId = tierGuideBtn.getAttribute("data-tier-guide-pkg");
       state.expandedTierGuides[pkgId] = !state.expandedTierGuides[pkgId];
       renderCatalog();
+      return;
+    }
+
+    if (e.target.closest("[data-testimonial-prev]")) {
+      stepTestimonialCarousel(-1);
+      syncTestimonialAutoplayTimer();
+      return;
+    }
+
+    if (e.target.closest("[data-testimonial-next]")) {
+      stepTestimonialCarousel(1);
+      syncTestimonialAutoplayTimer();
+      return;
+    }
+
+    const testimonialDotBtn = e.target.closest("[data-testimonial-dot]");
+    if (testimonialDotBtn) {
+      const idx = Number.parseInt(testimonialDotBtn.getAttribute("data-testimonial-dot"), 10);
+      if (Number.isInteger(idx)) {
+        state.testimonialIndex = idx;
+        renderTestimonialCarousel();
+        syncTestimonialAutoplayTimer();
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-testimonial-autoplay]")) {
+      state.testimonialAutoplay = !state.testimonialAutoplay;
+      renderTestimonialCarousel();
+      syncTestimonialAutoplayTimer();
       return;
     }
 
@@ -687,6 +891,7 @@ function wireEvents() {
       const id = cardLightbox.getAttribute("data-lightbox-id");
       const item = state.galleryItems.find((g) => g.id === id);
       if (item) {
+        state.activeLightboxItem = item;
         document.getElementById("lightboxTitle").textContent = item.title;
         document.getElementById("lightboxImg").src = item.mediaUrl || item.thumbnailUrl;
         document.getElementById("lightboxMeta").textContent = `${item.category} • ${item.mediaType || "photo"}`;
@@ -798,6 +1003,24 @@ function wireEvents() {
         await cancelMyBooking(cancelBk.getAttribute("data-cancel-booking"));
         showToast("Booking cancelled.");
         await refreshCloudData();
+      } catch (err) {
+        showToast(err.message);
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-sync-offline-bookings]")) {
+      await syncQueuedBookings({ notifyIfNone: true });
+      return;
+    }
+
+    const removeOfflineBtn = e.target.closest("[data-remove-offline-booking]");
+    if (removeOfflineBtn) {
+      const offlineId = removeOfflineBtn.getAttribute("data-remove-offline-booking");
+      try {
+        await removeQueuedBooking(offlineId);
+        await refreshOfflineBookingQueue();
+        showToast("Offline booking draft removed.");
       } catch (err) {
         showToast(err.message);
       }
@@ -948,9 +1171,47 @@ function wireEvents() {
     localStorage.setItem("star_artist_lang", state.lang);
     applyTranslations();
     renderCatalog();
+    renderTestimonialCarousel();
     renderMyBookings();
     updateNewsletterRealtimeValidation({ showEmptyError: false });
   });
+
+  const testimonialSec = document.getElementById("homeTestimonialsSection");
+  if (testimonialSec) {
+    let touchStartX = null;
+    testimonialSec.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        stepTestimonialCarousel(-1);
+        syncTestimonialAutoplayTimer();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        stepTestimonialCarousel(1);
+        syncTestimonialAutoplayTimer();
+      }
+    });
+    testimonialSec.addEventListener(
+      "touchstart",
+      (e) => {
+        touchStartX = e.changedTouches?.[0]?.clientX ?? null;
+      },
+      { passive: true }
+    );
+    testimonialSec.addEventListener(
+      "touchend",
+      (e) => {
+        if (touchStartX === null) return;
+        const endX = e.changedTouches?.[0]?.clientX ?? touchStartX;
+        const dx = endX - touchStartX;
+        touchStartX = null;
+        if (Math.abs(dx) >= 40) {
+          stepTestimonialCarousel(dx < 0 ? 1 : -1);
+          syncTestimonialAutoplayTimer();
+        }
+      },
+      { passive: true }
+    );
+  }
 
   document.getElementById("themeToggleBtn")?.addEventListener("click", () => {
     state.theme = state.theme === "dark" ? "light" : "dark";
@@ -983,7 +1244,22 @@ function wireEvents() {
   });
 
   document.getElementById("closeLightboxBtn")?.addEventListener("click", () => {
+    state.activeLightboxItem = null;
     document.getElementById("lightboxModal")?.classList.add("hidden");
+  });
+
+  document.getElementById("lightboxShareBtn")?.addEventListener("click", async () => {
+    if (!state.activeLightboxItem) return;
+    const result = await shareGalleryImage(state.activeLightboxItem, {
+      baseUrl: window.location.href
+    });
+    if (result.status === "shared-file" || result.status === "shared-link") {
+      showToast(t("shareImageSuccessToast"));
+    } else if (result.status === "copied") {
+      showToast(t("shareImageCopiedToast"));
+    } else if (result.status === "unsupported") {
+      showToast(t("shareImageUnsupportedToast"));
+    }
   });
 
   document.getElementById("googleSignInBtn")?.addEventListener("click", async () => {
@@ -1043,21 +1319,64 @@ function wireEvents() {
 
   document.getElementById("bookingForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    try {
-      await createShootBooking({
-        clientName: document.getElementById("bookingName").value,
-        contactNumber: document.getElementById("bookingPhone").value,
-        serviceType: document.getElementById("bookingService").value,
-        preferredDate: document.getElementById("bookingDate").value,
-        preferredTime: document.getElementById("bookingTime").value,
-        location: document.getElementById("bookingLocation").value,
-        notes: document.getElementById("bookingNotes").value
+    const payload = {
+      clientName: document.getElementById("bookingName").value,
+      contactNumber: document.getElementById("bookingPhone").value,
+      serviceType: document.getElementById("bookingService").value,
+      preferredDate: document.getElementById("bookingDate").value,
+      preferredTime: document.getElementById("bookingTime").value,
+      location: document.getElementById("bookingLocation").value,
+      notes: document.getElementById("bookingNotes").value
+    };
+
+    const validationError = validateOfflineBookingPayload(payload);
+    if (validationError) {
+      showToast(validationError);
+      return;
+    }
+
+    const queueBookingOffline = async () => {
+      const syncCtx = await getBookingSyncContext();
+      const record = createQueuedBookingRecord({
+        payload,
+        userId: syncCtx.uid || state.user?.uid || "",
+        authToken: syncCtx.idToken || "",
+        projectId: syncCtx.projectId,
+        databaseId: syncCtx.databaseId
       });
+      await enqueueOfflineBooking(record);
+      await registerBookingBackgroundSync();
+      await refreshOfflineBookingQueue();
+      e.target.reset();
+      populateBookingServicesDropdown();
+      showToast(t("offlineBookingSavedToast"));
+    };
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      try {
+        await queueBookingOffline();
+      } catch (queueErr) {
+        showToast(queueErr.message || "Could not save offline booking.");
+      }
+      return;
+    }
+
+    try {
+      await createShootBooking(payload);
       e.target.reset();
       populateBookingServicesDropdown();
       showToast("Shoot booking submitted!");
       await refreshCloudData();
     } catch (err) {
+      if (isLikelyOfflineError(err, typeof navigator === "undefined" ? true : navigator.onLine)) {
+        try {
+          await queueBookingOffline();
+          return;
+        } catch (queueErr) {
+          showToast(queueErr.message || err.message);
+          return;
+        }
+      }
       showToast(err.message);
       if (!state.user && state.firebaseReady) {
         document.getElementById("authModal")?.classList.remove("hidden");
@@ -1277,9 +1596,12 @@ async function bootstrap() {
   populateBookingServicesDropdown();
   renderCatalog();
   renderGallery();
+  renderTestimonialCarousel();
+  syncTestimonialAutoplayTimer();
   renderMyBookings();
   renderMyModels();
   renderSavedNewsletterStatus();
+  await refreshOfflineBookingQueue();
   setupPwaInstall();
   wireEvents();
 
@@ -1298,6 +1620,9 @@ async function bootstrap() {
       updateFirebaseUiStatus();
       renderMyBookings();
       renderMyModels();
+      if (user) {
+        await syncQueuedBookings();
+      }
       await refreshCloudData();
     });
   }

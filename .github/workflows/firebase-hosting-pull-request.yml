@@ -1,11 +1,6 @@
-name: Deploy to Firebase Hosting on PR & Push
+name: Deploy Preview to Firebase Hosting on PR
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
   pull_request:
 
 permissions:
@@ -18,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_and_deploy:
+  build_and_preview:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,7 +26,7 @@ jobs:
 
       - name: Validate STAR ARTIST STUDIO PWA & Tests
         run: |
-          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js
+          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js web/js/testimonials.js web/js/offline-sync.js web/js/gallery-share.js
           node --test web/tests/pwa.test.mjs
 
       - name: Check Firebase Service Account Secret
@@ -46,7 +41,7 @@ jobs:
           fi
 
       - name: Deploy Preview Channel to Firebase Hosting (Pull Request)
-        if: github.event_name == 'pull_request' && steps.check_firebase_secret.outputs.configured == 'true'
+        if: steps.check_firebase_secret.outputs.configured == 'true'
         uses: FirebaseExtended/action-hosting-deploy@v0
         env:
           CI: "true"
@@ -57,21 +52,3 @@ jobs:
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}'
           projectId: gen-lang-client-0548683163
           expires: 7d
-
-      - name: Verify Firebase Service Account Secret on Push
-        if: github.event_name != 'pull_request' && steps.check_firebase_secret.outputs.configured != 'true'
-        run: |
-          echo "::error::Missing repository secret FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163. Run 'firebase init hosting:github' or add the Firebase Service Account JSON under GitHub Settings > Secrets and variables > Actions."
-          exit 1
-
-      - name: Deploy Live Channel to Firebase Hosting (Push / Manual Run)
-        if: github.event_name != 'pull_request' && steps.check_firebase_secret.outputs.configured == 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        env:
-          CI: "true"
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163 }}'
-          channelId: live
-          projectId: gen-lang-client-0548683163

@@ -1,12 +1,17 @@
 package com.example
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.data.model.AppLanguage
+import com.example.data.model.ServiceReview
 import com.example.ui.screens.HomeConnectSection
+import com.example.ui.screens.HomeTestimonialCarousel
+import com.example.ui.screens.buildHomeTestimonials
+import com.example.ui.screens.getNextTestimonialIndex
 import com.example.ui.theme.StarArtistTheme
 import com.example.util.StudioConstants
 import com.example.util.StudioContactDetails
@@ -93,5 +98,67 @@ class HomeScreenPolishTest {
             ),
             openedUrls
         )
+    }
+
+    @Test
+    fun homeTestimonialCarousel_displaysClientAndModelFeedbackAndNavigatesSlides() {
+        assertEquals(4, getNextTestimonialIndex(0, 5, -1))
+        assertEquals(0, getNextTestimonialIndex(4, 5, 1))
+
+        val merged = buildHomeTestimonials(
+            reviews = listOf(
+                ServiceReview(
+                    id = "rev-1",
+                    reviewerName = "Neha Kapoor",
+                    serviceType = "Model Portfolio Shoot",
+                    rating = 5L,
+                    comment = "Crisp lighting and professional team from start to finish."
+                ),
+                ServiceReview(
+                    id = "rev-low",
+                    reviewerName = "Ignored Low Rating",
+                    serviceType = "Shoot",
+                    rating = 2L,
+                    comment = "Should not be promoted into positive testimonials."
+                )
+            ),
+            language = AppLanguage.ENGLISH
+        )
+        assertEquals(6, merged.size)
+        assertEquals("Neha Kapoor", merged.first().name)
+
+        composeTestRule.setContent {
+            StarArtistTheme(isStudioLight = false) {
+                HomeTestimonialCarousel(
+                    reviews = emptyList(),
+                    language = AppLanguage.ENGLISH,
+                    autoAdvanceMs = 0L
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("home_testimonial_carousel").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("testimonial_active_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Priya Sharma").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("testimonial_counter").assertTextContains("1 / 5", substring = true)
+
+        // Advance to model testimonial slide
+        composeTestRule.onNodeWithTag("testimonial_next_btn").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Aryan Verma").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("testimonial_counter").assertTextContains("2 / 5", substring = true)
+
+        // Jump via pagination dot to slide 3
+        composeTestRule.onNodeWithTag("testimonial_dot_2").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Rohit Mehra").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("testimonial_counter").assertTextContains("3 / 5", substring = true)
+
+        // Navigate backwards
+        composeTestRule.onNodeWithTag("testimonial_prev_btn").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Aryan Verma").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("testimonial_counter").assertTextContains("2 / 5", substring = true)
     }
 }

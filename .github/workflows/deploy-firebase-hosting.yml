@@ -6,10 +6,13 @@ on:
     branches:
       - main
       - master
-    paths:
-      - "web/**"
-      - "firebase.json"
-      - ".firebaserc"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-hosting-live-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build_verify_and_deploy:
@@ -25,7 +28,7 @@ jobs:
 
       - name: Validate PWA build files and tests
         run: |
-          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js
+          node --check web/sw.js web/js/app.js web/js/data.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js web/js/testimonials.js web/js/offline-sync.js web/js/gallery-share.js
           node --test web/tests/pwa.test.mjs
 
       - name: Check Firebase Service Account Secret
@@ -38,6 +41,12 @@ jobs:
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify Firebase Service Account Secret is configured
+        if: steps.check_firebase_secret.outputs.configured != 'true'
+        run: |
+          echo "::error::Missing GitHub secret FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0548683163. Add your free Spark Firebase Service Account JSON under GitHub Settings > Secrets and variables > Actions."
+          exit 1
 
       - name: Deploy to Firebase Hosting (Free Spark Tier Live Channel)
         if: steps.check_firebase_secret.outputs.configured == 'true'
