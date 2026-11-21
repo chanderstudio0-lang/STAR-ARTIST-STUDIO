@@ -2175,6 +2175,823 @@ test("Admin Dashboard is restricted exclusively to verified chanderstudio0@gmail
   }
 });
 
+test("Admin Dashboard 'Model Growth' Recharts chart aggregates 30-day applications, computes outreach KPIs, mounts Area/Bar charts, and handles offline fallback", async () => {
+  const growthMod = await import(pathToFileURL(path.join(webDir, "js/admin-model-growth.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // 1. Date normalization across Firestore Timestamp, serialized seconds, ISO strings, and epoch ms
+  const anchor = new Date("2026-11-21T12:00:00.000Z");
+  assert.equal(growthMod.normalizeApplicationDate({ toDate: () => anchor }).toISOString(), anchor.toISOString());
+  assert.equal(
+    growthMod.normalizeApplicationDate({ seconds: Math.floor(anchor.getTime() / 1000), nanoseconds: 0 }).toISOString(),
+    anchor.toISOString()
+  );
+  assert.equal(growthMod.normalizeApplicationDate("2026-11-20T09:30:00.000Z").getUTCDate(), 20);
+  assert.equal(growthMod.normalizeApplicationDate("invalid-date"), null);
+
+  // 2. 30-day daily series aggregation (ignores records older than 30 days)
+  const sampleModels = [
+    { id: "m1", status: "approved", createdAt: { toDate: () => new Date("2026-11-21T08:00:00.000Z") } },
+    { id: "m2", status: "pending", createdAt: "2026-11-21T14:00:00.000Z" },
+    { id: "m3", status: "approved", createdAt: "2026-11-21T19:00:00.000Z" },
+    { id: "m4", status: "pending", createdAt: "2026-11-18T10:00:00.000Z" },
+    { id: "m5", status: "rejected", createdAt: "2026-11-10T10:00:00.000Z" },
+    { id: "m6", status: "approved", createdAt: "2026-11-09T10:00:00.000Z" },
+    { id: "m_old", status: "approved", createdAt: "2026-09-01T10:00:00.000Z" }
+  ];
+
+  const series = growthMod.buildModelGrowthSeries(sampleModels, {
+    days: 30,
+    now: anchor,
+    lang: "en",
+    utc: true
+  });
+  assert.equal(series.length, 30, "Model Growth series must cover exactly 30 consecutive days");
+  assert.equal(series[0].dateKey, "2026-10-23");
+  assert.equal(series[29].dateKey, "2026-11-21");
+  assert.equal(series[29].applications, 3);
+  assert.equal(series[29].approved, 2);
+  assert.equal(series[29].pending, 1);
+  assert.equal(series[29].cumulative, 6, "30-day cumulative must exclude older model m_old");
+
+  // 3. Outreach KPI summary (last 7 days = 4 vs prev 7 days = 2 => +100% up trend)
+  const summary = growthMod.summarizeModelGrowth(series, sampleModels);
+  assert.equal(summary.total30Days, 6);
+  assert.equal(summary.approved30Days, 3);
+  assert.equal(summary.last7Days, 4);
+  assert.equal(summary.prev7Days, 2);
+  assert.equal(summary.trendPercent, 100);
+  assert.equal(summary.trendDirection, "up");
+  assert.equal(summary.peakDay.dateKey, "2026-11-21");
+  assert.equal(summary.peakDay.applications, 3);
+  assert.equal(summary.dailyAverage, 0.2);
+  assert.equal(summary.approvalRate30Days, 50);
+  assert.equal(summary.allTimeTotal, 7);
+
+  // 4. Recharts runtime mounting (AreaChart + BarChart), root reuse, and clean unmount
+  const renderedTrees = [];
+  let rootCreateCount = 0;
+  let unmountCount = 0;
+  const fakeReact = {
+    createElement: (type, props, ...children) => ({
+      type: typeof type === "function" ? type.name : type,
+      props: props || {},
+      children
+    })
+  };
+  const fakeRecharts = {
+    ResponsiveContainer: function ResponsiveContainer() {},
+    AreaChart: function AreaChart() {},
+    Area: function Area() {},
+    BarChart: function BarChart() {},
+    Bar: function Bar() {},
+    CartesianGrid: function CartesianGrid() {},
+    XAxis: function XAxis() {},
+    YAxis: function YAxis() {},
+    Tooltip: function Tooltip() {}
+  };
+  const fakeLoaders = {
+    react: async () => fakeReact,
+    reactDomClient: async () => ({
+      createRoot: () => {
+        rootCreateCount += 1;
+        return {
+          render: (tree) => renderedTrees.push(tree),
+          unmount: () => {
+            unmountCount += 1;
+          }
+        };
+      }
+    }),
+    recharts: async () => fakeRecharts
+  };
+
+  const chartHost = { innerHTML: "" };
+  const metricsEl = { innerHTML: "" };
+  const statusEl = { textContent: "" };
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  const areaResult = await growthMod.mountModelGrowthChart(chartHost, {
+    models: sampleModels,
+    metricsEl,
+    statusEl,
+    chartType: "area",
+    theme: "dark",
+    lang: "en",
+    now: anchor,
+    t: tEn,
+    loaders: fakeLoaders
+  });
+  assert.equal(areaResult.engine, "recharts");
+  assert.equal(rootCreateCount, 1);
+  assert.equal(renderedTrees[0].type, "ResponsiveContainer");
+  assert.equal(renderedTrees[0].children[0].type, "AreaChart");
+  assert.equal(renderedTrees[0].children[0].props.data.length, 30);
+  assert.ok(metricsEl.innerHTML.includes("+100%"));
+  assert.ok(statusEl.textContent.includes("Recharts"));
+
+  // Switch to BarChart reuses the existing React root without remount leak
+  const barResult = await growthMod.mountModelGrowthChart(chartHost, {
+    models: sampleModels,
+    metricsEl,
+    statusEl,
+    chartType: "bar",
+    theme: "light",
+    lang: "en",
+    now: anchor,
+    t: tEn,
+    loaders: fakeLoaders
+  });
+  assert.equal(barResult.engine, "recharts");
+  assert.equal(rootCreateCount, 1, "Existing React root must be reused on chart updates");
+  assert.equal(renderedTrees[1].children[0].type, "BarChart");
+
+  // Unmount on admin sign-out clears chart host cleanly
+  growthMod.unmountModelGrowthChart(chartHost);
+  assert.equal(unmountCount, 1);
+  assert.equal(chartHost.innerHTML, "");
+
+  // 5. Offline fallback renders accessible vector SVG when Recharts CDN is unreachable
+  const offlineHost = { innerHTML: "" };
+  const offlineStatus = { textContent: "" };
+  const fallbackRes = await growthMod.mountModelGrowthChart(offlineHost, {
+    models: sampleModels,
+    statusEl: offlineStatus,
+    now: anchor,
+    t: tEn,
+    loaders: {
+      react: async () => {
+        throw new Error("Offline");
+      },
+      reactDomClient: async () => {
+        throw new Error("Offline");
+      },
+      recharts: async () => {
+        throw new Error("Offline");
+      }
+    }
+  });
+  assert.equal(fallbackRes.engine, "svg-fallback");
+  assert.ok(offlineHost.innerHTML.includes("<svg"));
+  assert.ok(offlineHost.innerHTML.includes("model-growth-fallback-svg"));
+
+  // 6. HTML, SW, JS wiring, and CSS checks
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="adminModelGrowthCard"',
+    'id="adminModelGrowthMetrics"',
+    'id="adminModelGrowthChartMount"',
+    'data-growth-chart-type="area"',
+    'data-growth-chart-type="bar"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing Model Growth token: ${token}`);
+  }
+  assert.ok(
+    html.indexOf('id="adminConsoleContent"') < html.indexOf('id="adminModelGrowthCard"'),
+    "Model Growth card must live strictly inside the gated #adminConsoleContent container"
+  );
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("/js/admin-model-growth.js"), "sw.js must pre-cache admin-model-growth.js");
+  assert.ok(swJs.includes("esm.sh"), "sw.js must bypass esm.sh for Recharts ESM");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".model-growth-card",
+    ".model-growth-kpis",
+    ".model-growth-trend.is-up",
+    ".model-growth-chart-host",
+    ".model-growth-fallback-svg"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing Model Growth rule for ${selector}`);
+  }
+});
+
+test("Admin Dashboard bookings CSV export formats RFC 4180 UTF-8 CSV, neutralizes spreadsheet formulas, and downloads cleanly", async () => {
+  const csvMod = await import(pathToFileURL(path.join(webDir, "js/admin-bookings-export.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // 1. RFC 4180 quoting & formula-injection neutralization
+  assert.equal(csvMod.sanitizeCsvCell("Simple Name"), "Simple Name");
+  assert.equal(csvMod.sanitizeCsvCell('Sirsa, "Haryana"'), '"Sirsa, ""Haryana"""');
+  assert.equal(csvMod.sanitizeCsvCell("Line 1\nLine 2"), '"Line 1\nLine 2"');
+  assert.equal(csvMod.sanitizeCsvCell("=CMD|' /C calc'!A0"), "'=CMD|' /C calc'!A0");
+  assert.equal(csvMod.sanitizeCsvCell("+91 9812890081"), "'+91 9812890081");
+  assert.equal(csvMod.sanitizeCsvCell("@SUM(A1:A2)"), "'@SUM(A1:A2)");
+
+  // 2. Date formatting & CSV build with UTF-8 BOM
+  const sampleBookings = [
+    {
+      id: "bk_101",
+      clientName: "Riya Sharma, Model",
+      contactNumber: "+91 9812890081",
+      serviceType: "High-Fashion Editorial - Pro",
+      preferredDate: "2026-12-05",
+      preferredTime: "10:00 AM",
+      location: "Studio (Talwara Khurd, Sirsa)",
+      status: "Confirmed",
+      notes: 'Bring "Gold" backdrop\nTwo lighting setups',
+      createdAt: { toDate: () => new Date("2026-11-21T09:15:00.000Z") }
+    },
+    {
+      id: "bk_102",
+      clientName: "=HYPERLINK(\"http://evil\",\"Click\")",
+      contactNumber: "9876543210",
+      serviceType: "Bridal Story",
+      preferredDate: "2026-12-10",
+      preferredTime: "04:00 PM",
+      location: "Sirsa Palace",
+      status: "Pending",
+      notes: "",
+      createdAt: "2026-11-20T14:30:00.000Z"
+    }
+  ];
+
+  const csv = csvMod.buildBookingsCsv(sampleBookings);
+  assert.ok(csv.startsWith("\uFEFFBooking ID,Client Name,Contact Number,Service Type,Preferred Date,Preferred Time,Location,Status,Notes,Created At\r\n"));
+  assert.ok(csv.includes('"Riya Sharma, Model"'));
+  assert.ok(csv.includes("'+91 9812890081"));
+  assert.ok(csv.includes('"Bring ""Gold"" backdrop\nTwo lighting setups"'));
+  assert.ok(csv.includes("2026-11-21 09:15 UTC"));
+  assert.ok(csv.includes("\"'=HYPERLINK("), "Formula-starting cells must be neutralized with leading apostrophe");
+
+  // 3. Empty bookings returns empty status without triggering download
+  assert.deepEqual(csvMod.exportBookingsToCsv([]), {
+    status: "empty",
+    count: 0,
+    fileName: "",
+    csv: ""
+  });
+
+  // 4. End-to-end anchor download flow with Blob + URL.createObjectURL
+  const anchors = [];
+  let capturedBlob = null;
+  const mockDoc = {
+    body: { appendChild: () => {}, removeChild: () => {} },
+    createElement: (tag) => {
+      const el = {
+        tag,
+        href: "",
+        download: "",
+        style: {},
+        clicked: false,
+        click() {
+          this.clicked = true;
+        },
+        remove() {}
+      };
+      anchors.push(el);
+      return el;
+    }
+  };
+  class MockBlob {
+    constructor(parts, opts) {
+      this.parts = parts;
+      this.type = opts?.type || "";
+    }
+  }
+
+  const res = csvMod.exportBookingsToCsv(sampleBookings, {
+    doc: mockDoc,
+    BlobCtor: MockBlob,
+    urlApi: {
+      createObjectURL: (blob) => {
+        capturedBlob = blob;
+        return "blob:star-artist/bookings-csv";
+      },
+      revokeObjectURL: () => {}
+    },
+    now: new Date("2026-11-21T05:16:00.000Z")
+  });
+
+  assert.equal(res.status, "exported");
+  assert.equal(res.count, 2);
+  assert.equal(res.fileName, "star-artist-studio-bookings-2026-11-21.csv");
+  assert.equal(capturedBlob.type, "text/csv;charset=utf-8;");
+  assert.equal(anchors[0].href, "blob:star-artist/bookings-csv");
+  assert.equal(anchors[0].download, "star-artist-studio-bookings-2026-11-21.csv");
+  assert.equal(anchors[0].clicked, true);
+
+  // 5. Toolbar rendering (enabled with count > 0, disabled with count === 0)
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+  const enabledToolbar = csvMod.renderAdminBookingsToolbarHtml({ count: 2, t: tEn });
+  assert.ok(enabledToolbar.includes('id="adminExportBookingsCsvBtn"'));
+  assert.ok(enabledToolbar.includes("data-adm-export-bookings-csv"));
+  assert.ok(enabledToolbar.includes("2 current booking(s)"));
+  assert.equal(/\bdisabled\b/.test(enabledToolbar), false);
+
+  const disabledToolbar = csvMod.renderAdminBookingsToolbarHtml({ count: 0, t: tEn });
+  assert.ok(/\bdisabled\b/.test(disabledToolbar), "Export CSV button should be disabled when bookings list is empty");
+
+  // 6. Wiring, SW pre-cache, and CSS verification
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("exportBookingsToCsv"), "app.js must wire exportBookingsToCsv");
+  assert.ok(appJs.includes("renderAdminBookingsToolbarHtml"), "app.js must render Admin Bookings CSV toolbar");
+  assert.ok(appJs.includes("data-adm-export-bookings-csv"), "app.js must handle CSV export button clicks");
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("/js/admin-bookings-export.js"), "sw.js must pre-cache admin-bookings-export.js");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [".admin-bookings-toolbar", ".admin-export-csv-btn"]) {
+    assert.ok(css.includes(selector), `styles.css missing CSV export rule for ${selector}`);
+  }
+});
+
+test("Company / Event Organizer Registration & Model Requirement Booking System protects model privacy and integrates with Admin Dashboard", async () => {
+  const companyMod = await import(pathToFileURL(path.join(webDir, "js/company-booking.js")).href);
+  const guardMod = await import(pathToFileURL(path.join(webDir, "js/admin-guard.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Public route registration
+  assert.ok(guardMod.PUBLIC_ROUTES.includes("companies"), "companies route must be publicly accessible");
+
+  // 2. Model privacy sanitization strictly strips personal contact details & unsafe URLs
+  const rawSensitiveModel = {
+    id: "m_live_01",
+    userId: "uid_secret_owner",
+    fullName: "Kavya Arora",
+    gender: "Female",
+    city: "Sirsa, Haryana",
+    phoneNumber: "+91 9812899999",
+    mobileNumber: "9812899999",
+    email: "kavya.private@gmail.com",
+    address: "Private Home Street 42",
+    adminNotes: "Internal casting note",
+    skills: "Bridal, Runway, Print",
+    portfolioUrls: "javascript:alert(1)",
+    avatarUrl: "/images/model-portrait.jpg"
+  };
+  const sanitized = companyMod.sanitizePublicModelProfile(rawSensitiveModel);
+  assert.ok(sanitized);
+  assert.equal(sanitized.fullName, "Kavya Arora");
+  assert.equal(sanitized.portfolioUrl, "", "Unsafe javascript: portfolio URL must be stripped");
+  assert.equal("phoneNumber" in sanitized, false);
+  assert.equal("mobileNumber" in sanitized, false);
+  assert.equal("email" in sanitized, false);
+  assert.equal("address" in sanitized, false);
+  assert.equal("userId" in sanitized, false);
+  assert.equal("adminNotes" in sanitized, false);
+
+  // Merged roster + gender/search filtering
+  const merged = companyMod.mergePublicModels([rawSensitiveModel]);
+  assert.ok(merged.length >= 6);
+  const females = companyMod.filterPublicModels(merged, { gender: "female" });
+  assert.ok(females.every((m) => m.gender.toLowerCase() === "female"));
+  const searchHits = companyMod.filterPublicModels(merged, { search: "Kavya" });
+  assert.equal(searchHits.length, 1);
+
+  // Rendered public cards NEVER expose private phone/email
+  const publicCardsHtml = companyMod.renderPublicModelPortfolioCardsHtml({
+    models: [rawSensitiveModel],
+    selectedModelIds: ["m_live_01"],
+    t: tEn
+  });
+  assert.ok(publicCardsHtml.includes("Kavya Arora"));
+  assert.ok(publicCardsHtml.includes("Selected for Booking"));
+  assert.equal(publicCardsHtml.includes("9812899999"), false, "Model phone number must NEVER appear in public portfolio HTML");
+  assert.equal(publicCardsHtml.includes("kavya.private@gmail.com"), false, "Model email must NEVER appear in public portfolio HTML");
+
+  // 3. Company registration & model requirement booking validation
+  const badReg = companyMod.validateCompanyRegistration({
+    companyName: "A",
+    contactPerson: "",
+    mobileNumber: "123",
+    email: "bad-email",
+    address: "No"
+  });
+  assert.equal(badReg.valid, false);
+  assert.ok(badReg.errors.length >= 5);
+
+  const goodReg = companyMod.validateCompanyRegistration({
+    companyName: "Royal Heritage Events",
+    organizationType: "Event Organizer",
+    contactPerson: "Vikram Mehta",
+    mobileNumber: "+91 9812890081",
+    email: "Events@RoyalHeritage.in",
+    address: "Sector 17, Chandigarh, India"
+  });
+  assert.equal(goodReg.valid, true);
+  assert.equal(goodReg.cleaned.email, "events@royalheritage.in");
+
+  // Verify all required dropdown options exist
+  assert.deepEqual(companyMod.MODEL_REQUIREMENT_OPTIONS, [
+    "Male Models",
+    "Female Models",
+    "Both",
+    "Multiple Models"
+  ]);
+  assert.deepEqual(companyMod.EVENT_TYPE_OPTIONS, [
+    "Fashion Show",
+    "Wedding",
+    "Music Video",
+    "Advertisement",
+    "Brand Promotion",
+    "Photoshoot",
+    "Other"
+  ]);
+
+  const goodBooking = companyMod.validateCompanyModelBooking({
+    ...goodReg.cleaned,
+    modelRequirement: "Both",
+    modelsCount: "6",
+    eventType: "Fashion Show",
+    eventDate: "2026-12-28",
+    eventLocation: "Sirsa Grand Palace",
+    budget: "₹80,000",
+    detailedRequirements: "Need 3 male and 3 female models for festive runway show.",
+    requestedModelIds: ["m_live_01", "m_live_01"],
+    requestedModelNames: ["Kavya Arora"]
+  });
+  assert.equal(goodBooking.valid, true);
+  assert.equal(goodBooking.cleaned.modelsCount, 6);
+  assert.deepEqual(goodBooking.cleaned.requestedModelIds, ["m_live_01"]);
+
+  const badBooking = companyMod.validateCompanyModelBooking({
+    ...goodReg.cleaned,
+    modelRequirement: "InvalidOption",
+    modelsCount: "0",
+    eventType: "UnknownEvent",
+    eventDate: "",
+    eventLocation: "",
+    budget: "",
+    detailedRequirements: "short"
+  });
+  assert.equal(badBooking.valid, false);
+  assert.ok(badBooking.errors.length >= 6);
+
+  // 4. Admin Dashboard company request management rendering & XSS escaping
+  const sampleReq = {
+    id: "req_101",
+    ...goodBooking.cleaned,
+    companyName: "Royal <script>alert(1)</script> Events",
+    status: "Pending",
+    adminNotes: ""
+  };
+  const adminHtml = companyMod.renderAdminCompanyRequestsSectionHtml({
+    requests: [sampleReq],
+    companies: [goodReg.cleaned],
+    filter: "all",
+    searchQuery: "",
+    drafts: {},
+    t: tEn
+  });
+  assert.equal(adminHtml.includes("<script>"), false, "Admin company cards must escape HTML");
+  assert.ok(adminHtml.includes("data-adm-comp-id=\"req_101\""));
+  assert.ok(adminHtml.includes("data-adm-comp-st=\"Approved\""));
+  assert.ok(adminHtml.includes("data-adm-comp-st=\"Contacted\""));
+  assert.ok(adminHtml.includes("data-adm-comp-st=\"Rejected\""));
+  assert.ok(adminHtml.includes("tel:+919812890081"));
+  assert.ok(adminHtml.includes("mailto:events@royalheritage.in"));
+  assert.ok(adminHtml.includes("Kavya Arora"));
+
+  // 5. HTML, JS, SW, CSS, and Firestore Rules integration verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="view-companies"',
+    'id="companyRegistrationForm"',
+    'id="publicModelsGrid"',
+    'id="companyBookingForm"',
+    'id="compBookRequirement"',
+    'id="compBookCount"',
+    'id="compBookEventType"',
+    'id="selectedRequestedModelsBar"',
+    'id="myCompanyBookingsList"',
+    'data-admin-tab="companies"',
+    'data-route="companies"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing Company Booking token: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    "renderPublicModels",
+    "submitCompanyModelBooking",
+    "saveCompanyRegistration",
+    "adminUpdateCompanyBookingStatus",
+    "renderAdminCompanyRequestsSectionHtml"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing Company Booking wiring: ${token}`);
+  }
+
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(firebaseJs.includes('collection(db, "publicModels")'), "firebase.js must read publicModels");
+  assert.ok(firebaseJs.includes('doc(db, "publicModels", modelId)'), "firebase.js must sync publicModels on model approval");
+  assert.ok(firebaseJs.includes('collection(db, "companyBookings")'), "firebase.js must persist companyBookings");
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("/js/company-booking.js"), "sw.js must pre-cache company-booking.js");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".public-model-card",
+    ".selected-model-chip",
+    ".admin-company-meta-grid",
+    ".company-privacy-banner"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing Company Booking rule: ${selector}`);
+  }
+
+  const rules = fs.readFileSync(path.join(webDir, "../firestore.rules"), "utf8");
+  for (const token of [
+    "function isValidPublicModel(data)",
+    "data.keys().hasOnly([",
+    "match /publicModels/{modelId}",
+    "match /companies/{companyId}",
+    "match /companyBookings/{requestId}"
+  ]) {
+    assert.ok(rules.includes(token), `firestore.rules missing rule: ${token}`);
+  }
+});
+
+test("Admin Dashboard real-time booking status tracker auto-transitions past-date Confirmed bookings to Completed", async () => {
+  const trackerMod = await import(pathToFileURL(path.join(webDir, "js/admin-booking-tracker.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // Reference clock: 2026-11-21 15:00 local time
+  const now = new Date(2026, 10, 21, 15, 0, 0);
+  assert.equal(trackerMod.getLocalDateKey(now), "2026-11-21");
+
+  // 1. Date parsing & event date passing detection
+  assert.equal(trackerMod.parseEventDate("2026-11-20").isDateOnly, true);
+  assert.equal(trackerMod.parseEventDate("2026-02-31"), null, "Invalid calendar dates must return null");
+  assert.equal(trackerMod.parseEventDate("not-a-date"), null);
+
+  assert.equal(
+    trackerMod.hasEventDatePassed({ preferredDate: "2026-11-20" }, now),
+    true,
+    "Yesterday's date-only event must be marked passed"
+  );
+  assert.equal(
+    trackerMod.hasEventDatePassed({ preferredDate: "2026-11-21" }, now),
+    false,
+    "Today's date-only event must stay Confirmed until the day finishes"
+  );
+  assert.equal(
+    trackerMod.hasEventDatePassed({ preferredDate: "2026-11-22" }, now),
+    false,
+    "Tomorrow's event must not be marked passed"
+  );
+  assert.equal(
+    trackerMod.hasEventDatePassed({ preferredDate: new Date(2026, 10, 21, 10, 0, 0).toISOString() }, now),
+    true,
+    "Past ISO timestamp on same day must be marked passed"
+  );
+  assert.equal(
+    trackerMod.hasEventDatePassed({ preferredDate: { seconds: Math.floor(new Date(2026, 10, 19, 12, 0, 0).getTime() / 1000) } }, now),
+    true,
+    "Past Firestore Timestamp object must be marked passed"
+  );
+  assert.equal(trackerMod.hasEventDatePassed({ preferredDate: "invalid" }, now), false);
+
+  // 2. findDueConfirmedBookings & summarizeRealtimeBookingTracker
+  const sampleBookings = [
+    { id: "b_past_conf_1", clientName: "Aarav Kapoor", serviceType: "Bridal Shoot", preferredDate: "2026-11-18", status: "Confirmed" },
+    { id: "b_past_conf_2", clientName: "Meera <script>alert(1)</script>", serviceType: "Runway Lookbook", preferredDate: "2026-11-20", status: "Confirmed" },
+    { id: "b_today_conf", clientName: "Riya Sharma", serviceType: "Editorial", preferredDate: "2026-11-21", status: "Confirmed" },
+    { id: "b_future_conf", clientName: "Kabir Gill", serviceType: "Music Video", preferredDate: "2026-11-26", status: "Confirmed" },
+    { id: "b_past_pending", clientName: "Unconfirmed Client", serviceType: "Portfolio", preferredDate: "2026-11-15", status: "Pending" },
+    { id: "b_past_cancelled", clientName: "Cancelled Client", serviceType: "Portfolio", preferredDate: "2026-11-12", status: "Cancelled" },
+    { id: "b_done", clientName: "Completed Client", serviceType: "Commercial", preferredDate: "2026-11-10", status: "Completed" }
+  ];
+
+  const due = trackerMod.findDueConfirmedBookings(sampleBookings, now);
+  assert.deepEqual(
+    due.map((b) => b.id),
+    ["b_past_conf_1", "b_past_conf_2"],
+    "Only past-date Confirmed bookings should be selected for auto-completion"
+  );
+
+  const summary = trackerMod.summarizeRealtimeBookingTracker(sampleBookings, now);
+  assert.equal(summary.confirmedUpcoming, 1);
+  assert.equal(summary.confirmedToday, 1);
+  assert.equal(summary.confirmedPastDue, 2);
+  assert.equal(summary.completed, 1);
+  assert.equal(summary.pending, 1);
+  assert.equal(summary.cancelled, 1);
+
+  // 3. Stateful controller: auto-complete, in-flight deduplication, pause/resume, clean stop()
+  let liveBookings = sampleBookings.map((b) => ({ ...b }));
+  let autoCompleteCalls = 0;
+  let releasePendingWrite;
+  const pendingWritePromise = new Promise((resolve) => {
+    releasePendingWrite = resolve;
+  });
+
+  const controller = trackerMod.createRealtimeBookingTracker({
+    getBookings: () => liveBookings,
+    intervalMs: 0,
+    nowProvider: () => now,
+    onAutoComplete: async (dueList) => {
+      autoCompleteCalls += 1;
+      await pendingWritePromise;
+      const ids = dueList.map((b) => b.id);
+      liveBookings = liveBookings.map((b) => (ids.includes(b.id) ? { ...b, status: "Completed" } : b));
+      return { succeededIds: ids, failedIds: [] };
+    }
+  });
+
+  controller.start();
+  controller.setLiveConnected(true);
+
+  // Fire two concurrent evaluations while first write is still in flight
+  const eval1 = controller.evaluateNow();
+  const eval2 = controller.evaluateNow();
+  releasePendingWrite();
+  const [res1, res2] = await Promise.all([eval1, eval2]);
+
+  assert.equal(autoCompleteCalls, 1, "Concurrent evaluations must deduplicate in-flight booking IDs");
+  assert.deepEqual(
+    res1.transitioned.map((b) => b.id),
+    ["b_past_conf_1", "b_past_conf_2"]
+  );
+  assert.equal(res2.transitioned.length, 0);
+
+  const snapAfter = controller.getSnapshot();
+  assert.equal(snapAfter.totalAutoCompleted, 2);
+  assert.equal(snapAfter.isLiveConnected, true);
+  assert.equal(snapAfter.recentTransitions.length, 2);
+  assert.equal(snapAfter.recentTransitions[0].fromStatus, "Confirmed");
+  assert.equal(snapAfter.recentTransitions[0].toStatus, "Completed");
+
+  // Pause auto-complete: automatic evaluateNow() is skipped unless force: true
+  controller.setEnabled(false);
+  liveBookings.push({
+    id: "b_past_conf_3",
+    clientName: "Late Sync Client",
+    serviceType: "Fashion",
+    preferredDate: "2026-11-19",
+    status: "Confirmed"
+  });
+  const skippedRes = await controller.evaluateNow();
+  assert.equal(skippedRes.skipped, true);
+  assert.equal(autoCompleteCalls, 1);
+
+  const forcedRes = await controller.evaluateNow({ force: true });
+  assert.equal(forcedRes.skipped, false);
+  assert.deepEqual(forcedRes.transitioned.map((b) => b.id), ["b_past_conf_3"]);
+  assert.equal(autoCompleteCalls, 2);
+
+  controller.stop();
+  assert.equal(controller.getSnapshot().running, false);
+  assert.equal(controller.getSnapshot().isLiveConnected, false);
+
+  // 4. HTML rendering & XSS escaping
+  const cardHtml = trackerMod.renderAdminBookingTrackerHtml({
+    bookings: liveBookings,
+    trackerState: { ...snapAfter, enabled: true, isLiveConnected: true },
+    now,
+    lang: "en",
+    t: tEn
+  });
+  assert.equal(cardHtml.includes("<script>"), false, "Tracker feed must escape HTML/XSS payloads");
+  assert.ok(cardHtml.includes("Confirmed → Completed"));
+  assert.ok(cardHtml.includes("data-tracker-toggle"));
+  assert.ok(cardHtml.includes("data-tracker-check-now"));
+  assert.ok(cardHtml.includes("booking-tracker-live-pill is-live"));
+
+  const chipDue = trackerMod.renderBookingTimelineChipHtml(sampleBookings[0], { now, lang: "en", t: tEn });
+  const chipToday = trackerMod.renderBookingTimelineChipHtml(sampleBookings[2], { now, lang: "en", t: tEn });
+  const chipUpcoming = trackerMod.renderBookingTimelineChipHtml(sampleBookings[3], { now, lang: "en", t: tEn });
+  const chipCompleted = trackerMod.renderBookingTimelineChipHtml(sampleBookings[6], { now, lang: "en", t: tEn });
+  assert.ok(chipDue.includes("tracker-timeline-chip is-passed"));
+  assert.ok(chipToday.includes("tracker-timeline-chip is-today"));
+  assert.ok(chipUpcoming.includes("In 5d"));
+  assert.ok(chipCompleted.includes("tracker-timeline-chip is-completed"));
+
+  // 5. Integration verification across HTML, Firebase, App, SW, and CSS
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="adminBookingTrackerCard"'), "index.html missing #adminBookingTrackerCard");
+  assert.ok(
+    html.indexOf('id="adminConsoleContent"') < html.indexOf('id="adminBookingTrackerCard"'),
+    "#adminBookingTrackerCard must remain gated inside #adminConsoleContent"
+  );
+
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(firebaseJs.includes("export async function adminAutoCompleteExpiredBookings"), "firebase.js missing adminAutoCompleteExpiredBookings");
+  assert.ok(firebaseJs.includes("export async function adminSubscribeBookingsRealtime"), "firebase.js missing adminSubscribeBookingsRealtime");
+  assert.ok(firebaseJs.includes("onSnapshot"), "firebase.js must subscribe to Firestore onSnapshot for real-time tracking");
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    "createRealtimeBookingTracker",
+    "adminSubscribeBookingsRealtime",
+    "adminAutoCompleteExpiredBookings",
+    "renderAdminBookingTracker",
+    "renderBookingTimelineChipHtml"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing real-time tracker wiring: ${token}`);
+  }
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("/js/admin-booking-tracker.js"), "sw.js must pre-cache /js/admin-booking-tracker.js");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".booking-tracker-card",
+    ".booking-tracker-live-pill",
+    ".booking-tracker-pulse-dot",
+    ".tracker-timeline-chip"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing tracker rule: ${selector}`);
+  }
+});
+
+test("Permanent shared Firebase Web configuration loads automatically on all mobile devices with zero localStorage setup prompts or private keys", async () => {
+  const firebaseMod = await import(pathToFileURL(path.join(webDir, "js/firebase.js")).href);
+
+  // 1. Central shared web/firebase-config.json exists, matches the studio project & named DB, and contains zero private service account keys
+  const sharedCfgPath = path.join(webDir, "firebase-config.json");
+  assert.ok(fs.existsSync(sharedCfgPath), "web/firebase-config.json must exist");
+  const sharedCfgRaw = fs.readFileSync(sharedCfgPath, "utf8");
+  assert.equal(sharedCfgRaw.includes("BEGIN PRIVATE KEY"), false, "Must never expose private service account keys");
+  assert.equal(sharedCfgRaw.includes("private_key"), false, "Must never contain service account private_key");
+  assert.equal(sharedCfgRaw.includes("client_email"), false, "Must never contain service account client_email");
+
+  const sharedCfg = JSON.parse(sharedCfgRaw);
+  assert.equal(sharedCfg.projectId, "gen-lang-client-0548683163");
+  assert.equal(sharedCfg.databaseId, "ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b");
+  assert.ok(String(sharedCfg.appId || "").startsWith("1:634443186065:web:"), "Shared config must specify Firebase Web App ID");
+  assert.ok(String(sharedCfg.apiKey || "").length >= 20, "Shared config must specify public Web API Key");
+
+  // 2. On Firebase Hosting, /__/firebase/init.json is preferred automatically and merges the studio's named Firestore databaseId
+  const hostedRes = await firebaseMod.resolveFirebaseWebConfig({
+    fetchImpl: async (url) => {
+      if (url === "/__/firebase/init.json") {
+        return {
+          ok: true,
+          headers: { get: () => "application/json" },
+          json: async () => ({
+            apiKey: sharedCfg.apiKey,
+            appId: sharedCfg.appId,
+            projectId: sharedCfg.projectId,
+            authDomain: sharedCfg.authDomain,
+            storageBucket: sharedCfg.storageBucket,
+            messagingSenderId: sharedCfg.messagingSenderId
+          })
+        };
+      }
+      return { ok: false, headers: { get: () => "text/html" } };
+    }
+  });
+  assert.equal(hostedRes.configSource, "firebase-hosting");
+  assert.equal(hostedRes.projectId, "gen-lang-client-0548683163");
+  assert.equal(hostedRes.databaseId, "ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b");
+
+  // 3. Outside Firebase Hosting (when /__/firebase/init.json returns SPA HTML or 404), seamlessly falls back to /firebase-config.json
+  const fallbackRes = await firebaseMod.resolveFirebaseWebConfig({
+    fetchImpl: async (url) => {
+      if (url === "/__/firebase/init.json") {
+        return {
+          ok: true,
+          headers: { get: () => "text/html; charset=utf-8" },
+          json: async () => {
+            throw new Error("Unexpected HTML");
+          }
+        };
+      }
+      if (url === "/firebase-config.json") {
+        return {
+          ok: true,
+          headers: { get: () => "application/json" },
+          json: async () => sharedCfg
+        };
+      }
+      return { ok: false, headers: { get: () => "" } };
+    }
+  });
+  assert.equal(fallbackRes.configSource, "shared-config");
+  assert.equal(fallbackRes.projectId, "gen-lang-client-0548683163");
+  assert.equal(fallbackRes.appId, sharedCfg.appId);
+  assert.equal(fallbackRes.databaseId, "ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b");
+
+  // 4. Manual Firebase Setup UI & localStorage prompts are completely removed for normal visitors
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.equal(html.includes('id="openFirebaseSetupBtn"'), false, "Visitors must not see a Firebase Setup button");
+  assert.equal(html.includes('id="firebaseSetupModal"'), false, "Visitors must not see a manual Firebase API key modal");
+  assert.equal(html.includes('id="firebaseConfigForm"'), false, "Manual Firebase config form must be removed");
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.equal(appJs.includes("firebaseSetupModal"), false, "app.js must not open firebaseSetupModal");
+  assert.equal(appJs.includes("saveManualWebConfig"), false, "app.js must not prompt visitors to save config to localStorage");
+
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.equal(firebaseJs.includes("localStorage.setItem"), false, "firebase.js must not store Firebase config in localStorage");
+  assert.ok(firebaseJs.includes("/firebase-config.json"), "firebase.js must load centralized /firebase-config.json");
+  assert.ok(firebaseJs.includes("/__/firebase/init.json"), "firebase.js must auto-load Firebase Hosting init.json");
+  assert.ok(firebaseJs.includes("signInWithRedirect"), "firebase.js must include mobile redirect sign-in fallback");
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('"/firebase-config.json"'), "sw.js must pre-cache /firebase-config.json for offline PWA support");
+});
+
+
+
+
+
+
 
 
 

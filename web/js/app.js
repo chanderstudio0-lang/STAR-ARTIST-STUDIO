@@ -22,6 +22,19 @@ import {
   resolveSafeRoute,
   syncAdminUiVisibility
 } from "./admin-guard.js";
+import {
+  mountModelGrowthChart,
+  unmountModelGrowthChart
+} from "./admin-model-growth.js";
+import {
+  exportBookingsToCsv,
+  renderAdminBookingsToolbarHtml
+} from "./admin-bookings-export.js";
+import {
+  createRealtimeBookingTracker,
+  renderAdminBookingTrackerHtml,
+  renderBookingTimelineChipHtml
+} from "./admin-booking-tracker.js";
 import { renderCatalogTierSectionHtml } from "./tier-info.js";
 import {
   renderLazyBlurImageHtml,
@@ -78,6 +91,16 @@ import {
   sanitizeExifMetadata
 } from "./exif-reader.js";
 import {
+  mergePublicModels,
+  filterPublicModels,
+  validateCompanyRegistration,
+  validateCompanyModelBooking,
+  renderPublicModelPortfolioCardsHtml,
+  renderSelectedRequestedModelsHtml,
+  renderMyCompanyBookingsHtml,
+  renderAdminCompanyRequestsSectionHtml
+} from "./company-booking.js";
+import {
   subscribeAuthState,
   signInWithGooglePopup,
   signInWithEmailPassword,
@@ -94,14 +117,23 @@ import {
   uploadGalleryImageToStorage,
   fetchServiceReviews,
   submitCatalogReview,
+  fetchPublicApprovedModels,
+  fetchMyCompanyProfile,
+  saveCompanyRegistration,
+  fetchMyCompanyBookings,
+  submitCompanyModelBooking,
+  cancelMyCompanyBooking,
   adminFetchDashboardData,
   adminUpdateBookingStatus,
+  adminAutoCompleteExpiredBookings,
+  adminSubscribeBookingsRealtime,
   adminDeleteBooking,
   adminUpdateModelStatus,
+  adminUpdateCompanyBookingStatus,
+  adminDeleteCompanyBooking,
   adminUpdateGalleryStatus,
   adminDeleteGalleryItem,
   adminPublishAnnouncement,
-  saveManualWebConfig,
   initFirebaseClient,
   syncWorkshopNewsletterOptIn
 } from "./firebase.js";
@@ -122,9 +154,19 @@ const state = {
   bookingStatusFilter: "all",
   galleryFilter: "All",
   adminTab: "bookings",
+  adminGrowthChartType: "area",
   adminModelFilter: "pending",
   adminModelSearch: "",
   adminModelDrafts: {},
+  adminCompanyFilter: "all",
+  adminCompanySearch: "",
+  adminCompanyNoteDrafts: {},
+  publicModels: mergePublicModels([]),
+  publicModelGenderFilter: "all",
+  publicModelSearch: "",
+  myCompanyProfile: null,
+  myCompanyBookings: [],
+  selectedRequestedModels: [],
   galleryItems: [...SHOWCASE_GALLERY_SEEDS],
   myBookings: [],
   queuedOfflineBookings: [],
@@ -147,7 +189,7 @@ const state = {
   exifCache: {},
   uploadedGalleryMedia: null,
   isEncodingGalleryImage: false,
-  adminData: { bookings: [], models: [], gallery: [], announcements: [] }
+  adminData: { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] }
 };
 
 function showToast(msg) {
@@ -183,6 +225,9 @@ function applyTranslations() {
   const searchInput = document.getElementById("catalogSearchInput");
   if (searchInput) searchInput.placeholder = t("catalogSearchPlaceholder");
 
+  const publicModelSearchInput = document.getElementById("publicModelsSearchInput");
+  if (publicModelSearchInput) publicModelSearchInput.placeholder = t("companySearchPlaceholder");
+
   const newsletterInput = document.getElementById("newsletterEmail");
   if (newsletterInput) newsletterInput.placeholder = t("newsletterEmailPlaceholder");
 
@@ -208,6 +253,11 @@ function applyTranslations() {
       });
     }
   }
+
+  if (hasVerifiedAdminSession() && state.route === "admin") {
+    renderAdminBookingTracker();
+    renderAdminModelGrowthChart();
+  }
 }
 
 function applyTheme() {
@@ -215,6 +265,9 @@ function applyTheme() {
   const metaTheme = document.querySelector('meta[name="theme-color"]');
   if (metaTheme) {
     metaTheme.setAttribute("content", state.theme === "light" ? "#F8F9FA" : "#0C0C0C");
+  }
+  if (hasVerifiedAdminSession() && state.route === "admin") {
+    renderAdminModelGrowthChart();
   }
 }
 
@@ -236,7 +289,7 @@ function closeAuthModal() {
 }
 
 function navigateTo(route, { silentBlock = false } = {}) {
-  const validRoutes = ["home", "catalog", "booking", "models", "gallery", "admin"];
+  const validRoutes = ["home", "catalog", "booking", "models", "companies", "gallery", "admin"];
   const isAdminNow = hasVerifiedAdminSession();
   const resolution = resolveSafeRoute({
     requestedRoute: route,
@@ -262,7 +315,10 @@ function navigateTo(route, { silentBlock = false } = {}) {
         if (state.firebaseReady) {
           openAuthModal({ adminNotice: true });
         } else {
-          document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+          showToast(t("firebaseReconnectingToast"));
+          connectFirebaseCloud().then((ready) => {
+            if (ready) openAuthModal({ adminNotice: true });
+          });
         }
       }
     }
@@ -655,9 +711,198 @@ function renderMyModels() {
     .join("");
 }
 
+function renderPublicModels() {
+  const grid = document.getElementById("publicModelsGrid");
+  if (!grid) return;
+  const visible = filterPublicModels(state.publicModels, {
+    gender: state.publicModelGenderFilter,
+    search: state.publicModelSearch
+  });
+  const selectedIds = state.selectedRequestedModels.map((m) => m.id);
+  grid.innerHTML = renderPublicModelPortfolioCardsHtml({
+    models: visible,
+    selectedModelIds: selectedIds,
+    t,
+    escapeHtml
+  });
+  document.querySelectorAll("[data-public-model-gender]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-public-model-gender") === state.publicModelGenderFilter);
+  });
+}
+
+function renderSelectedRequestedModels() {
+  const bar = document.getElementById("selectedRequestedModelsBar");
+  if (!bar) return;
+  bar.innerHTML = renderSelectedRequestedModelsHtml({
+    selectedModels: state.selectedRequestedModels,
+    t,
+    escapeHtml
+  });
+}
+
+function prefillCompanyFormsFromProfile(profile) {
+  const badge = document.getElementById("companyProfileStatusBadge");
+  if (badge) {
+    if (profile?.companyName) {
+      badge.textContent = `${t("companyProfileRegisteredBadge")} • ${profile.companyName}`;
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+  if (!profile) return;
+
+  const setIfPresent = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && val) el.value = val;
+  };
+  setIfPresent("compRegName", profile.companyName);
+  setIfPresent("compRegType", profile.organizationType);
+  setIfPresent("compRegContactPerson", profile.contactPerson);
+  setIfPresent("compRegMobile", profile.mobileNumber);
+  setIfPresent("compRegEmail", profile.email);
+  setIfPresent("compRegAddress", profile.address);
+
+  setIfPresent("compBookName", profile.companyName);
+  setIfPresent("compBookType", profile.organizationType);
+  setIfPresent("compBookContactPerson", profile.contactPerson);
+  setIfPresent("compBookMobile", profile.mobileNumber);
+  setIfPresent("compBookEmail", profile.email);
+  setIfPresent("compBookAddress", profile.address);
+}
+
+function renderMyCompanyBookings() {
+  const list = document.getElementById("myCompanyBookingsList");
+  if (!list) return;
+  list.innerHTML = renderMyCompanyBookingsHtml({
+    requests: state.myCompanyBookings,
+    signedIn: Boolean(state.user),
+    t,
+    escapeHtml
+  });
+}
+
+function renderAdminModelGrowthChart() {
+  const chartHost = document.getElementById("adminModelGrowthChartMount");
+  if (!hasVerifiedAdminSession()) {
+    unmountModelGrowthChart(chartHost);
+    return;
+  }
+
+  document.querySelectorAll("[data-growth-chart-type]").forEach((btn) => {
+    const isActive = btn.getAttribute("data-growth-chart-type") === state.adminGrowthChartType;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  mountModelGrowthChart(chartHost, {
+    models: state.adminData.models,
+    metricsEl: document.getElementById("adminModelGrowthMetrics"),
+    statusEl: document.getElementById("adminModelGrowthStatus"),
+    chartType: state.adminGrowthChartType,
+    theme: state.theme,
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+}
+
+let adminBookingsUnsubscribe = null;
+
+const adminBookingTracker = createRealtimeBookingTracker({
+  getBookings: () => state.adminData.bookings,
+  onAutoComplete: async (dueBookings) => {
+    if (!hasVerifiedAdminSession()) {
+      return { succeededIds: [], failedIds: [] };
+    }
+    const ids = dueBookings.map((b) => b.id);
+    const res = await adminAutoCompleteExpiredBookings(ids);
+    if (res.succeededIds.length > 0) {
+      const doneSet = new Set(res.succeededIds);
+      state.adminData.bookings = state.adminData.bookings.map((b) =>
+        doneSet.has(b.id) ? { ...b, status: "Completed" } : b
+      );
+      showToast(t("adminTrackerAutoCompletedToast").replace("{count}", String(res.succeededIds.length)));
+      if (state.route === "admin") {
+        renderAdminConsole();
+      }
+    }
+    return res;
+  },
+  onStateChange: () => {
+    if (hasVerifiedAdminSession() && state.route === "admin") {
+      renderAdminBookingTracker();
+    }
+  },
+  intervalMs: 60000
+});
+
+function stopAdminRealtimeTracker() {
+  if (typeof adminBookingsUnsubscribe === "function") {
+    try {
+      adminBookingsUnsubscribe();
+    } catch {
+      // Ignore cleanup error
+    }
+    adminBookingsUnsubscribe = null;
+  }
+  adminBookingTracker.stop();
+}
+
+async function ensureAdminRealtimeTracker() {
+  if (!hasVerifiedAdminSession()) {
+    stopAdminRealtimeTracker();
+    return;
+  }
+  adminBookingTracker.start();
+  if (!adminBookingsUnsubscribe && state.firebaseReady) {
+    try {
+      adminBookingsUnsubscribe = await adminSubscribeBookingsRealtime({
+        onBookings: (liveBookings) => {
+          if (!hasVerifiedAdminSession()) {
+            stopAdminRealtimeTracker();
+            return;
+          }
+          state.adminData.bookings = liveBookings;
+          adminBookingTracker.setLiveConnected(true);
+          if (state.route === "admin") {
+            renderAdminConsole();
+          }
+          adminBookingTracker.evaluateNow();
+        },
+        onError: (err) => {
+          adminBookingTracker.setLiveConnected(false);
+          console.warn("Realtime bookings tracker listener warning:", err?.message || err);
+        }
+      });
+    } catch (err) {
+      adminBookingTracker.setLiveConnected(false);
+      console.warn("Unable to start real-time bookings listener:", err?.message || err);
+    }
+  }
+}
+
+function renderAdminBookingTracker() {
+  const host = document.getElementById("adminBookingTrackerCard");
+  if (!host) return;
+  if (!hasVerifiedAdminSession()) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = renderAdminBookingTrackerHtml({
+    bookings: state.adminData.bookings,
+    trackerState: adminBookingTracker.getSnapshot(),
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+}
+
 async function loadAdminConsole() {
   if (!hasVerifiedAdminSession()) {
-    state.adminData = { bookings: [], models: [], gallery: [], announcements: [] };
+    stopAdminRealtimeTracker();
+    state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
+    unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     if (state.route === "admin") {
       navigateTo("home", { silentBlock: true });
@@ -669,6 +914,8 @@ async function loadAdminConsole() {
   try {
     state.adminData = await adminFetchDashboardData();
     renderAdminConsole();
+    await ensureAdminRealtimeTracker();
+    await adminBookingTracker.evaluateNow();
   } catch (err) {
     showToast(err.message || "Unable to load Admin Dashboard");
   }
@@ -676,21 +923,30 @@ async function loadAdminConsole() {
 
 function renderAdminConsole() {
   if (!hasVerifiedAdminSession()) {
+    stopAdminRealtimeTracker();
+    unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     return;
   }
+  const companyRequests = Array.isArray(state.adminData.companyBookings) ? state.adminData.companyBookings : [];
+  const registeredCompanies = Array.isArray(state.adminData.companies) ? state.adminData.companies : [];
   const stats = document.getElementById("adminStatsGrid");
   if (stats) {
     stats.innerHTML = `
       <div class="studio-card"><div class="stat-value">${state.adminData.bookings.length}</div><div class="stat-label">Total Bookings</div></div>
       <div class="studio-card"><div class="stat-value">${state.adminData.models.length}</div><div class="stat-label">18+ Models</div></div>
+      <div class="studio-card"><div class="stat-value">${companyRequests.length}</div><div class="stat-label">Company Requests</div></div>
       <div class="studio-card"><div class="stat-value">${state.adminData.gallery.length}</div><div class="stat-label">Gallery Submissions</div></div>
       <div class="studio-card"><div class="stat-value">${state.adminData.announcements.length}</div><div class="stat-label">Announcements</div></div>`;
   }
 
+  renderAdminBookingTracker();
+  renderAdminModelGrowthChart();
+
   const adminCounts = {
     bookings: state.adminData.bookings.length,
     models: state.adminData.models.length,
+    companies: companyRequests.length,
     gallery: state.adminData.gallery.length,
     announcements: state.adminData.announcements.length
   };
@@ -706,13 +962,22 @@ function renderAdminConsole() {
   if (!body) return;
 
   if (state.adminTab === "bookings") {
-    body.innerHTML = state.adminData.bookings
-      .map(
-        (b) => `
+    const toolbarHtml = renderAdminBookingsToolbarHtml({
+      count: state.adminData.bookings.length,
+      t,
+      escapeHtml
+    });
+    const bookingsCardsHtml = state.adminData.bookings.length
+      ? state.adminData.bookings
+          .map(
+            (b) => `
       <div class="studio-card">
-        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center;">
           <strong>${escapeHtml(b.clientName)} — ${escapeHtml(b.serviceType)}</strong>
-          <span class="badge status-${String(b.status || "pending").toLowerCase()}">${escapeHtml(b.status)}</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            ${renderBookingTimelineChipHtml(b, { lang: state.lang, t, escapeHtml })}
+            <span class="badge status-${String(b.status || "pending").toLowerCase()}">${escapeHtml(b.status)}</span>
+          </div>
         </div>
         <div style="font-size:0.86rem;color:var(--text-secondary);">${escapeHtml(b.preferredDate)} ${escapeHtml(b.preferredTime || "")} • ${escapeHtml(b.contactNumber)}</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
@@ -722,8 +987,10 @@ function renderAdminConsole() {
           <button type="button" class="btn-danger" data-adm-bk-del="${escapeHtml(b.id)}">Delete</button>
         </div>
       </div>`
-      )
-      .join("");
+          )
+          .join("")
+      : `<div class="studio-card"><p style="margin:0;color:var(--text-secondary);">${escapeHtml(t("adminNoBookingsDesc"))}</p></div>`;
+    body.innerHTML = `${toolbarHtml}${bookingsCardsHtml}`;
   } else if (state.adminTab === "models") {
     body.innerHTML = renderAdminModelsSectionHtml({
       models: state.adminData.models,
@@ -732,6 +999,16 @@ function renderAdminConsole() {
       drafts: state.adminModelDrafts,
       lang: state.lang,
       t
+    });
+  } else if (state.adminTab === "companies") {
+    body.innerHTML = renderAdminCompanyRequestsSectionHtml({
+      requests: companyRequests,
+      companies: registeredCompanies,
+      filter: state.adminCompanyFilter,
+      searchQuery: state.adminCompanySearch,
+      drafts: state.adminCompanyNoteDrafts,
+      t,
+      escapeHtml
     });
   } else if (state.adminTab === "gallery") {
     body.innerHTML = state.adminData.gallery
@@ -774,25 +1051,45 @@ function renderAdminConsole() {
 async function refreshCloudData() {
   if (!state.firebaseReady) return;
   try {
-    const cloudGallery = await fetchApprovedGallery();
-    const seen = new Set(cloudGallery.map((g) => g.id));
-    state.galleryItems = [
-      ...cloudGallery,
-      ...SHOWCASE_GALLERY_SEEDS.filter((seed) => !seen.has(seed.id))
-    ];
-    renderGallery();
+    const [cloudGalleryRes, publicModelsRes] = await Promise.allSettled([
+      fetchApprovedGallery(),
+      fetchPublicApprovedModels()
+    ]);
+    if (cloudGalleryRes.status === "fulfilled") {
+      const cloudGallery = cloudGalleryRes.value;
+      const seen = new Set(cloudGallery.map((g) => g.id));
+      state.galleryItems = [
+        ...cloudGallery,
+        ...SHOWCASE_GALLERY_SEEDS.filter((seed) => !seen.has(seed.id))
+      ];
+      renderGallery();
+    }
+    if (publicModelsRes.status === "fulfilled") {
+      state.publicModels = mergePublicModels(publicModelsRes.value);
+      renderPublicModels();
+    }
 
     if (state.user) {
-      const [bookingsRes, modelsRes, reviewsRes] = await Promise.allSettled([
+      const [bookingsRes, modelsRes, reviewsRes, companyProfileRes, companyBookingsRes] = await Promise.allSettled([
         fetchMyBookings(state.user.uid),
         fetchMyModels(state.user.uid),
-        fetchServiceReviews()
+        fetchServiceReviews(),
+        fetchMyCompanyProfile(state.user.uid),
+        fetchMyCompanyBookings(state.user.uid)
       ]);
       if (bookingsRes.status === "fulfilled") state.myBookings = bookingsRes.value;
       if (modelsRes.status === "fulfilled") state.myModels = modelsRes.value;
       if (reviewsRes.status === "fulfilled") state.reviews = reviewsRes.value;
+      if (companyProfileRes.status === "fulfilled") {
+        state.myCompanyProfile = companyProfileRes.value;
+        prefillCompanyFormsFromProfile(state.myCompanyProfile);
+      }
+      if (companyBookingsRes.status === "fulfilled") {
+        state.myCompanyBookings = companyBookingsRes.value;
+      }
       renderMyBookings();
       renderMyModels();
+      renderMyCompanyBookings();
       renderCatalog();
       renderTestimonialCarousel();
       if (state.isAdmin && state.route === "admin") {
@@ -800,6 +1097,10 @@ async function refreshCloudData() {
       }
     } else {
       state.reviews = [];
+      state.myCompanyProfile = null;
+      state.myCompanyBookings = [];
+      prefillCompanyFormsFromProfile(null);
+      renderMyCompanyBookings();
       renderCatalog();
       renderTestimonialCarousel();
     }
@@ -819,6 +1120,9 @@ function updateFirebaseUiStatus() {
   if (userLabel) {
     userLabel.textContent = state.user?.email || state.user?.displayName || "";
     userLabel.classList.toggle("hidden", !state.user);
+  }
+  if (!isAdminNow) {
+    unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
   }
   syncAdminUiVisibility(document, {
     isAdmin: isAdminNow,
@@ -843,6 +1147,14 @@ function populateBookingServicesDropdown() {
     const tomorrow = new Date(Date.now() + 86400000);
     dateEl.min = tomorrow.toISOString().split("T")[0];
     dateEl.value = tomorrow.toISOString().split("T")[0];
+  }
+
+  const compDateEl = document.getElementById("compBookEventDate");
+  if (compDateEl && !compDateEl.value) {
+    const nextWeek = new Date(Date.now() + 7 * 86400000);
+    const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+    compDateEl.min = tomorrowStr;
+    compDateEl.value = nextWeek.toISOString().split("T")[0];
   }
 }
 
@@ -1065,9 +1377,12 @@ function wireEvents() {
       if (!state.user) {
         showToast("Please sign in first to post a star rating and comment.");
         if (state.firebaseReady) {
-          document.getElementById("authModal")?.classList.remove("hidden");
+          openAuthModal({ adminNotice: false });
         } else {
-          document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+          showToast(t("firebaseReconnectingToast"));
+          connectFirebaseCloud().then((ready) => {
+            if (ready) openAuthModal({ adminNotice: false });
+          });
         }
         return;
       }
@@ -1146,6 +1461,54 @@ function wireEvents() {
       } catch (err) {
         showToast(err.message);
       }
+      return;
+    }
+
+    if (e.target.closest("[data-tracker-toggle]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const snap = adminBookingTracker.getSnapshot();
+      adminBookingTracker.setEnabled(!snap.enabled);
+      return;
+    }
+
+    if (e.target.closest("[data-tracker-check-now]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const res = await adminBookingTracker.evaluateNow({ force: true });
+      if (!res.transitioned?.length && !res.error) {
+        showToast(t("adminTrackerCheckNoneToast"));
+      }
+      return;
+    }
+
+    if (e.target.closest("[data-adm-export-bookings-csv]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const res = exportBookingsToCsv(state.adminData.bookings);
+      if (res.status === "exported") {
+        showToast(t("adminExportBookingsSuccessToast").replace("{count}", String(res.count)));
+      } else {
+        showToast(t("adminExportBookingsEmptyToast"));
+      }
+      return;
+    }
+
+    const growthChartTypeBtn = e.target.closest("[data-growth-chart-type]");
+    if (growthChartTypeBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const nextType = growthChartTypeBtn.getAttribute("data-growth-chart-type") === "bar" ? "bar" : "area";
+      state.adminGrowthChartType = nextType;
+      renderAdminModelGrowthChart();
       return;
     }
 
@@ -1228,7 +1591,7 @@ function wireEvents() {
       }
 
       try {
-        await adminUpdateModelStatus(modelId, nextStatus, adminNotes);
+        await adminUpdateModelStatus(modelId, nextStatus, adminNotes, targetModel);
         delete state.adminModelDrafts[modelId];
         showToast(
           nextStatus === "approved"
@@ -1238,8 +1601,79 @@ function wireEvents() {
             : "Moved back to verification queue."
         );
         await loadAdminConsole();
+        await refreshCloudData();
       } catch (updateErr) {
         showToast(updateErr.message || "Unable to update model verification status.");
+      }
+    } else if (e.target.closest("[data-public-model-gender]")) {
+      const btn = e.target.closest("[data-public-model-gender]");
+      state.publicModelGenderFilter = btn.getAttribute("data-public-model-gender") || "all";
+      renderPublicModels();
+    } else if (e.target.closest("[data-toggle-req-model-id]")) {
+      const btn = e.target.closest("[data-toggle-req-model-id]");
+      const modelId = btn.getAttribute("data-toggle-req-model-id");
+      const fullName = btn.getAttribute("data-toggle-req-model-name") || "Roster Model";
+      const existsIdx = state.selectedRequestedModels.findIndex((m) => m.id === modelId);
+      if (existsIdx >= 0) {
+        state.selectedRequestedModels.splice(existsIdx, 1);
+      } else {
+        if (state.selectedRequestedModels.length >= 20) {
+          showToast("You can attach up to 20 specific models per request.");
+          return;
+        }
+        state.selectedRequestedModels.push({ id: modelId, fullName });
+      }
+      renderPublicModels();
+      renderSelectedRequestedModels();
+    } else if (e.target.closest("[data-remove-req-model-id]")) {
+      const btn = e.target.closest("[data-remove-req-model-id]");
+      const modelId = btn.getAttribute("data-remove-req-model-id");
+      state.selectedRequestedModels = state.selectedRequestedModels.filter((m) => m.id !== modelId);
+      renderPublicModels();
+      renderSelectedRequestedModels();
+    } else if (e.target.closest("[data-cancel-company-req]")) {
+      const btn = e.target.closest("[data-cancel-company-req]");
+      const reqId = btn.getAttribute("data-cancel-company-req");
+      try {
+        await cancelMyCompanyBooking(reqId);
+        showToast(t("companyBookingCancelledToast"));
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err.message || "Unable to cancel company booking.");
+      }
+    } else if (e.target.closest("[data-adm-comp-filter]")) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminCompanyFilter = e.target.closest("[data-adm-comp-filter]").getAttribute("data-adm-comp-filter") || "all";
+      renderAdminConsole();
+    } else if (e.target.matches("[data-adm-comp-id]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const reqId = e.target.getAttribute("data-adm-comp-id");
+      const nextStatus = e.target.getAttribute("data-adm-comp-st");
+      const card = e.target.closest("[data-adm-comp-card]");
+      const notesInput = card?.querySelector(`[data-adm-comp-notes="${reqId}"]`);
+      const adminNotes = notesInput ? notesInput.value : state.adminCompanyNoteDrafts[reqId] || "";
+      try {
+        await adminUpdateCompanyBookingStatus(reqId, nextStatus, adminNotes);
+        delete state.adminCompanyNoteDrafts[reqId];
+        showToast(`Company booking marked ${nextStatus}.`);
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err.message || "Unable to update company booking status.");
+      }
+    } else if (e.target.matches("[data-adm-comp-del]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      try {
+        await adminDeleteCompanyBooking(e.target.getAttribute("data-adm-comp-del"));
+        showToast("Company booking request removed.");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err.message || "Unable to remove company booking.");
       }
     } else if (e.target.matches("[data-adm-gal-id]")) {
       if (!hasVerifiedAdminSession()) {
@@ -1294,6 +1728,26 @@ function wireEvents() {
       return;
     }
 
+    const admCompSearchInput = e.target.closest("[data-adm-comp-search]");
+    if (admCompSearchInput) {
+      state.adminCompanySearch = admCompSearchInput.value || "";
+      renderAdminConsole();
+      const restored = document.querySelector("[data-adm-comp-search]");
+      if (restored) {
+        restored.focus();
+        const len = restored.value.length;
+        restored.setSelectionRange?.(len, len);
+      }
+      return;
+    }
+
+    const admCompNotesInput = e.target.closest("[data-adm-comp-notes]");
+    if (admCompNotesInput) {
+      const reqId = admCompNotesInput.getAttribute("data-adm-comp-notes");
+      state.adminCompanyNoteDrafts[reqId] = admCompNotesInput.value;
+      return;
+    }
+
     const reviewInput = e.target.closest("[data-review-comment]");
     if (!reviewInput) return;
     const pkgId = reviewInput.getAttribute("data-review-comment");
@@ -1314,6 +1768,11 @@ function wireEvents() {
     renderCatalog();
   });
 
+  document.getElementById("publicModelsSearchInput")?.addEventListener("input", (e) => {
+    state.publicModelSearch = e.target.value || "";
+    renderPublicModels();
+  });
+
   document.getElementById("langToggleBtn")?.addEventListener("click", () => {
     state.lang = state.lang === "en" ? "hi" : "en";
     localStorage.setItem("star_artist_lang", state.lang);
@@ -1321,6 +1780,9 @@ function wireEvents() {
     renderCatalog();
     renderTestimonialCarousel();
     renderMyBookings();
+    renderPublicModels();
+    renderSelectedRequestedModels();
+    renderMyCompanyBookings();
     updateNewsletterRealtimeValidation({ showEmptyError: false });
   });
 
@@ -1373,7 +1835,12 @@ function wireEvents() {
       await signOutFirebase();
       showToast("Signed out.");
     } else if (!state.firebaseReady) {
-      document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+      const ready = await connectFirebaseCloud();
+      if (ready) {
+        openAuthModal({ adminNotice: false });
+      } else {
+        showToast(t("firebaseReconnectingToast"));
+      }
     } else {
       openAuthModal({ adminNotice: false });
     }
@@ -1387,14 +1854,6 @@ function wireEvents() {
   document.getElementById("closeAuthModalBtn")?.addEventListener("click", () => {
     state.pendingAdminRoute = false;
     closeAuthModal();
-  });
-
-  document.getElementById("openFirebaseSetupBtn")?.addEventListener("click", () => {
-    document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
-  });
-
-  document.getElementById("closeFirebaseSetupBtn")?.addEventListener("click", () => {
-    document.getElementById("firebaseSetupModal")?.classList.add("hidden");
   });
 
   function setActiveLightboxFilter(presetId = "original") {
@@ -1949,24 +2408,6 @@ function wireEvents() {
     }
   });
 
-  document.getElementById("firebaseConfigForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      saveManualWebConfig({
-        projectId: document.getElementById("cfgProjectId").value,
-        databaseId: document.getElementById("cfgDatabaseId").value,
-        apiKey: document.getElementById("cfgApiKey").value,
-        appId: document.getElementById("cfgAppId").value,
-        recaptchaSiteKey: document.getElementById("cfgRecaptcha").value,
-        messagingSenderId: FIREBASE_PROJECT_DEFAULTS.messagingSenderId,
-        storageBucket: FIREBASE_PROJECT_DEFAULTS.storageBucket
-      });
-      window.location.reload();
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
   document.getElementById("bookingForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const payload = {
@@ -2055,6 +2496,104 @@ function wireEvents() {
       if (!state.user && state.firebaseReady) {
         document.getElementById("authModal")?.classList.remove("hidden");
       }
+    }
+  });
+
+  document.getElementById("companyRegistrationForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const validation = validateCompanyRegistration(
+      {
+        companyName: document.getElementById("compRegName")?.value,
+        organizationType: document.getElementById("compRegType")?.value,
+        contactPerson: document.getElementById("compRegContactPerson")?.value,
+        mobileNumber: document.getElementById("compRegMobile")?.value,
+        email: document.getElementById("compRegEmail")?.value,
+        address: document.getElementById("compRegAddress")?.value
+      },
+      state.lang
+    );
+    if (!validation.valid) {
+      showToast(validation.errors[0]);
+      return;
+    }
+
+    if (!state.user) {
+      showToast(t("authRequiredNotice"));
+      if (state.firebaseReady) {
+        openAuthModal({ adminNotice: false });
+      } else {
+        const ready = await connectFirebaseCloud();
+        if (ready) openAuthModal({ adminNotice: false });
+        else showToast(t("firebaseReconnectingToast"));
+      }
+      return;
+    }
+
+    try {
+      await saveCompanyRegistration(validation.cleaned);
+      state.myCompanyProfile = { id: state.user.uid, ...validation.cleaned };
+      prefillCompanyFormsFromProfile(state.myCompanyProfile);
+      showToast(t("companyProfileSavedToast"));
+    } catch (err) {
+      showToast(err.message || "Unable to save company registration.");
+    }
+  });
+
+  document.getElementById("companyBookingForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const validation = validateCompanyModelBooking(
+      {
+        companyName: document.getElementById("compBookName")?.value,
+        organizationType: document.getElementById("compBookType")?.value,
+        contactPerson: document.getElementById("compBookContactPerson")?.value,
+        mobileNumber: document.getElementById("compBookMobile")?.value,
+        email: document.getElementById("compBookEmail")?.value,
+        address: document.getElementById("compBookAddress")?.value,
+        modelRequirement: document.getElementById("compBookRequirement")?.value,
+        modelsCount: document.getElementById("compBookCount")?.value,
+        eventType: document.getElementById("compBookEventType")?.value,
+        eventDate: document.getElementById("compBookEventDate")?.value,
+        eventLocation: document.getElementById("compBookLocation")?.value,
+        budget: document.getElementById("compBookBudget")?.value,
+        detailedRequirements: document.getElementById("compBookDetails")?.value,
+        requestedModelIds: state.selectedRequestedModels.map((m) => m.id),
+        requestedModelNames: state.selectedRequestedModels.map((m) => m.fullName)
+      },
+      state.lang
+    );
+    if (!validation.valid) {
+      showToast(validation.errors[0]);
+      return;
+    }
+
+    if (!state.user) {
+      showToast(t("authRequiredNotice"));
+      if (state.firebaseReady) {
+        openAuthModal({ adminNotice: false });
+      } else {
+        const ready = await connectFirebaseCloud();
+        if (ready) openAuthModal({ adminNotice: false });
+        else showToast(t("firebaseReconnectingToast"));
+      }
+      return;
+    }
+
+    try {
+      await submitCompanyModelBooking(validation.cleaned);
+      state.selectedRequestedModels = [];
+      e.target.reset();
+      populateBookingServicesDropdown();
+      if (state.myCompanyProfile) {
+        prefillCompanyFormsFromProfile(state.myCompanyProfile);
+      } else {
+        prefillCompanyFormsFromProfile(validation.cleaned);
+      }
+      renderPublicModels();
+      renderSelectedRequestedModels();
+      showToast(t("companyBookingSubmittedToast"));
+      await refreshCloudData();
+    } catch (err) {
+      showToast(err.message || "Unable to submit model requirement booking.");
     }
   });
 
@@ -2496,6 +3035,70 @@ function renderSavedNewsletterStatus() {
   }
 }
 
+let authSubscriptionAttached = false;
+
+async function connectFirebaseCloud() {
+  const clientStatus = await initFirebaseClient();
+  state.firebaseReady = Boolean(clientStatus.ready);
+  updateFirebaseUiStatus();
+
+  if (state.firebaseReady && !authSubscriptionAttached) {
+    authSubscriptionAttached = true;
+    await subscribeAuthState(async ({ user, isAdmin, firebaseReady }) => {
+      state.user = user;
+      state.isAdmin = Boolean(isAdmin && isAuthorizedAdminUser(user));
+      state.authResolved = true;
+      state.firebaseReady = firebaseReady;
+
+      if (!state.isAdmin) {
+        stopAdminRealtimeTracker();
+        adminBookingTracker.resetSessionLog();
+        state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
+      }
+
+      updateFirebaseUiStatus();
+
+      if (state.pendingAdminRoute) {
+        if (state.isAdmin) {
+          state.pendingAdminRoute = false;
+          closeAuthModal();
+          navigateTo("admin");
+        } else if (user) {
+          state.pendingAdminRoute = false;
+          closeAuthModal();
+          navigateTo("home", { silentBlock: true });
+          showToast(t("adminAccessDeniedToast"));
+        } else {
+          navigateTo("home", { silentBlock: true });
+          const authModal = document.getElementById("authModal");
+          if (authModal?.classList.contains("hidden")) {
+            showToast(t("adminSignInRequiredToast"));
+            openAuthModal({ adminNotice: true });
+          }
+        }
+      } else if (state.route === "admin" && !state.isAdmin) {
+        navigateTo("home", { silentBlock: true });
+      }
+
+      renderMyBookings();
+      renderMyModels();
+      renderMyCompanyBookings();
+      if (user) {
+        await syncQueuedBookings();
+      }
+      await refreshCloudData();
+    });
+  } else if (!state.firebaseReady) {
+    state.authResolved = true;
+    if (state.pendingAdminRoute) {
+      state.pendingAdminRoute = false;
+      showToast(t("firebaseReconnectingToast"));
+    }
+  }
+
+  return state.firebaseReady;
+}
+
 async function bootstrap() {
   applyTheme();
   applyTranslations();
@@ -2506,6 +3109,9 @@ async function bootstrap() {
   syncTestimonialAutoplayTimer();
   renderMyBookings();
   renderMyModels();
+  renderPublicModels();
+  renderSelectedRequestedModels();
+  renderMyCompanyBookings();
   renderSavedNewsletterStatus();
   syncAdminUiVisibility(document, { isAdmin: false });
   await refreshOfflineBookingQueue();
@@ -2519,56 +3125,13 @@ async function bootstrap() {
   });
   navigateTo(initialRoute, { silentBlock: true });
 
-  const clientStatus = await initFirebaseClient();
-  state.firebaseReady = Boolean(clientStatus.ready);
-  updateFirebaseUiStatus();
+  await connectFirebaseCloud();
 
-  if (state.firebaseReady) {
-    await subscribeAuthState(async ({ user, isAdmin, firebaseReady }) => {
-      state.user = user;
-      state.isAdmin = Boolean(isAdmin && isAuthorizedAdminUser(user));
-      state.authResolved = true;
-      state.firebaseReady = firebaseReady;
-
-      if (!state.isAdmin) {
-        state.adminData = { bookings: [], models: [], gallery: [], announcements: [] };
-      }
-
-      updateFirebaseUiStatus();
-
-      if (state.pendingAdminRoute) {
-        state.pendingAdminRoute = false;
-        if (state.isAdmin) {
-          closeAuthModal();
-          navigateTo("admin");
-        } else if (user) {
-          closeAuthModal();
-          navigateTo("home", { silentBlock: true });
-          showToast(t("adminAccessDeniedToast"));
-        } else {
-          navigateTo("home", { silentBlock: true });
-          showToast(t("adminSignInRequiredToast"));
-          openAuthModal({ adminNotice: true });
-        }
-      } else if (state.route === "admin" && !state.isAdmin) {
-        navigateTo("home", { silentBlock: true });
-      }
-
-      renderMyBookings();
-      renderMyModels();
-      if (user) {
-        await syncQueuedBookings();
-      }
-      await refreshCloudData();
-    });
-  } else {
-    state.authResolved = true;
-    if (state.pendingAdminRoute) {
-      state.pendingAdminRoute = false;
-      showToast(t("adminSignInRequiredToast"));
-      document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+  window.addEventListener("online", () => {
+    if (!state.firebaseReady) {
+      connectFirebaseCloud();
     }
-  }
+  });
 }
 
 bootstrap();

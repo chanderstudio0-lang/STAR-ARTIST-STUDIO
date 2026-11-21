@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v25";
+const CACHE_VERSION = "star-artist-pwa-v30";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -14,11 +14,16 @@ const APP_SHELL_URLS = [
   "/index.html",
   "/styles.css",
   "/manifest.webmanifest",
+  "/firebase-config.json",
+  "/js/admin-booking-tracker.js",
+  "/js/admin-bookings-export.js",
   "/js/admin-guard.js",
+  "/js/admin-model-growth.js",
   "/js/admin-models.js",
   "/js/app.js",
   "/js/booking-status.js",
   "/js/catalog-reviews.js",
+  "/js/company-booking.js",
   "/js/data.js",
   "/js/exif-reader.js",
   "/js/firebase.js",
@@ -53,7 +58,8 @@ const BYPASS_ORIGINS = [
   "firebaseinstallations.googleapis.com",
   "content-firebaseappcheck.googleapis.com",
   "www.gstatic.com",
-  "www.google.com"
+  "www.google.com",
+  "esm.sh"
 ];
 
 // ============================================================================

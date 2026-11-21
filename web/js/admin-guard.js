@@ -4,7 +4,7 @@ export const AUTHORIZED_ADMIN_EMAIL = String(STUDIO_CONTACT.adminEmail || "chand
   .trim()
   .toLowerCase();
 
-export const PUBLIC_ROUTES = ["home", "catalog", "booking", "models", "gallery"];
+export const PUBLIC_ROUTES = ["home", "catalog", "booking", "models", "companies", "gallery"];
 export const ALL_ROUTES = [...PUBLIC_ROUTES, "admin"];
 
 /**
@@ -177,8 +177,14 @@ export function syncAdminUiVisibility(doc, { isAdmin = false, adminEmail = "" } 
     setElementVisibility(adminLocked, true);
     const statsGrid = doc.getElementById("adminStatsGrid");
     const tabBody = doc.getElementById("adminTabBody");
+    const growthMetrics = doc.getElementById("adminModelGrowthMetrics");
+    const growthChart = doc.getElementById("adminModelGrowthChartMount");
+    const growthStatus = doc.getElementById("adminModelGrowthStatus");
     if (statsGrid) statsGrid.innerHTML = "";
     if (tabBody) tabBody.innerHTML = "";
+    if (growthMetrics) growthMetrics.innerHTML = "";
+    if (growthChart) growthChart.innerHTML = "";
+    if (growthStatus) growthStatus.textContent = "";
     if (verifiedBadge) verifiedBadge.textContent = "";
   } else {
     setElementVisibility(adminLocked, false);

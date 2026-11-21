@@ -141,6 +141,7 @@
         <button class="nav-pill" data-route="catalog" data-i18n="navCatalog">Catalog</button>
         <button class="nav-pill" data-route="booking" data-i18n="navBooking">Book Shoot</button>
         <button class="nav-pill" data-route="models" data-i18n="navModels">Models 18+</button>
+        <button class="nav-pill" data-route="companies" data-i18n="navCompanies">Companies</button>
         <button class="nav-pill" data-route="gallery" data-i18n="navGallery">Gallery</button>
         <button class="nav-pill hidden" id="desktopAdminNavBtn" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
       </nav>
@@ -166,7 +167,6 @@
       <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
         <span id="signedInUserLabel" class="badge hidden"></span>
         <button id="openAdminConsoleQuickBtn" class="chip-btn hidden" style="min-height: 36px; padding: 4px 12px;" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
-        <button id="openFirebaseSetupBtn" class="chip-btn" style="min-height: 36px; padding: 4px 12px;" type="button" data-i18n="setupFirebaseBtn">Firebase Setup</button>
       </div>
     </div>
 
@@ -193,6 +193,7 @@
           <div class="hero-cta-row">
             <button class="btn-gold" type="button" data-route="booking" data-i18n="heroBookCta">Book a Session</button>
             <button class="btn-outline" type="button" data-route="models" data-i18n="heroModelCta">Apply as Model (18+)</button>
+            <button class="btn-outline" type="button" data-route="companies" data-i18n="heroCompanyCta">Hire Models (Companies)</button>
           </div>
         </div>
         <div class="hero-media">
@@ -501,6 +502,175 @@
       </div>
     </section>
 
+    <!-- COMPANY / EVENT ORGANIZER REGISTRATION & MODEL BOOKING VIEW -->
+    <section id="view-companies" class="view-section hidden">
+      <div class="section-header">
+        <span class="eyebrow" data-i18n="companyEyebrow">BRANDS • EVENTS • CASTING DESK</span>
+        <h2 data-i18n="companyHeading">Company &amp; Event Organizer Model Booking</h2>
+        <p data-i18n="companySubheading">Register your company or event agency, browse our verified public model roster, and submit model requirement bookings directly to the Studio Admin Desk.</p>
+      </div>
+
+      <!-- STEP 1: COMPANY / EVENT ORGANIZER REGISTRATION -->
+      <div class="studio-card company-reg-card" style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
+          <div>
+            <h3 style="margin: 0; color: var(--gold);" data-i18n="companyRegTitle">1. Company &amp; Event Organizer Registration</h3>
+            <p style="margin: 4px 0 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="companyRegSubtitle">Save your company details once to auto-fill all model requirement requests.</p>
+          </div>
+          <span id="companyProfileStatusBadge" class="badge hidden"></span>
+        </div>
+        <form id="companyRegistrationForm" class="form-grid two-col" novalidate>
+          <div class="field">
+            <label for="compRegName" data-i18n="companyNameLabel">Company / Event Organizer Name</label>
+            <input id="compRegName" class="input" required minlength="2" maxlength="120" placeholder="e.g., Royal Heritage Events Pvt. Ltd." />
+          </div>
+          <div class="field">
+            <label for="compRegType" data-i18n="companyTypeLabel">Organization Type</label>
+            <select id="compRegType" class="input">
+              <option value="Company">Company</option>
+              <option value="Event Organizer">Event Organizer</option>
+              <option value="Brand / Agency">Brand / Agency</option>
+              <option value="Production House">Production House</option>
+              <option value="Wedding Planner">Wedding Planner</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="compRegContactPerson" data-i18n="companyContactPersonLabel">Contact Person Full Name</label>
+            <input id="compRegContactPerson" class="input" required minlength="2" maxlength="100" placeholder="e.g., Vikram Mehta" />
+          </div>
+          <div class="field">
+            <label for="compRegMobile" data-i18n="companyMobileLabel">Mobile Number</label>
+            <input id="compRegMobile" class="input" type="tel" required minlength="10" maxlength="20" placeholder="+91 98128..." />
+          </div>
+          <div class="field">
+            <label for="compRegEmail" data-i18n="companyEmailLabel">Official Email Address</label>
+            <input id="compRegEmail" class="input" type="email" required maxlength="128" placeholder="events@company.com" />
+          </div>
+          <div class="field">
+            <label for="compRegAddress" data-i18n="companyAddressLabel">Company / Office Address</label>
+            <input id="compRegAddress" class="input" required minlength="5" maxlength="300" placeholder="Street, City, State, PIN" />
+          </div>
+          <div class="field full">
+            <button id="saveCompanyProfileBtn" type="submit" class="btn-outline" data-i18n="companySaveProfileBtn">Register / Save Company Profile</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- STEP 2: BROWSE APPROVED PUBLIC MODEL PORTFOLIOS -->
+      <div class="section-header" style="margin-top: 8px;">
+        <h3 style="margin: 0; color: var(--gold);" data-i18n="companyRosterHeading">2. Browse Approved Public Model Portfolios</h3>
+        <p style="margin: 4px 0 0; font-size: 0.9rem; color: var(--text-secondary);" data-i18n="companyRosterSubheading">Select specific approved models below to attach them to your requirement request. Model personal contact details are strictly kept private by Star Artist Studio.</p>
+      </div>
+
+      <div class="studio-card company-privacy-banner" role="note" style="margin-bottom: 16px;">
+        <strong style="color: var(--gold-light);" data-i18n="companyPrivacyBannerTitle">🔒 Model Privacy Guaranteed</strong>
+        <span style="font-size: 0.84rem; color: var(--text-secondary);" data-i18n="companyPrivacyBannerDesc">Public portfolios display only approved talent details and skills. Model phone numbers and personal contacts are never exposed — all coordination is securely managed by Star Artist Studio Admin.</span>
+      </div>
+
+      <div id="publicModelsFilterBar" class="filter-bar">
+        <input id="publicModelsSearchInput" type="search" class="input" style="max-width: 320px;" placeholder="Search model name, city, skills..." />
+        <button type="button" class="chip-btn active" data-public-model-gender="all" data-i18n="filterAll">All</button>
+        <button type="button" class="chip-btn" data-public-model-gender="female" data-i18n="companyFilterFemale">Female Models</button>
+        <button type="button" class="chip-btn" data-public-model-gender="male" data-i18n="companyFilterMale">Male Models</button>
+      </div>
+      <div id="publicModelsGrid" class="cards-grid" style="margin-bottom: 28px;"></div>
+
+      <!-- STEP 3: MODEL REQUIREMENT BOOKING FORM & REQUEST TRACKER -->
+      <div class="split-grid">
+        <form id="companyBookingForm" class="studio-card form-grid two-col" novalidate>
+          <div class="field full">
+            <h3 style="margin: 0; color: var(--gold);" data-i18n="companyBookingHeading">3. Submit Model Requirement Booking</h3>
+            <p style="margin: 4px 0 0; font-size: 0.84rem; color: var(--text-secondary);" data-i18n="companyBookingSubheading">All requests are sent directly to our Admin Dashboard for casting confirmation and coordination.</p>
+          </div>
+          <div class="field">
+            <label for="compBookName" data-i18n="companyNameLabel">Company / Event Organizer Name</label>
+            <input id="compBookName" class="input" required minlength="2" maxlength="120" />
+          </div>
+          <div class="field">
+            <label for="compBookType" data-i18n="companyTypeLabel">Organization Type</label>
+            <select id="compBookType" class="input">
+              <option value="Company">Company</option>
+              <option value="Event Organizer">Event Organizer</option>
+              <option value="Brand / Agency">Brand / Agency</option>
+              <option value="Production House">Production House</option>
+              <option value="Wedding Planner">Wedding Planner</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="compBookContactPerson" data-i18n="companyContactPersonLabel">Contact Person Full Name</label>
+            <input id="compBookContactPerson" class="input" required minlength="2" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="compBookMobile" data-i18n="companyMobileLabel">Mobile Number</label>
+            <input id="compBookMobile" class="input" type="tel" required minlength="10" maxlength="20" placeholder="+91 98128..." />
+          </div>
+          <div class="field">
+            <label for="compBookEmail" data-i18n="companyEmailLabel">Official Email Address</label>
+            <input id="compBookEmail" class="input" type="email" required maxlength="128" />
+          </div>
+          <div class="field">
+            <label for="compBookAddress" data-i18n="companyAddressLabel">Company / Office Address</label>
+            <input id="compBookAddress" class="input" required minlength="5" maxlength="300" />
+          </div>
+          <div class="field">
+            <label for="compBookRequirement" data-i18n="companyRequirementLabel">Model Requirement</label>
+            <select id="compBookRequirement" class="input" required>
+              <option value="Male Models">Male Models</option>
+              <option value="Female Models">Female Models</option>
+              <option value="Both">Both</option>
+              <option value="Multiple Models">Multiple Models</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="compBookCount" data-i18n="companyModelsCountLabel">Number of Models Required</label>
+            <input id="compBookCount" class="input" type="number" min="1" max="200" value="2" required />
+          </div>
+          <div class="field">
+            <label for="compBookEventType" data-i18n="companyEventTypeLabel">Event Type</label>
+            <select id="compBookEventType" class="input" required>
+              <option value="Fashion Show">Fashion Show</option>
+              <option value="Wedding">Wedding</option>
+              <option value="Music Video">Music Video</option>
+              <option value="Advertisement">Advertisement</option>
+              <option value="Brand Promotion">Brand Promotion</option>
+              <option value="Photoshoot">Photoshoot</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="compBookEventDate" data-i18n="companyEventDateLabel">Event Date</label>
+            <input id="compBookEventDate" class="input" type="date" required />
+          </div>
+          <div class="field">
+            <label for="compBookLocation" data-i18n="companyEventLocationLabel">Event Location / City</label>
+            <input id="compBookLocation" class="input" required minlength="2" maxlength="200" placeholder="Sirsa, Chandigarh, Delhi..." />
+          </div>
+          <div class="field">
+            <label for="compBookBudget" data-i18n="companyBudgetLabel">Estimated Budget (INR)</label>
+            <input id="compBookBudget" class="input" required minlength="2" maxlength="80" placeholder="e.g., ₹25,000 – ₹60,000" />
+          </div>
+          <div class="field full">
+            <label data-i18n="companyRequestedModelsLabel">Selected Specific Models (Optional)</label>
+            <div id="selectedRequestedModelsBar" class="selected-models-bar"></div>
+          </div>
+          <div class="field full">
+            <label for="compBookDetails" data-i18n="companyDetailsLabel">Detailed Requirements (Dress code, timings, shoot brief)</label>
+            <textarea id="compBookDetails" rows="4" class="input" required minlength="10" maxlength="2000" placeholder="Describe event schedule, outfit/look expectations, call time, and special instructions..."></textarea>
+          </div>
+          <div class="field full">
+            <button id="submitCompanyBookingBtn" type="submit" class="btn-gold" data-i18n="companySubmitBookingBtn">Send Model Booking Request to Admin</button>
+          </div>
+        </form>
+
+        <div class="studio-card">
+          <h3 style="margin: 0; color: var(--gold);" data-i18n="companyMyRequestsHeading">My Company Booking Requests</h3>
+          <div id="myCompanyBookingsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- GALLERY VIEW -->
     <section id="view-gallery" class="view-section hidden">
       <div class="section-header">
@@ -604,6 +774,27 @@
           <button id="adminSignOutBtn" type="button" class="btn-outline btn-sm" data-i18n="signOutBtn">Sign Out</button>
         </div>
         <div id="adminStatsGrid" class="stats-grid"></div>
+        <section id="adminBookingTrackerCard" class="studio-card booking-tracker-card" aria-labelledby="adminBookingTrackerHeading"></section>
+        <section id="adminModelGrowthCard" class="studio-card model-growth-card" aria-labelledby="adminModelGrowthHeading">
+          <div class="model-growth-header">
+            <div>
+              <span class="eyebrow" data-i18n="adminGrowthEyebrow">OUTREACH ANALYTICS • LAST 30 DAYS</span>
+              <h3 id="adminModelGrowthHeading" class="model-growth-title" data-i18n="adminGrowthTitle">Model Growth</h3>
+              <p class="model-growth-subtitle" data-i18n="adminGrowthSubtitle">Daily new 18+ model applications submitted over the last 30 days.</p>
+            </div>
+            <div class="model-growth-controls" role="group" aria-label="Chart style">
+              <button type="button" class="chip-btn active" data-growth-chart-type="area" aria-pressed="true" data-i18n="adminGrowthTypeArea">Area</button>
+              <button type="button" class="chip-btn" data-growth-chart-type="bar" aria-pressed="false" data-i18n="adminGrowthTypeBar">Bar</button>
+            </div>
+          </div>
+          <div id="adminModelGrowthMetrics" class="model-growth-kpis"></div>
+          <div class="model-growth-legend" aria-hidden="true">
+            <span class="model-growth-legend-item"><span class="model-growth-dot is-gold"></span><span data-i18n="adminGrowthSeriesApps">New Applications</span></span>
+            <span class="model-growth-legend-item"><span class="model-growth-dot is-emerald"></span><span data-i18n="adminGrowthSeriesApproved">Roster Approved</span></span>
+          </div>
+          <div id="adminModelGrowthChartMount" class="model-growth-chart-host" role="region" aria-label="Model Growth Recharts visualization"></div>
+          <div id="adminModelGrowthStatus" class="model-growth-status"></div>
+        </section>
         <div class="filter-bar">
           <button type="button" class="chip-btn active" data-admin-tab="bookings">
             <span data-i18n="adminTabBookings">Bookings</span>
@@ -612,6 +803,10 @@
           <button type="button" class="chip-btn" data-admin-tab="models">
             <span data-i18n="adminTabModels">Models</span>
             <span class="filter-count-badge" data-admin-count="models">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="companies">
+            <span data-i18n="adminTabCompanies">Company Requests</span>
+            <span class="filter-count-badge" data-admin-count="companies">0</span>
           </button>
           <button type="button" class="chip-btn" data-admin-tab="gallery">
             <span data-i18n="adminTabGallery">Gallery</span>
@@ -688,6 +883,7 @@
           <a href="#home" data-route="home" data-i18n="navHome">Home</a>
           <a href="#catalog" data-route="catalog" data-i18n="navCatalog">Catalog</a>
           <a href="#booking" data-route="booking" data-i18n="navBooking">Book Shoot</a>
+          <a href="#companies" data-route="companies" data-i18n="navCompanies">Companies</a>
           <a href="mailto:chanderstudio0@gmail.com">chanderstudio0@gmail.com</a>
         </div>
       </div>
@@ -711,6 +907,10 @@
     <button class="bottom-nav-btn" data-route="models">
       <span>❖</span>
       <span data-i18n="navModels">Models 18+</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="companies">
+      <span>✦</span>
+      <span data-i18n="navCompanies">Companies</span>
     </button>
     <button class="bottom-nav-btn" data-route="gallery">
       <span>▣</span>
@@ -750,40 +950,6 @@
         </div>
       </form>
     </div>
-  </div>
-
-  <!-- FIREBASE WEB CONFIG MODAL (Optional Local/Preview Overrides) -->
-  <div id="firebaseSetupModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <form id="firebaseConfigForm" class="modal-card">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h3 style="margin: 0; color: var(--gold);">Firebase Web App Setup (Free Spark)</h3>
-        <button id="closeFirebaseSetupBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
-      </div>
-      <p style="margin: 0; font-size: 0.84rem; color: var(--text-secondary);">
-        When hosted on Firebase Hosting (free Spark plan), config loads automatically from <code>/__/firebase/init.json</code>. For local preview, paste your Web App keys here (stored only in your browser localStorage).
-      </p>
-      <div class="field">
-        <label for="cfgProjectId">Project ID</label>
-        <input id="cfgProjectId" class="input" value="gen-lang-client-0548683163" required />
-      </div>
-      <div class="field">
-        <label for="cfgDatabaseId">Firestore Database ID</label>
-        <input id="cfgDatabaseId" class="input" value="ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b" required />
-      </div>
-      <div class="field">
-        <label for="cfgApiKey">Web API Key</label>
-        <input id="cfgApiKey" class="input" placeholder="AIza..." required />
-      </div>
-      <div class="field">
-        <label for="cfgAppId">Firebase Web App ID</label>
-        <input id="cfgAppId" class="input" placeholder="1:634443186065:web:..." required />
-      </div>
-      <div class="field">
-        <label for="cfgRecaptcha">App Check reCAPTCHA v3 Site Key (Optional)</label>
-        <input id="cfgRecaptcha" class="input" placeholder="6L..." />
-      </div>
-      <button type="submit" class="btn-gold">Save &amp; Connect Firebase</button>
-    </form>
   </div>
 
   <!-- GALLERY LIGHTBOX MODAL -->

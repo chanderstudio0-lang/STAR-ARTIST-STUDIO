@@ -447,6 +447,7 @@ fun StudioMainContent(
 
     val allModels by studioViewModel.allModels.collectAsState()
     val allBookings by studioViewModel.allBookings.collectAsState()
+    val bookingTrackerState by studioViewModel.bookingTrackerState.collectAsStateWithLifecycle()
     val allGalleryItems by studioViewModel.allGalleryItems.collectAsState()
     val blogPosts by studioViewModel.blogPosts.collectAsState()
     val allBlogPostsForAdmin by studioViewModel.allBlogPostsForAdmin.collectAsState()
@@ -1044,6 +1045,13 @@ fun StudioMainContent(
                         isLoading = isLoadingAdmin,
                         allModels = allModels,
                         allBookings = allBookings,
+                        bookingTrackerState = bookingTrackerState,
+                        onToggleBookingTracker = {
+                            studioViewModel.toggleRealtimeBookingTracker()
+                        },
+                        onCheckBookingStatusesNow = {
+                            studioViewModel.checkRealtimeBookingStatusesNow()
+                        },
                         allGalleryItems = allGalleryItems,
                         allBlogPosts = allBlogPostsForAdmin,
                         allAnnouncements = studioAnnouncements,

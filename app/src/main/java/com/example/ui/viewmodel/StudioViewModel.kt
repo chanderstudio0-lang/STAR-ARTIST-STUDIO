@@ -25,6 +25,9 @@ import com.example.data.repository.ServiceCatalogReferenceRepository
 import com.example.data.repository.StudioInfoRepository
 import com.example.data.repository.StudioRepository
 import com.example.notification.StudioNotificationManager
+import com.example.ui.components.AdminRealtimeBookingTrackerLogic
+import com.example.ui.components.BookingAutoTransitionRecord
+import com.example.ui.components.RealtimeBookingTrackerUiState
 import com.example.util.ParsedVoiceBookingCommand
 import com.example.util.StudioConstants
 import com.example.util.StudioStrings
@@ -33,6 +36,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +46,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -494,6 +500,10 @@ class StudioViewModel(
     private val _isLoadingUserData = MutableStateFlow(true)
     val isLoadingUserData: StateFlow<Boolean> = _isLoadingUserData.asStateFlow()
 
+    private val _bookingTrackerState = MutableStateFlow(RealtimeBookingTrackerUiState())
+    val bookingTrackerState: StateFlow<RealtimeBookingTrackerUiState> = _bookingTrackerState.asStateFlow()
+    private val inFlightAutoCompleteBookingIds = mutableSetOf<String>()
+
     init {
         loadUserProfile()
         viewModelScope.launch {
@@ -531,6 +541,39 @@ class StudioViewModel(
                 .collect {
                     _isLoadingAdmin.value = false
                 }
+        }
+        // Real-time booking status tracker: listens to Firestore bookings while admin is verified
+        // and auto-transitions past-date 'Confirmed' events to 'Completed'.
+        @OptIn(ExperimentalCoroutinesApi::class)
+        viewModelScope.launch {
+            _isAdmin
+                .flatMapLatest { admin ->
+                    if (admin) {
+                        _bookingTrackerState.update { it.copy(isLiveConnected = true) }
+                        allBookings
+                    } else {
+                        inFlightAutoCompleteBookingIds.clear()
+                        _bookingTrackerState.update {
+                            RealtimeBookingTrackerUiState(isEnabled = it.isEnabled)
+                        }
+                        flowOf(emptyList())
+                    }
+                }
+                .collect { latestBookings ->
+                    if (_isAdmin.value && _bookingTrackerState.value.isEnabled) {
+                        evaluateAndAutoCompletePastBookings(latestBookings, force = false)
+                    }
+                }
+        }
+        // Periodic 60-second clock check so events transition automatically after midnight
+        // even if no new Firestore write occurs.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(60_000L)
+                if (_isAdmin.value && _bookingTrackerState.value.isEnabled) {
+                    evaluateAndAutoCompletePastBookings(allBookings.value, force = false)
+                }
+            }
         }
     }
 
@@ -1184,6 +1227,129 @@ class StudioViewModel(
                 showSnackbar(msg)
             }
         }
+    }
+
+    fun toggleRealtimeBookingTracker() {
+        if (!requireAdminAccess()) return
+        val nextEnabled = !_bookingTrackerState.value.isEnabled
+        _bookingTrackerState.update { it.copy(isEnabled = nextEnabled, lastError = null) }
+        if (nextEnabled) {
+            viewModelScope.launch {
+                evaluateAndAutoCompletePastBookings(allBookings.value, force = false)
+            }
+        }
+    }
+
+    fun checkRealtimeBookingStatusesNow() {
+        if (!requireAdminAccess()) return
+        viewModelScope.launch {
+            val count = evaluateAndAutoCompletePastBookings(allBookings.value, force = true)
+            if (count == 0) {
+                val msg = if (_language.value == AppLanguage.HINDI) {
+                    "सभी Confirmed बुकिंग अद्यतित हैं — कोई पिछली तिथि लंबित नहीं है।"
+                } else {
+                    "All Confirmed bookings are up to date — no past-date events pending."
+                }
+                showSnackbar(msg)
+            }
+        }
+    }
+
+    private suspend fun evaluateAndAutoCompletePastBookings(
+        bookings: List<ShootBooking>,
+        force: Boolean
+    ): Int {
+        if (!_isAdmin.value) return 0
+        if (!force && !_bookingTrackerState.value.isEnabled) return 0
+
+        val checkedAt = System.currentTimeMillis()
+        val due = AdminRealtimeBookingTrackerLogic.findDueConfirmedBookings(bookings)
+            .filter { it.id !in inFlightAutoCompleteBookingIds }
+
+        if (due.isEmpty()) {
+            _bookingTrackerState.update {
+                it.copy(lastCheckedAtMillis = checkedAt, lastError = null)
+            }
+            return 0
+        }
+
+        due.forEach { inFlightAutoCompleteBookingIds.add(it.id) }
+        _bookingTrackerState.update {
+            it.copy(isSyncing = true, lastCheckedAtMillis = checkedAt, lastError = null)
+        }
+
+        var succeededCount = 0
+        var failedCount = 0
+        val newTransitions = mutableListOf<BookingAutoTransitionRecord>()
+
+        try {
+            for (booking in due) {
+                val res = repository.updateBookingStatus(booking.id, "Completed")
+                if (res.isSuccess) {
+                    succeededCount += 1
+                    newTransitions.add(
+                        BookingAutoTransitionRecord(
+                            bookingId = booking.id,
+                            clientName = booking.clientName.ifBlank { "Studio Client" },
+                            serviceType = booking.serviceType.ifBlank { "Studio Shoot" },
+                            preferredDate = booking.preferredDate,
+                            fromStatus = "Confirmed",
+                            toStatus = "Completed",
+                            transitionedAtMillis = System.currentTimeMillis()
+                        )
+                    )
+                    if (booking.userId.isNotBlank()) {
+                        val (notifTitle, notifBody) = StudioNotificationManager.formatNotificationPayload(
+                            clientName = booking.clientName.ifBlank { "Client" },
+                            serviceType = booking.serviceType,
+                            preferredDate = booking.preferredDate,
+                            newStatus = "Completed"
+                        )
+                        runCatching {
+                            repository.createAppointmentNotification(
+                                targetUserId = booking.userId,
+                                bookingId = booking.id,
+                                title = notifTitle,
+                                message = notifBody,
+                                status = "Completed",
+                                serviceType = booking.serviceType,
+                                targetFcmToken = booking.fcmToken
+                            )
+                        }
+                    }
+                } else {
+                    failedCount += 1
+                }
+            }
+
+            if (succeededCount > 0) {
+                val msg = if (_language.value == AppLanguage.HINDI) {
+                    "$succeededCount बुकिंग स्वतः Confirmed → Completed अपडेट हुईं।"
+                } else {
+                    "Auto-updated $succeededCount past-date booking(s): Confirmed → Completed."
+                }
+                showSnackbar(msg)
+            }
+        } finally {
+            due.forEach { inFlightAutoCompleteBookingIds.remove(it.id) }
+            _bookingTrackerState.update { current ->
+                current.copy(
+                    isSyncing = false,
+                    lastCheckedAtMillis = System.currentTimeMillis(),
+                    totalAutoCompleted = current.totalAutoCompleted + succeededCount,
+                    recentTransitions = (newTransitions + current.recentTransitions).take(8),
+                    lastError = if (failedCount > 0) {
+                        if (_language.value == AppLanguage.HINDI) {
+                            "$failedCount बुकिंग स्वतः अपडेट नहीं हो सकीं। अगली जाँच में पुनः प्रयास होगा।"
+                        } else {
+                            "Could not auto-update $failedCount booking(s). Will retry on next check."
+                        }
+                    } else null
+                )
+            }
+        }
+
+        return succeededCount
     }
 
     fun deleteBooking(bookingId: String) {

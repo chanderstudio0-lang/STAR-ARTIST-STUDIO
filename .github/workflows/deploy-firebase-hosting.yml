@@ -28,8 +28,9 @@ jobs:
 
       - name: Validate PWA build files and tests
         run: |
-          node --check web/sw.js web/js/app.js web/js/data.js web/js/exif-reader.js web/js/firebase.js web/js/i18n.js web/js/booking-status.js web/js/catalog-reviews.js web/js/admin-models.js web/js/tier-info.js web/js/newsletter.js web/js/lazy-images.js web/js/testimonials.js web/js/offline-sync.js web/js/gallery-share.js web/js/image-upload.js
-          node --test web/tests/pwa.test.mjs
+          for f in web/sw.js web/js/*.js; do node --check "$f"; done
+          node -e "JSON.parse(require('fs').readFileSync('web/firebase-config.json','utf8'))"
+          node --test web/tests/pwa.test.mjs functions/tests/alerts.test.mjs
 
       - name: Check Firebase Service Account Secret
         id: check_firebase_secret

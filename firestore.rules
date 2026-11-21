@@ -146,6 +146,60 @@ service cloud.firestore {
              (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
+    function isValidPublicModel(data) {
+      return data.keys().hasOnly([
+               'modelId', 'fullName', 'gender', 'city', 'skills',
+               'portfolioUrl', 'avatarUrl', 'category', 'isOfficialRoster',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.modelId is string && data.modelId.size() > 0 && data.modelId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             (!('gender' in data) || (data.gender is string && data.gender.size() <= 50)) &&
+             data.city is string && data.city.size() > 0 && data.city.size() <= 100 &&
+             (!('skills' in data) || (data.skills is string && data.skills.size() <= 1000)) &&
+             (!('portfolioUrl' in data) || (data.portfolioUrl is string && data.portfolioUrl.size() <= 2000)) &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500000)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
+             data.isOfficialRoster == true &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidCompany(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.companyName is string && data.companyName.size() >= 2 && data.companyName.size() <= 120 &&
+             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Wedding Planner', 'Other'])) &&
+             data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 100 &&
+             data.mobileNumber is string && data.mobileNumber.size() >= 8 && data.mobileNumber.size() <= 20 &&
+             data.email is string && data.email.size() >= 5 && data.email.size() <= 128 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$') &&
+             data.address is string && data.address.size() >= 5 && data.address.size() <= 300 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidCompanyBooking(data) {
+      return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.companyName is string && data.companyName.size() >= 2 && data.companyName.size() <= 120 &&
+             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Wedding Planner', 'Other'])) &&
+             data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 100 &&
+             data.mobileNumber is string && data.mobileNumber.size() >= 8 && data.mobileNumber.size() <= 20 &&
+             data.email is string && data.email.size() >= 5 && data.email.size() <= 128 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$') &&
+             data.address is string && data.address.size() >= 5 && data.address.size() <= 300 &&
+             data.modelRequirement in ['Male Models', 'Female Models', 'Both', 'Multiple Models'] &&
+             data.modelsCount is int && data.modelsCount >= 1 && data.modelsCount <= 200 &&
+             data.eventType in ['Fashion Show', 'Wedding', 'Music Video', 'Advertisement', 'Brand Promotion', 'Photoshoot', 'Other'] &&
+             data.eventDate is string && data.eventDate.size() >= 6 && data.eventDate.size() <= 50 &&
+             data.eventLocation is string && data.eventLocation.size() >= 2 && data.eventLocation.size() <= 200 &&
+             data.budget is string && data.budget.size() >= 2 && data.budget.size() <= 80 &&
+             data.detailedRequirements is string && data.detailedRequirements.size() >= 10 && data.detailedRequirements.size() <= 2000 &&
+             (!('requestedModelIds' in data) || (data.requestedModelIds is list && data.requestedModelIds.size() <= 20)) &&
+             (!('requestedModelNames' in data) || (data.requestedModelNames is list && data.requestedModelNames.size() <= 20)) &&
+             data.status in ['Pending', 'Approved', 'Contacted', 'Completed', 'Rejected', 'Cancelled'] &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
     // Default deny all unknown collections
     match /{document=**} {
       allow read, write: if false;
@@ -213,6 +267,48 @@ service cloud.firestore {
                         incoming().status == existing().status &&
                         incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'city', 'phoneNumber', 'skills', 'portfolioUrls', 'updatedAt']))
                      ) && isValidModel(incoming());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Privacy-safe public portfolio showcase of approved models (strictly excludes personal phone/email)
+    match /publicModels/{modelId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() && isValidPublicModel(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /companies/{companyId} {
+      allow get: if isSignedIn() && (request.auth.uid == companyId || resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       request.auth.uid == companyId &&
+                       incoming().userId == request.auth.uid &&
+                       isValidCompany(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (request.auth.uid == companyId &&
+                        existing().userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt)
+                     ) && isValidCompany(incoming());
+      allow delete: if isSignedIn() && (request.auth.uid == companyId || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /companyBookings/{requestId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       (incoming().status == 'Pending' || isAdmin()) &&
+                       isValidCompanyBooking(incoming());
+      allow update: if isSignedIn() && (
+                       isAdmin() ||
+                       (resource.data.userId == request.auth.uid &&
+                        incoming().userId == existing().userId &&
+                        incoming().createdAt == existing().createdAt &&
+                        (incoming().status == existing().status || incoming().status == 'Cancelled') &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                     ) && isValidCompanyBooking(incoming());
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 

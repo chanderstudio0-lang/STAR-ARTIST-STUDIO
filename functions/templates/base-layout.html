@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="supported-color-schemes" content="dark light" />
+  <title>{{documentTitle}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:{{bgColor}};color:{{textColor}};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <!-- Hidden Inbox Preview Snippet (Preheader) -->
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{{bgColor}};opacity:0;">
+    {{preheader}}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;
+  </div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:{{bgColor}};padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <!-- Main Branded Card Container -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;margin:0 auto;background-color:{{surfaceColor}};border:1px solid {{accentColor}};border-radius:18px;overflow:hidden;box-shadow:0 16px 40px rgba(0,0,0,0.45);">
+          <!-- Top Gold Accent Strip -->
+          <tr>
+            <td style="height:4px;background-color:{{accentColor}};background:linear-gradient(90deg,{{accentColor}},{{accentLightColor}},{{accentColor}});font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+
+          <!-- Branded Studio Header -->
+          <tr>
+            <td style="padding:26px 28px 22px;background-color:#1a160e;background:linear-gradient(135deg,#211b0f 0%,{{surfaceColor}} 100%);border-bottom:1px solid #302714;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td valign="middle" style="padding-bottom:14px;">
+                    {{{brandMarkHtml}}}
+                  </td>
+                  <td align="right" valign="middle" style="padding-bottom:14px;">
+                    <span style="display:inline-block;padding:5px 12px;border-radius:999px;background-color:{{badgeBgColor}};border:1px solid {{badgeBorderColor}};color:{{badgeTextColor}};font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;">
+                      {{statusBadgeLabel}}
+                    </span>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="font-size:11px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:{{accentColor}};margin-bottom:6px;">
+                {{eyebrow}}
+              </div>
+              <h1 style="margin:0 0 8px;font-size:24px;font-weight:800;line-height:1.25;color:{{accentLightColor}};">
+                {{heading}}
+              </h1>
+              <p style="margin:0;font-size:14px;line-height:1.6;color:{{mutedTextColor}};">
+                {{intro}}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Body Content Partial -->
+          <tr>
+            <td style="padding:22px 28px 26px;">
+              {{{bodyHtml}}}
+
+              <!-- Primary & Optional Secondary Action Buttons -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
+                <tr>
+                  <td align="center">
+                    <a href="{{ctaUrl}}" style="display:inline-block;padding:13px 28px;border-radius:999px;background-color:{{accentColor}};color:#141002;font-size:14px;font-weight:800;letter-spacing:0.03em;text-decoration:none;">
+                      {{ctaLabel}}
+                    </a>
+                    {{{secondaryActionHtml}}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Branded Footer -->
+          <tr>
+            <td style="padding:18px 28px;background-color:#100f0d;border-top:1px solid #282216;text-align:center;">
+              <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:{{accentColor}};margin-bottom:4px;">
+                {{brandName}}
+              </div>
+              <div style="font-size:12px;color:{{mutedTextColor}};line-height:1.5;">
+                {{studioLocation}}
+              </div>
+              <div style="font-size:11px;color:#8a8172;margin-top:6px;line-height:1.5;">
+                {{footerText}}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

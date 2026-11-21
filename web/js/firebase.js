@@ -1,8 +1,9 @@
 import { FIREBASE_PROJECT_DEFAULTS, STUDIO_CONTACT } from "./data.js";
 import { buildStorageObjectPath, computeUploadProgress } from "./image-upload.js";
 import { isAuthorizedAdminUser } from "./admin-guard.js";
+import { sanitizePublicModelProfile } from "./company-booking.js";
 
-const STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
+const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
 const FIREBASE_SDK_VERSION = "11.4.0";
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
 
@@ -13,69 +14,103 @@ let authInstance = null;
 let dbInstance = null;
 let activeConfig = null;
 
-function sanitizeWebConfig(raw) {
+export function sanitizeWebConfig(raw) {
   if (!raw || typeof raw !== "object") return null;
   const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
   const appId = typeof raw.appId === "string" ? raw.appId.trim() : "";
-  const projectId = (raw.projectId || FIREBASE_PROJECT_DEFAULTS.projectId).trim();
+  const projectId = String(raw.projectId || FIREBASE_PROJECT_DEFAULTS.projectId).trim();
   if (!apiKey || !appId || !projectId) return null;
 
   return {
     apiKey,
     appId,
     projectId,
-    authDomain: (raw.authDomain || `${projectId}.firebaseapp.com`).trim(),
-    storageBucket: (raw.storageBucket || FIREBASE_PROJECT_DEFAULTS.storageBucket).trim(),
-    messagingSenderId: (raw.messagingSenderId || FIREBASE_PROJECT_DEFAULTS.messagingSenderId).trim(),
-    databaseId: (raw.databaseId || FIREBASE_PROJECT_DEFAULTS.databaseId).trim(),
+    authDomain: String(raw.authDomain || `${projectId}.firebaseapp.com`).trim(),
+    storageBucket: String(raw.storageBucket || FIREBASE_PROJECT_DEFAULTS.storageBucket).trim(),
+    messagingSenderId: String(raw.messagingSenderId || FIREBASE_PROJECT_DEFAULTS.messagingSenderId).trim(),
+    databaseId: String(raw.databaseId || FIREBASE_PROJECT_DEFAULTS.databaseId).trim(),
     recaptchaSiteKey: typeof raw.recaptchaSiteKey === "string" ? raw.recaptchaSiteKey.trim() : ""
   };
 }
 
-export function getSavedManualWebConfig() {
+/**
+ * Removes any legacy per-device localStorage Firebase config saved by older builds
+ * so every mobile device always uses the permanent shared studio Firebase project.
+ */
+export function clearLegacyLocalWebConfig() {
   try {
-    const raw = localStorage.getItem(STORAGE_CONFIG_KEY);
-    if (!raw) return null;
-    return sanitizeWebConfig(JSON.parse(raw));
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(LEGACY_STORAGE_CONFIG_KEY);
+    }
+  } catch {
+    // Ignore restricted storage contexts
+  }
+}
+
+async function fetchJsonConfig(url, { fetchImpl = globalThis.fetch, cache = "no-store" } = {}) {
+  if (typeof fetchImpl !== "function") return null;
+  try {
+    const res = await fetchImpl(url, { cache });
+    if (!res || !res.ok) return null;
+    const contentType = String(res.headers?.get?.("content-type") || "").toLowerCase();
+    // Guard against SPA HTML fallback responses when outside Firebase Hosting
+    if (contentType && !contentType.includes("json") && !contentType.includes("text/plain")) {
+      return null;
+    }
+    const json = await res.json();
+    return sanitizeWebConfig(json);
   } catch {
     return null;
   }
 }
 
-export function saveManualWebConfig(config) {
-  const clean = sanitizeWebConfig(config);
-  if (!clean) {
-    throw new Error("Please enter valid Firebase Web API Key, App ID, and Project ID.");
-  }
-  localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(clean));
-  return clean;
-}
+/**
+ * Permanently resolves the shared Firebase Web App configuration for all devices:
+ * 1. Automatic Firebase Hosting auto-init endpoint (/__/firebase/init.json) on free Spark plan
+ * 2. Centralized shared web configuration (/firebase-config.json) for custom domains, mobile previews, and offline PWA cache
+ * 3. Optional runtime global override (window.__STAR_ARTIST_FIREBASE_CONFIG__)
+ * Never prompts visitors or relies on per-device localStorage.
+ */
+export async function resolveFirebaseWebConfig({
+  fetchImpl = globalThis.fetch,
+  runtimeGlobal = typeof window !== "undefined" ? window.__STAR_ARTIST_FIREBASE_CONFIG__ : null
+} = {}) {
+  clearLegacyLocalWebConfig();
 
-export function clearManualWebConfig() {
-  localStorage.removeItem(STORAGE_CONFIG_KEY);
-}
-
-export async function resolveFirebaseWebConfig() {
-  // 1. Optional runtime global injected outside git (e.g., untracked firebase-env.js)
-  if (typeof window !== "undefined" && window.__STAR_ARTIST_FIREBASE_CONFIG__) {
-    const globalCfg = sanitizeWebConfig(window.__STAR_ARTIST_FIREBASE_CONFIG__);
-    if (globalCfg) return globalCfg;
-  }
-
-  // 2. Firebase Hosting free Spark auto-provisioned config endpoint
-  try {
-    const res = await fetch("/__/firebase/init.json", { cache: "no-store" });
-    if (res.ok) {
-      const json = await res.json();
-      const hostedCfg = sanitizeWebConfig(json);
-      if (hostedCfg) return hostedCfg;
-    }
-  } catch {
-    // Expected outside Firebase Hosting
+  // 1. Firebase Hosting free Spark auto-provisioned config endpoint
+  const hostedCfg = await fetchJsonConfig("/__/firebase/init.json", {
+    fetchImpl,
+    cache: "no-store"
+  });
+  if (hostedCfg) {
+    return {
+      ...hostedCfg,
+      configSource: "firebase-hosting"
+    };
   }
 
-  // 3. Optional local user-configured Firebase Web App settings
-  return getSavedManualWebConfig();
+  // 2. Centralized shared Firebase Web App config bundled with the deployed website
+  const sharedCfg = await fetchJsonConfig("/firebase-config.json", {
+    fetchImpl,
+    cache: "no-cache"
+  });
+  if (sharedCfg) {
+    return {
+      ...sharedCfg,
+      configSource: "shared-config"
+    };
+  }
+
+  // 3. Optional runtime global injected by a custom deployment wrapper
+  const globalCfg = sanitizeWebConfig(runtimeGlobal);
+  if (globalCfg) {
+    return {
+      ...globalCfg,
+      configSource: "runtime-global"
+    };
+  }
+
+  return null;
 }
 
 async function loadFirebaseModules() {
@@ -105,7 +140,7 @@ async function loadFirebaseStorageModule() {
 export async function initFirebaseClient() {
   const cfg = await resolveFirebaseWebConfig();
   if (!cfg) {
-    return { ready: false, reason: "missing_web_config", defaults: FIREBASE_PROJECT_DEFAULTS };
+    return { ready: false, reason: "network_or_config_unavailable", defaults: FIREBASE_PROJECT_DEFAULTS };
   }
 
   const { appMod, authMod, fsMod, appCheckMod } = await loadFirebaseModules();
@@ -135,7 +170,7 @@ export async function initFirebaseClient() {
     app: appInstance,
     auth: authInstance,
     db: dbInstance,
-    ...((await loadFirebaseModules()))
+    ...(await loadFirebaseModules())
   };
 }
 
@@ -144,6 +179,11 @@ export async function subscribeAuthState(onChange) {
   if (!ctx.ready) {
     onChange({ user: null, isAdmin: false, firebaseReady: false });
     return () => {};
+  }
+
+  // Complete any pending mobile redirect sign-in seamlessly
+  if (typeof ctx.authMod.getRedirectResult === "function") {
+    ctx.authMod.getRedirectResult(ctx.auth).catch(() => {});
   }
 
   return ctx.authMod.onAuthStateChanged(ctx.auth, async (user) => {
@@ -204,10 +244,21 @@ export async function syncWorkshopNewsletterOptIn() {
 
 export async function signInWithGooglePopup() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured yet.");
+  if (!ctx.ready) throw new Error("Unable to reach Star Artist Studio Cloud. Please check your internet connection.");
   const provider = new ctx.authMod.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-  return ctx.authMod.signInWithPopup(ctx.auth, provider);
+  try {
+    return await ctx.authMod.signInWithPopup(ctx.auth, provider);
+  } catch (err) {
+    const code = String(err?.code || "");
+    if (
+      (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment") &&
+      typeof ctx.authMod.signInWithRedirect === "function"
+    ) {
+      return ctx.authMod.signInWithRedirect(ctx.auth, provider);
+    }
+    throw err;
+  }
 }
 
 export async function signInWithEmailPassword(email, password) {
@@ -591,6 +642,123 @@ export async function submitCatalogReview({ packageId, serviceType, rating, comm
   return reviewId;
 }
 
+// --- PUBLIC MODEL ROSTER & COMPANY / EVENT ORGANIZER BOOKINGS ---
+
+export async function fetchPublicApprovedModels() {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) return [];
+  const { fsMod, db } = ctx;
+  const snap = await fsMod.getDocs(fsMod.collection(db, "publicModels"));
+  return snap.docs
+    .map((d) => {
+      const data = d.data() || {};
+      const clean = sanitizePublicModelProfile({ ...data, id: d.id, modelId: data.modelId || d.id });
+      return clean ? { ...clean, _sortTs: data.updatedAt?.seconds || data.createdAt?.seconds || 0 } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b._sortTs || 0) - (a._sortTs || 0))
+    .map(({ _sortTs, ...clean }) => clean);
+}
+
+export async function fetchMyCompanyProfile(uid) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready || !uid) return null;
+  const { fsMod, db } = ctx;
+  const snap = await fsMod.getDoc(fsMod.doc(db, "companies", uid));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function saveCompanyRegistration(payload) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  const user = ctx.auth.currentUser;
+  if (!user) throw new Error("Please sign in first to register your company or organizer profile.");
+
+  const { fsMod, db } = ctx;
+  const companyRef = fsMod.doc(db, "companies", user.uid);
+  const existing = await fsMod.getDoc(companyRef);
+  const baseFields = {
+    companyName: String(payload.companyName || "").trim(),
+    organizationType: String(payload.organizationType || "Company").trim(),
+    contactPerson: String(payload.contactPerson || "").trim(),
+    mobileNumber: String(payload.mobileNumber || "").trim(),
+    email: String(payload.email || "").trim().toLowerCase(),
+    address: String(payload.address || "").trim(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+
+  if (existing.exists()) {
+    await fsMod.updateDoc(companyRef, baseFields);
+  } else {
+    await fsMod.setDoc(companyRef, {
+      userId: user.uid,
+      ...baseFields,
+      createdAt: fsMod.serverTimestamp()
+    });
+  }
+  return user.uid;
+}
+
+export async function fetchMyCompanyBookings(uid) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready || !uid) return [];
+  const { fsMod, db } = ctx;
+  const q = fsMod.query(
+    fsMod.collection(db, "companyBookings"),
+    fsMod.where("userId", "==", uid)
+  );
+  const snap = await fsMod.getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+}
+
+export async function submitCompanyModelBooking(payload) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  const user = ctx.auth.currentUser;
+  if (!user) throw new Error("Please sign in first to submit a model requirement booking.");
+
+  const { fsMod, db } = ctx;
+  const docData = {
+    userId: user.uid,
+    companyName: String(payload.companyName || "").trim(),
+    organizationType: String(payload.organizationType || "Company").trim(),
+    contactPerson: String(payload.contactPerson || "").trim(),
+    mobileNumber: String(payload.mobileNumber || "").trim(),
+    email: String(payload.email || "").trim().toLowerCase(),
+    address: String(payload.address || "").trim(),
+    modelRequirement: String(payload.modelRequirement || "").trim(),
+    modelsCount: Number.parseInt(String(payload.modelsCount ?? "1"), 10),
+    eventType: String(payload.eventType || "").trim(),
+    eventDate: String(payload.eventDate || "").trim(),
+    eventLocation: String(payload.eventLocation || "").trim(),
+    budget: String(payload.budget || "").trim(),
+    detailedRequirements: String(payload.detailedRequirements || "").trim(),
+    requestedModelIds: Array.isArray(payload.requestedModelIds) ? payload.requestedModelIds.slice(0, 20) : [],
+    requestedModelNames: Array.isArray(payload.requestedModelNames) ? payload.requestedModelNames.slice(0, 20) : [],
+    status: "Pending",
+    adminNotes: "",
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+
+  const ref = await fsMod.addDoc(fsMod.collection(db, "companyBookings"), docData);
+  // Keep registered company profile in sync best-effort
+  saveCompanyRegistration(payload).catch(() => {});
+  return ref.id;
+}
+
+export async function cancelMyCompanyBooking(requestId) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready || !ctx.auth.currentUser) throw new Error("Sign in required.");
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "companyBookings", requestId), {
+    status: "Cancelled",
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
 // --- ADMIN-ONLY OPERATIONS (Enforced both client-side and server-side by firestore.rules) ---
 
 function requireAuthorizedAdmin(ctx) {
@@ -607,11 +775,13 @@ export async function adminFetchDashboardData() {
   const ctx = await initFirebaseClient();
   requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
-  const [bookingsSnap, modelsSnap, gallerySnap, announcementsSnap] = await Promise.all([
+  const [bookingsSnap, modelsSnap, gallerySnap, announcementsSnap, companiesSnap, companyBookingsSnap] = await Promise.all([
     fsMod.getDocs(fsMod.collection(db, "bookings")),
     fsMod.getDocs(fsMod.collection(db, "models")),
     fsMod.getDocs(fsMod.collection(db, "gallery")),
-    fsMod.getDocs(fsMod.collection(db, "announcements"))
+    fsMod.getDocs(fsMod.collection(db, "announcements")),
+    fsMod.getDocs(fsMod.collection(db, "companies")),
+    fsMod.getDocs(fsMod.collection(db, "companyBookings"))
   ]);
   const mapSorted = (snap) =>
     snap.docs
@@ -621,7 +791,9 @@ export async function adminFetchDashboardData() {
     bookings: mapSorted(bookingsSnap),
     models: mapSorted(modelsSnap),
     gallery: mapSorted(gallerySnap),
-    announcements: mapSorted(announcementsSnap)
+    announcements: mapSorted(announcementsSnap),
+    companies: mapSorted(companiesSnap),
+    companyBookings: mapSorted(companyBookingsSnap)
   };
 }
 
@@ -635,6 +807,53 @@ export async function adminUpdateBookingStatus(bookingId, status) {
   });
 }
 
+export async function adminAutoCompleteExpiredBookings(bookingIds = []) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const ids = [...new Set((Array.isArray(bookingIds) ? bookingIds : []).filter(Boolean))];
+  if (!ids.length) {
+    return { succeededIds: [], failedIds: [] };
+  }
+  const { fsMod, db } = ctx;
+  const results = await Promise.allSettled(
+    ids.map((id) =>
+      fsMod.updateDoc(fsMod.doc(db, "bookings", id), {
+        status: "Completed",
+        updatedAt: fsMod.serverTimestamp()
+      })
+    )
+  );
+  const succeededIds = [];
+  const failedIds = [];
+  results.forEach((res, idx) => {
+    if (res.status === "fulfilled") succeededIds.push(ids[idx]);
+    else failedIds.push(ids[idx]);
+  });
+  return { succeededIds, failedIds };
+}
+
+export async function adminSubscribeBookingsRealtime({ onBookings, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.collection(db, "bookings"),
+    (snap) => {
+      const bookings = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      if (typeof onBookings === "function") {
+        onBookings(bookings);
+      }
+    },
+    (err) => {
+      if (typeof onError === "function") {
+        onError(err);
+      }
+    }
+  );
+}
+
 export async function adminDeleteBooking(bookingId) {
   const ctx = await initFirebaseClient();
   requireAuthorizedAdmin(ctx);
@@ -642,7 +861,7 @@ export async function adminDeleteBooking(bookingId) {
   await fsMod.deleteDoc(fsMod.doc(db, "bookings", bookingId));
 }
 
-export async function adminUpdateModelStatus(modelId, status, adminNotes = "") {
+export async function adminUpdateModelStatus(modelId, status, adminNotes = "", modelData = null) {
   const ctx = await initFirebaseClient();
   requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
@@ -651,6 +870,55 @@ export async function adminUpdateModelStatus(modelId, status, adminNotes = "") {
     adminNotes: adminNotes.trim(),
     updatedAt: fsMod.serverTimestamp()
   });
+
+  // Sync privacy-safe public portfolio card (strictly excluding phoneNumber/email/userId/adminNotes)
+  const publicRef = fsMod.doc(db, "publicModels", modelId);
+  if (status === "approved" && modelData) {
+    const clean = sanitizePublicModelProfile({
+      ...modelData,
+      id: modelId,
+      modelId
+    });
+    if (clean) {
+      await fsMod.setDoc(publicRef, {
+        modelId: clean.modelId,
+        fullName: clean.fullName,
+        gender: clean.gender,
+        city: clean.city,
+        skills: clean.skills,
+        portfolioUrl: clean.portfolioUrl,
+        avatarUrl: clean.avatarUrl,
+        category: clean.category,
+        isOfficialRoster: true,
+        createdAt: fsMod.serverTimestamp(),
+        updatedAt: fsMod.serverTimestamp()
+      });
+    }
+  } else if (status !== "approved") {
+    try {
+      await fsMod.deleteDoc(publicRef);
+    } catch {
+      // Public showcase card may not exist yet
+    }
+  }
+}
+
+export async function adminUpdateCompanyBookingStatus(requestId, status, adminNotes = "") {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "companyBookings", requestId), {
+    status,
+    adminNotes: String(adminNotes || "").trim(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminDeleteCompanyBooking(requestId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  await fsMod.deleteDoc(fsMod.doc(db, "companyBookings", requestId));
 }
 
 export async function adminUpdateGalleryStatus(itemId, status) {

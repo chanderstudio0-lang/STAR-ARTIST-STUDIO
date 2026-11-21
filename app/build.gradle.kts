@@ -85,6 +85,10 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  // Server-only Cloud Functions alert env vars must never be compiled into Android BuildConfig
+  ignoreList.add("SMTP_.*")
+  ignoreList.add("ADMIN_ALERT_EMAIL")
+  ignoreList.add("STUDIO_DASHBOARD_URL")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

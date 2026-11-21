@@ -104,10 +104,12 @@ import com.example.ui.components.AdminDashboardMetrics
 import com.example.ui.components.AdminItemStatus
 import com.example.ui.components.AdminModelVerificationCard
 import com.example.ui.components.AdminModelVerificationSection
+import com.example.ui.components.AdminRealtimeBookingTrackerCard
 import com.example.ui.components.AdminSkeletonList
 import com.example.ui.components.AdminStatusBadge
 import com.example.ui.components.AdminSummaryDashboard
 import com.example.ui.components.GoldLoadingSpinner
+import com.example.ui.components.RealtimeBookingTrackerUiState
 import com.example.ui.components.StatusFilterChip
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
@@ -135,7 +137,10 @@ fun AdminDashboardScreen(
     onAdminAuthSuccess: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onOpenFullAnalytics: () -> Unit = {},
-    onSignOut: () -> Unit = {}
+    onSignOut: () -> Unit = {},
+    bookingTrackerState: RealtimeBookingTrackerUiState = RealtimeBookingTrackerUiState(),
+    onToggleBookingTracker: () -> Unit = {},
+    onCheckBookingStatusesNow: () -> Unit = {}
 ) {
     val s = StudioStrings(language)
     val context = LocalContext.current
@@ -399,6 +404,13 @@ fun AdminDashboardScreen(
                             color = GoldLight
                         )
                     }
+                    AdminRealtimeBookingTrackerCard(
+                        bookings = allBookings,
+                        trackerState = bookingTrackerState,
+                        language = language,
+                        onToggleAutoComplete = onToggleBookingTracker,
+                        onCheckNow = onCheckBookingStatusesNow
+                    )
                     AdminBookingRequestsComponent(
                         bookings = allBookings,
                         isLoading = isLoading,

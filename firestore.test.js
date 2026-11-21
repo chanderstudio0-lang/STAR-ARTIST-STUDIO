@@ -919,3 +919,180 @@ test("Booking integrity: regular owner can cancel own booking but CANNOT self-co
   );
 });
 
+// --- COMPANY / EVENT ORGANIZER & PUBLIC MODEL ROSTER SECURITY TESTS ---
+
+test("Public Models: public visitors can read approved roster; rules strictly block leaking phoneNumber/email", async () => {
+  const adminDb = testEnv
+    .authenticatedContext("admin_uid", { email: "chanderstudio0@gmail.com", email_verified: true })
+    .firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  // Admin can publish privacy-safe public profile
+  await assertSucceeds(
+    adminDb.collection("publicModels").doc("model_pub_1").set({
+      modelId: "model_pub_1",
+      fullName: "Ananya Verma",
+      gender: "Female",
+      city: "Sirsa, Haryana",
+      skills: "Runway, Bridal Editorial",
+      portfolioUrl: "https://instagram.com/starartiststudio",
+      avatarUrl: "/images/model-portrait.jpg",
+      category: "Official Studio Roster",
+      isOfficialRoster: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  );
+
+  // Public unauthenticated visitors can browse publicModels
+  await assertSucceeds(unauthDb.collection("publicModels").doc("model_pub_1").get());
+  await assertSucceeds(unauthDb.collection("publicModels").get());
+
+  // Privacy guard: even Admin cannot accidentally store personal phoneNumber or email in publicModels
+  await assertFails(
+    adminDb.collection("publicModels").doc("model_pub_leak_phone").set({
+      modelId: "model_pub_leak_phone",
+      fullName: "Leaky Model",
+      gender: "Female",
+      city: "Sirsa",
+      phoneNumber: "+91 9812890081",
+      isOfficialRoster: true,
+      createdAt: new Date(),
+    })
+  );
+  await assertFails(
+    adminDb.collection("publicModels").doc("model_pub_leak_email").set({
+      modelId: "model_pub_leak_email",
+      fullName: "Leaky Model",
+      gender: "Female",
+      city: "Sirsa",
+      email: "private@example.com",
+      isOfficialRoster: true,
+      createdAt: new Date(),
+    })
+  );
+
+  // Regular user cannot write or delete publicModels
+  await assertFails(
+    aliceDb.collection("publicModels").doc("model_pub_forged").set({
+      modelId: "model_pub_forged",
+      fullName: "Unauthorized Model",
+      city: "Sirsa",
+      isOfficialRoster: true,
+      createdAt: new Date(),
+    })
+  );
+  await assertFails(aliceDb.collection("publicModels").doc("model_pub_1").delete());
+});
+
+test("Companies: owner can register & update own company profile; cross-user denied; Admin can read", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const adminDb = testEnv
+    .authenticatedContext("admin_uid", { email: "chanderstudio0@gmail.com", email_verified: true })
+    .firestore();
+  const createdAt = new Date(Date.now() - 5000);
+
+  await assertSucceeds(
+    aliceDb.collection("companies").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      companyName: "Royal Heritage Events",
+      organizationType: "Event Organizer",
+      contactPerson: "Vikram Mehta",
+      mobileNumber: "+91 9812890081",
+      email: "events@royalheritage.in",
+      address: "Sector 17, Chandigarh, India",
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+
+  await assertSucceeds(aliceDb.collection("companies").doc(ALICE_UID).get());
+  await assertSucceeds(adminDb.collection("companies").doc(ALICE_UID).get());
+  await assertFails(bobDb.collection("companies").doc(ALICE_UID).get());
+  await assertFails(
+    bobDb.collection("companies").doc(ALICE_UID).update({
+      companyName: "Hijacked Co",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+test("Company Model Bookings: company can create Pending booking & cancel only; Admin can approve, contact, reject, and delete", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const adminDb = testEnv
+    .authenticatedContext("admin_uid", { email: "chanderstudio0@gmail.com", email_verified: true })
+    .firestore();
+  const createdAt = new Date(Date.now() - 5000);
+
+  const validBooking = {
+    userId: ALICE_UID,
+    companyName: "Royal Heritage Events",
+    organizationType: "Event Organizer",
+    contactPerson: "Vikram Mehta",
+    mobileNumber: "+91 9812890081",
+    email: "events@royalheritage.in",
+    address: "Sector 17, Chandigarh, India",
+    modelRequirement: "Both",
+    modelsCount: 6,
+    eventType: "Fashion Show",
+    eventDate: "2026-12-28",
+    eventLocation: "Grand Ballroom, Sirsa",
+    budget: "₹75,000",
+    detailedRequirements: "Need 3 male and 3 female runway models for bridal & festive couture walk.",
+    requestedModelIds: ["model_pub_1"],
+    requestedModelNames: ["Ananya Verma"],
+    status: "Pending",
+    adminNotes: "",
+    createdAt,
+    updatedAt: createdAt,
+  };
+
+  await assertSucceeds(aliceDb.collection("companyBookings").doc("comp_req_1").set(validBooking));
+
+  // Cross-user read denied
+  await assertFails(bobDb.collection("companyBookings").doc("comp_req_1").get());
+
+  // Company cannot forge Approved status on create or self-approve on update
+  await assertFails(
+    aliceDb.collection("companyBookings").doc("comp_req_forged").set({
+      ...validBooking,
+      status: "Approved",
+    })
+  );
+  await assertFails(
+    aliceDb.collection("companyBookings").doc("comp_req_1").update({
+      status: "Approved",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Admin can approve, mark Contacted, add adminNotes, and delete
+  await assertSucceeds(
+    adminDb.collection("companyBookings").doc("comp_req_1").update({
+      status: "Approved",
+      adminNotes: "Casting shortlist shared with organizer.",
+      updatedAt: new Date(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("companyBookings").doc("comp_req_1").update({
+      status: "Contacted",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Owner can cancel their own request
+  await assertSucceeds(
+    aliceDb.collection("companyBookings").doc("comp_req_1").update({
+      status: "Cancelled",
+      updatedAt: new Date(),
+    })
+  );
+
+  await assertSucceeds(adminDb.collection("companyBookings").doc("comp_req_1").delete());
+});
+
+
