@@ -1,10 +1,13 @@
 import { FIREBASE_PROJECT_DEFAULTS, STUDIO_CONTACT } from "./data.js";
+import { buildStorageObjectPath, computeUploadProgress } from "./image-upload.js";
+import { isAuthorizedAdminUser } from "./admin-guard.js";
 
 const STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
 const FIREBASE_SDK_VERSION = "11.4.0";
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
 
 let sdkPromise = null;
+let storageSdkPromise = null;
 let appInstance = null;
 let authInstance = null;
 let dbInstance = null;
@@ -92,6 +95,13 @@ async function loadFirebaseModules() {
   return sdkPromise;
 }
 
+async function loadFirebaseStorageModule() {
+  if (!storageSdkPromise) {
+    storageSdkPromise = import(`${SDK_BASE}/firebase-storage.js`);
+  }
+  return storageSdkPromise;
+}
+
 export async function initFirebaseClient() {
   const cfg = await resolveFirebaseWebConfig();
   if (!cfg) {
@@ -148,23 +158,7 @@ export async function subscribeAuthState(onChange) {
 }
 
 export async function checkIsAdmin(user) {
-  if (!user) return false;
-  if (
-    user.email &&
-    user.email.toLowerCase() === STUDIO_CONTACT.adminEmail.toLowerCase() &&
-    user.emailVerified
-  ) {
-    return true;
-  }
-  const ctx = await initFirebaseClient();
-  if (!ctx.ready) return false;
-  try {
-    const adminRef = ctx.fsMod.doc(ctx.db, "admins", user.uid);
-    const snap = await ctx.fsMod.getDoc(adminRef);
-    return snap.exists();
-  } catch {
-    return false;
-  }
+  return isAuthorizedAdminUser(user);
 }
 
 async function ensureUserDocument(user) {
@@ -373,20 +367,160 @@ export async function submitGalleryUpload(payload, autoApprove = false) {
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to submit gallery artwork.");
 
+  const title = String(payload.title || "").trim();
+  const mediaUrl = String(payload.mediaUrl || "").trim();
+  const rawThumb = String(payload.thumbnailUrl || "").trim();
+  const thumbnailUrl = rawThumb || (mediaUrl.length <= 200000 ? mediaUrl : "");
+
+  if (!title || title.length > 120) {
+    throw new Error("Please enter an artwork title (1–120 characters).");
+  }
+  if (!mediaUrl || mediaUrl.length > 850000) {
+    throw new Error("Please provide a valid image or compressed photo (within free cloud limit).");
+  }
+  if (thumbnailUrl.length > 200000) {
+    throw new Error("Thumbnail exceeds the cloud size limit.");
+  }
+
+  const cleanMeta = payload.metadata && typeof payload.metadata === "object"
+    ? {
+        camera: String(payload.metadata.camera || "").trim().slice(0, 100),
+        lens: String(payload.metadata.lens || "").trim().slice(0, 100),
+        aperture: String(payload.metadata.aperture || "").trim().slice(0, 32),
+        shutterSpeed: String(payload.metadata.shutterSpeed || "").trim().slice(0, 32),
+        iso: String(payload.metadata.iso || "").trim().slice(0, 32),
+        dateTaken: String(payload.metadata.dateTaken || "").trim().slice(0, 40)
+      }
+    : null;
+  const hasMeta = Boolean(
+    cleanMeta &&
+      (cleanMeta.camera ||
+        cleanMeta.lens ||
+        cleanMeta.aperture ||
+        cleanMeta.shutterSpeed ||
+        cleanMeta.iso ||
+        cleanMeta.dateTaken)
+  );
+
   const { fsMod, db } = ctx;
-  const ref = await fsMod.addDoc(fsMod.collection(db, "gallery"), {
+  const docData = {
     userId: user.uid,
-    title: payload.title.trim(),
+    title,
     category: payload.category || "Fashion",
     mediaType: payload.mediaType || "photo",
-    mediaUrl: payload.mediaUrl.trim(),
-    thumbnailUrl: payload.mediaUrl.trim(),
+    mediaUrl,
+    thumbnailUrl,
     isDemo: false,
     status: autoApprove ? "approved" : "pending",
     createdAt: fsMod.serverTimestamp(),
     updatedAt: fsMod.serverTimestamp()
-  });
+  };
+  if (hasMeta) {
+    docData.metadata = cleanMeta;
+  }
+
+  const ref = await fsMod.addDoc(fsMod.collection(db, "gallery"), docData);
   return ref.id;
+}
+
+/**
+ * Uploads an image file/blob to Firebase Storage using uploadBytesResumable so real-time
+ * byte transfer snapshots update the dropzone progress bar live.
+ */
+export async function uploadGalleryImageToStorage(
+  fileOrBlob,
+  { originalName = "", onProgress = null, storageAdapter = null } = {}
+) {
+  if (!fileOrBlob) {
+    throw new Error("No image file provided for Firebase Storage upload.");
+  }
+
+  let adapter = storageAdapter;
+  let uid = "member";
+
+  if (!adapter) {
+    const ctx = await initFirebaseClient();
+    if (!ctx.ready) {
+      throw new Error("Firebase Web App is not configured.");
+    }
+    const user = ctx.auth.currentUser;
+    if (!user) {
+      throw new Error("Please sign in first to upload artwork to Firebase Storage.");
+    }
+    uid = user.uid;
+    const storageMod = await loadFirebaseStorageModule();
+    const storage = storageMod.getStorage(ctx.app);
+    adapter = {
+      ref: (path) => storageMod.ref(storage, path),
+      uploadBytesResumable: (storageRef, data, metadata) =>
+        storageMod.uploadBytesResumable(storageRef, data, metadata),
+      getDownloadURL: (storageRef) => storageMod.getDownloadURL(storageRef)
+    };
+  } else if (adapter.uid) {
+    uid = adapter.uid;
+  }
+
+  const fileName = originalName || fileOrBlob.name || "studio-photo.jpg";
+  const storagePath = buildStorageObjectPath(uid, fileName);
+  const storageRef = adapter.ref(storagePath);
+  const contentType = fileOrBlob.type || "image/jpeg";
+  const totalFallback = Number(fileOrBlob.size || 0);
+
+  if (typeof onProgress === "function") {
+    onProgress({
+      percent: 0,
+      bytesTransferred: 0,
+      totalBytes: totalFallback,
+      state: "running"
+    });
+  }
+
+  const uploadTask = adapter.uploadBytesResumable(storageRef, fileOrBlob, { contentType });
+
+  return new Promise((resolve, reject) => {
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        const transferred = Number(snapshot?.bytesTransferred || 0);
+        const total = Number(snapshot?.totalBytes || totalFallback || 0);
+        const percent = computeUploadProgress(transferred, total);
+        if (typeof onProgress === "function") {
+          onProgress({
+            percent,
+            bytesTransferred: transferred,
+            totalBytes: total,
+            state: snapshot?.state || "running"
+          });
+        }
+      },
+      (error) => {
+        reject(error);
+      },
+      async () => {
+        try {
+          const targetRef = uploadTask?.snapshot?.ref || storageRef;
+          const downloadUrl = await adapter.getDownloadURL(targetRef);
+          const finalTotal = Number(uploadTask?.snapshot?.totalBytes || totalFallback || 0);
+          if (typeof onProgress === "function") {
+            onProgress({
+              percent: 100,
+              bytesTransferred: finalTotal,
+              totalBytes: finalTotal,
+              state: "success"
+            });
+          }
+          resolve({
+            downloadUrl,
+            storagePath,
+            bytesTransferred: finalTotal,
+            totalBytes: finalTotal
+          });
+        } catch (err) {
+          reject(err);
+        }
+      }
+    );
+  });
 }
 
 export async function fetchAnnouncements() {
@@ -457,11 +591,21 @@ export async function submitCatalogReview({ packageId, serviceType, rating, comm
   return reviewId;
 }
 
-// --- ADMIN-ONLY OPERATIONS (Enforced server-side by firestore.rules) ---
+// --- ADMIN-ONLY OPERATIONS (Enforced both client-side and server-side by firestore.rules) ---
+
+function requireAuthorizedAdmin(ctx) {
+  if (!ctx?.ready || !ctx?.auth?.currentUser) {
+    throw new Error("Admin sign-in required.");
+  }
+  if (!isAuthorizedAdminUser(ctx.auth.currentUser)) {
+    throw new Error("Access denied: authorized Studio Admin Gmail account required.");
+  }
+  return ctx.auth.currentUser;
+}
 
 export async function adminFetchDashboardData() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready || !ctx.auth.currentUser) throw new Error("Admin sign-in required.");
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   const [bookingsSnap, modelsSnap, gallerySnap, announcementsSnap] = await Promise.all([
     fsMod.getDocs(fsMod.collection(db, "bookings")),
@@ -483,6 +627,7 @@ export async function adminFetchDashboardData() {
 
 export async function adminUpdateBookingStatus(bookingId, status) {
   const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   await fsMod.updateDoc(fsMod.doc(db, "bookings", bookingId), {
     status,
@@ -492,12 +637,14 @@ export async function adminUpdateBookingStatus(bookingId, status) {
 
 export async function adminDeleteBooking(bookingId) {
   const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   await fsMod.deleteDoc(fsMod.doc(db, "bookings", bookingId));
 }
 
 export async function adminUpdateModelStatus(modelId, status, adminNotes = "") {
   const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   await fsMod.updateDoc(fsMod.doc(db, "models", modelId), {
     status,
@@ -508,6 +655,7 @@ export async function adminUpdateModelStatus(modelId, status, adminNotes = "") {
 
 export async function adminUpdateGalleryStatus(itemId, status) {
   const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   await fsMod.updateDoc(fsMod.doc(db, "gallery", itemId), {
     status,
@@ -517,14 +665,14 @@ export async function adminUpdateGalleryStatus(itemId, status) {
 
 export async function adminDeleteGalleryItem(itemId) {
   const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   await fsMod.deleteDoc(fsMod.doc(db, "gallery", itemId));
 }
 
 export async function adminPublishAnnouncement({ title, message, category, priority }) {
   const ctx = await initFirebaseClient();
-  const user = ctx.auth.currentUser;
-  if (!user) throw new Error("Admin sign-in required.");
+  const user = requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
   const id = `ann_${Date.now()}`;
   await fsMod.setDoc(fsMod.doc(db, "announcements", id), {

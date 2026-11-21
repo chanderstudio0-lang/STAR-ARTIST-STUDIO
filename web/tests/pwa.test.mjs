@@ -100,9 +100,11 @@ test("No hardcoded API keys inside web source files", () => {
     path.join(webDir, "js/booking-status.js"),
     path.join(webDir, "js/catalog-reviews.js"),
     path.join(webDir, "js/data.js"),
+    path.join(webDir, "js/exif-reader.js"),
     path.join(webDir, "js/firebase.js"),
     path.join(webDir, "js/gallery-share.js"),
     path.join(webDir, "js/i18n.js"),
+    path.join(webDir, "js/image-upload.js"),
     path.join(webDir, "js/lazy-images.js"),
     path.join(webDir, "js/newsletter.js"),
     path.join(webDir, "js/offline-sync.js"),
@@ -953,18 +955,1234 @@ test("Filter-bar pill count badges and gallery lightbox Web Share API work clean
   assert.equal(clipRes.status, "copied");
   assert.ok(copiedText.includes(payload.url));
 
+  // 4. Lightbox direct image Download (Blob Object URL & direct link fallback)
+  const createdAnchors = [];
+  const mockDoc = {
+    body: {
+      appendChild: () => {},
+      removeChild: () => {}
+    },
+    createElement: (tag) => {
+      const el = {
+        tag,
+        href: "",
+        download: "",
+        style: {},
+        clicked: false,
+        removed: false,
+        click() {
+          this.clicked = true;
+        },
+        remove() {
+          this.removed = true;
+        }
+      };
+      createdAnchors.push(el);
+      return el;
+    }
+  };
+  let revokedUrl = "";
+  const blobDlRes = await shareMod.downloadGalleryImage(sampleImg, {
+    doc: mockDoc,
+    fetchImpl: async () => ({
+      ok: true,
+      blob: async () => ({ type: "image/jpeg" })
+    }),
+    urlApi: {
+      createObjectURL: () => "blob:star-artist/mock-image",
+      revokeObjectURL: (u) => {
+        revokedUrl = u;
+      }
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(blobDlRes.status, "downloaded-blob");
+  assert.ok(blobDlRes.fileName.endsWith(".jpg"));
+  assert.equal(createdAnchors[0].href, "blob:star-artist/mock-image");
+  assert.equal(createdAnchors[0].download, blobDlRes.fileName);
+  assert.equal(createdAnchors[0].clicked, true);
+  assert.equal(createdAnchors[0].removed, true);
+
+  // Fallback direct anchor download when fetch fails (e.g. third-party CORS)
+  const fallbackDlRes = await shareMod.downloadGalleryImage(sampleImg, {
+    doc: mockDoc,
+    fetchImpl: async () => {
+      throw new Error("CORS blocked");
+    },
+    urlApi: { createObjectURL: () => "" },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(fallbackDlRes.status, "downloaded-link");
+  assert.equal(createdAnchors[1].clicked, true);
+  assert.equal(createdAnchors[1].href, payload.imageUrl);
+  assert.equal(typeof revokedUrl, "string");
+
   // HTML & CSS verification
   const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
   assert.ok(html.includes('data-cat-count="all"'), "Catalog All filter must include count pill badge");
   assert.ok(html.includes('data-cat-count="photography"'), "Catalog Photography filter must include count pill badge");
   assert.ok(html.includes('data-admin-count="bookings"'), "Admin filter bar must include count pill badge");
+  assert.ok(html.includes('id="lightboxDownloadBtn"'), "Gallery lightbox must include Download button");
   assert.ok(html.includes('id="lightboxShareBtn"'), "Gallery lightbox must include Share button");
 
   const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
-  for (const selector of [".filter-count-badge", ".chip-btn.active .filter-count-badge", ".lightbox-footer", ".lightbox-share-btn"]) {
+  for (const selector of [
+    ".filter-count-badge",
+    ".chip-btn.active .filter-count-badge",
+    ".lightbox-footer",
+    ".lightbox-actions",
+    ".lightbox-action-btn",
+    ".lightbox-share-btn"
+  ]) {
     assert.ok(css.includes(selector), `CSS missing rule for ${selector}`);
   }
 });
+
+test("Direct device gallery image upload validates files, scales dimensions, enforces Firestore limits, and exposes UI markup", async () => {
+  const uploadMod = await import(pathToFileURL(path.join(webDir, "js/image-upload.js")).href);
+
+  // 1. File validation
+  assert.equal(uploadMod.validateGalleryImageFile(null).ok, false);
+  assert.equal(uploadMod.validateGalleryImageFile({ name: "doc.pdf", type: "application/pdf", size: 2048 }).ok, false);
+  assert.equal(uploadMod.validateGalleryImageFile({ name: "empty.jpg", type: "image/jpeg", size: 0 }).ok, false);
+  assert.equal(
+    uploadMod.validateGalleryImageFile({
+      name: "huge.png",
+      type: "image/png",
+      size: uploadMod.MAX_UPLOAD_FILE_BYTES + 10
+    }).ok,
+    false
+  );
+  assert.equal(uploadMod.validateGalleryImageFile({ name: "bridal_shot.jpg", type: "image/jpeg", size: 250000 }).ok, true);
+  assert.equal(uploadMod.validateGalleryImageFile({ name: "lookbook.webp", type: "", size: 120000 }).ok, true);
+
+  // 2. Proportional scaling without upscaling
+  assert.deepEqual(uploadMod.computeScaledDimensions(2560, 1280, 1280), { width: 1280, height: 640 });
+  assert.deepEqual(uploadMod.computeScaledDimensions(900, 600, 1280), { width: 900, height: 600 });
+  assert.deepEqual(uploadMod.computeScaledDimensions(1000, 2000, 480), { width: 240, height: 480 });
+
+  // 3. Title suggestion helper
+  assert.equal(uploadMod.suggestTitleFromFileName("royal_bridal-portrait_01.JPG"), "royal bridal portrait 01");
+
+  // 4. Submission validation mirrors firestore.rules isValidGallery()
+  assert.ok(uploadMod.validateGallerySubmission({ title: "", mediaUrl: "https://example.com/a.jpg" }));
+  assert.ok(uploadMod.validateGallerySubmission({ title: "Editorial Shoot", mediaUrl: "" }));
+  assert.ok(uploadMod.validateGallerySubmission({ title: "Editorial Shoot", mediaUrl: "javascript:alert(1)" }));
+  assert.ok(
+    uploadMod.validateGallerySubmission({
+      title: "Oversized Photo",
+      mediaUrl: "data:image/jpeg;base64," + "A".repeat(uploadMod.FIRESTORE_MEDIA_URL_MAX + 1)
+    })
+  );
+  assert.ok(
+    uploadMod.validateGallerySubmission({
+      title: "Oversized Thumb",
+      mediaUrl: "data:image/jpeg;base64,AAAA",
+      thumbnailUrl: "data:image/jpeg;base64," + "B".repeat(uploadMod.FIRESTORE_THUMB_URL_MAX + 1)
+    })
+  );
+  assert.equal(
+    uploadMod.validateGallerySubmission({
+      title: "Royal Bridal Shoot",
+      mediaUrl: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/",
+      thumbnailUrl: "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+    }),
+    null
+  );
+  assert.equal(
+    uploadMod.validateGallerySubmission({
+      title: "Cinema Reel",
+      mediaUrl: "https://example.com/reel.mp4"
+    }),
+    null
+  );
+
+  // 5. HTML & CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="galleryUploadDropzone"'), "index.html must include gallery upload dropzone");
+  assert.ok(html.includes('id="galleryImageFile"') && html.includes('type="file"') && html.includes('accept="image/*"'), "index.html must include image file input");
+  assert.ok(html.includes('id="galleryUploadPreviewBox"'), "index.html must include live image preview container");
+  assert.ok(html.includes('id="clearGalleryImageBtn"'), "index.html must include remove photo button");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".gallery-upload-dropzone",
+    ".gallery-upload-dropzone.is-dragover",
+    ".gallery-upload-preview",
+    ".gallery-upload-preview-img",
+    ".gallery-upload-meta"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing image upload rule for ${selector}`);
+  }
+});
+
+test("Gallery lightbox CSS filter presets preview styles and bake active filters into downloads", async () => {
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+
+  // 1. Presets include Original, Grayscale, Sepia, Vivid, Noir, Golden
+  const presetIds = shareMod.LIGHTBOX_FILTER_PRESETS.map((p) => p.id);
+  for (const id of ["original", "grayscale", "sepia", "vivid", "noir", "golden"]) {
+    assert.ok(presetIds.includes(id), `Missing filter preset: ${id}`);
+  }
+
+  // 2. Apply CSS filter preset to an image element
+  const attrs = {};
+  const fakeImg = {
+    style: { filter: "" },
+    setAttribute: (k, v) => {
+      attrs[k] = v;
+    }
+  };
+  const vividPreset = shareMod.applyLightboxFilterToElement(fakeImg, "vivid");
+  assert.equal(vividPreset.id, "vivid");
+  assert.ok(fakeImg.style.filter.includes("saturate("));
+  assert.equal(attrs["data-active-filter"], "vivid");
+
+  // Unknown preset safely falls back to original
+  const fallbackPreset = shareMod.applyLightboxFilterToElement(fakeImg, "unknown_style");
+  assert.equal(fallbackPreset.id, "original");
+  assert.equal(fakeImg.style.filter, "none");
+
+  // 3. Filtered filename helper appends preset slug cleanly
+  assert.equal(shareMod.buildFilteredFileName("editorial.jpg", "original"), "editorial.jpg");
+  assert.equal(shareMod.buildFilteredFileName("editorial.jpg", "sepia"), "editorial-sepia.jpg");
+  assert.equal(shareMod.buildFilteredFileName("bridal.png", "grayscale"), "bridal-grayscale.png");
+
+  // 4. Filtered download renders through offscreen canvas with ctx.filter applied
+  let appliedCanvasFilter = "";
+  let drawnDims = null;
+  const createdAnchors = [];
+  const mockDoc = {
+    body: { appendChild: () => {}, removeChild: () => {} },
+    createElement: (tag) => {
+      if (tag === "canvas") {
+        return {
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            set filter(val) {
+              appliedCanvasFilter = val;
+            },
+            drawImage: (_img, _x, _y, w, h) => {
+              drawnDims = { w, h };
+            }
+          }),
+          toBlob: (cb, mime) => cb({ type: mime || "image/jpeg", filtered: true })
+        };
+      }
+      const el = {
+        tag,
+        href: "",
+        download: "",
+        style: {},
+        clicked: false,
+        click() {
+          this.clicked = true;
+        },
+        remove() {}
+      };
+      createdAnchors.push(el);
+      return el;
+    }
+  };
+
+  const sampleImg = dataMod.SHOWCASE_GALLERY_SEEDS[0];
+  const dlResult = await shareMod.downloadGalleryImage(sampleImg, {
+    doc: mockDoc,
+    fetchImpl: async () => ({
+      ok: true,
+      blob: async () => ({ type: "image/jpeg" })
+    }),
+    urlApi: {
+      createObjectURL: () => "blob:star-artist/filtered-sepia",
+      revokeObjectURL: () => {}
+    },
+    loadImageFn: async () => ({ naturalWidth: 1200, naturalHeight: 800 }),
+    filterPresetId: "sepia",
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+
+  assert.equal(dlResult.status, "downloaded-filtered");
+  assert.equal(dlResult.filterId, "sepia");
+  assert.ok(dlResult.fileName.endsWith("-sepia.jpg"));
+  assert.ok(appliedCanvasFilter.includes("sepia("), "Canvas context must receive CSS sepia filter");
+  assert.deepEqual(drawnDims, { w: 1200, h: 800 });
+  assert.equal(createdAnchors[0].clicked, true);
+  assert.equal(createdAnchors[0].download, dlResult.fileName);
+
+  // 5. HTML & CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="lightboxFilterBar"'), "Lightbox must include #lightboxFilterBar");
+  for (const id of ["original", "grayscale", "sepia", "vivid", "noir", "golden"]) {
+    assert.ok(html.includes(`data-lightbox-filter="${id}"`), `Lightbox HTML missing preset button: ${id}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".lightbox-image",
+    ".lightbox-filter-bar",
+    ".lightbox-filter-btn",
+    ".lightbox-filter-btn.active",
+    ".lightbox-filter-swatch.is-grayscale",
+    ".lightbox-filter-swatch.is-sepia",
+    ".lightbox-filter-swatch.is-vivid"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing lightbox filter rule for ${selector}`);
+  }
+});
+
+test("Gallery lightbox supports manual arrow cycling, keyboard shortcuts, and automatic slideshow timer", async () => {
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+
+  // 1. Visible gallery filtering
+  const allItems = shareMod.getVisibleGalleryItems(dataMod.SHOWCASE_GALLERY_SEEDS, "All");
+  assert.equal(allItems.length, dataMod.SHOWCASE_GALLERY_SEEDS.length);
+  const fashionItems = shareMod.getVisibleGalleryItems(dataMod.SHOWCASE_GALLERY_SEEDS, "Fashion");
+  assert.ok(fashionItems.length >= 1 && fashionItems.every((i) => i.category === "Fashion"));
+
+  // 2. Manual slide index wrapping (forward & backward)
+  assert.equal(shareMod.getNextLightboxIndex(0, 6, 1), 1);
+  assert.equal(shareMod.getNextLightboxIndex(5, 6, 1), 0);
+  assert.equal(shareMod.getNextLightboxIndex(0, 6, -1), 5);
+  assert.equal(shareMod.getNextLightboxIndex(0, 1, 1), 0);
+  assert.equal(shareMod.getNextLightboxIndex(0, 0, 1), -1);
+
+  // 3. Slide counter formatting
+  assert.equal(shareMod.formatLightboxSlideCounter(0, 6), "1 / 6");
+  assert.equal(shareMod.formatLightboxSlideCounter(5, 6), "6 / 6");
+  assert.equal(shareMod.formatLightboxSlideCounter(0, 0), "");
+
+  // 4. Keyboard action mapping (ArrowLeft, ArrowRight, Space, Escape)
+  assert.equal(shareMod.resolveLightboxKeyAction("ArrowLeft"), "prev");
+  assert.equal(shareMod.resolveLightboxKeyAction("ArrowRight"), "next");
+  assert.equal(shareMod.resolveLightboxKeyAction(" "), "toggle-play");
+  assert.equal(shareMod.resolveLightboxKeyAction("Escape"), "close");
+  assert.equal(shareMod.resolveLightboxKeyAction("Enter"), null);
+
+  // 5. Automatic slideshow timer controller lifecycle (start, step, reset, toggle, stop)
+  let activeCallback = null;
+  let clearedCount = 0;
+  let stepCount = 0;
+  const stateChanges = [];
+  let nextTimerId = 1;
+
+  const ctrl = shareMod.createLightboxSlideshowController({
+    intervalMs: 4000,
+    onStep: () => {
+      stepCount += 1;
+    },
+    onStateChange: (playing) => {
+      stateChanges.push(playing);
+    },
+    setIntervalFn: (fn) => {
+      activeCallback = fn;
+      return nextTimerId++;
+    },
+    clearIntervalFn: () => {
+      clearedCount += 1;
+      activeCallback = null;
+    }
+  });
+
+  assert.equal(ctrl.isPlaying(), false);
+  assert.equal(ctrl.toggle(), true);
+  assert.equal(ctrl.isPlaying(), true);
+  assert.deepEqual(stateChanges, [true]);
+
+  // Simulate two automatic ticks
+  activeCallback();
+  activeCallback();
+  assert.equal(stepCount, 2);
+
+  // Resetting timer after manual step clears old interval and restarts cleanly
+  assert.equal(ctrl.reset(), true);
+  assert.equal(clearedCount, 1);
+  assert.equal(ctrl.isPlaying(), true);
+
+  // Stopping cleans up timer and notifies state change
+  assert.equal(ctrl.toggle(), false);
+  assert.equal(ctrl.isPlaying(), false);
+  assert.equal(clearedCount, 2);
+  assert.deepEqual(stateChanges, [true, false]);
+
+  // 6. HTML & CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const id of [
+    'id="lightboxStage"',
+    'id="lightboxPrevBtn"',
+    'id="lightboxNextBtn"',
+    'id="lightboxCounter"',
+    'id="lightboxSlideshowBtn"'
+  ]) {
+    assert.ok(html.includes(id), `Lightbox HTML missing slideshow element: ${id}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".lightbox-stage",
+    ".lightbox-nav-btn",
+    ".lightbox-nav-btn.is-prev",
+    ".lightbox-nav-btn.is-next",
+    ".lightbox-counter-badge",
+    ".lightbox-slideshow-bar",
+    ".lightbox-slideshow-btn.is-playing"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing lightbox slideshow rule for ${selector}`);
+  }
+});
+
+test("Gallery lightbox displays EXIF camera metadata (camera, lens, aperture, shutter, ISO, date taken)", async () => {
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // 1. All studio showcase seeds carry rich portfolio EXIF metadata
+  for (const seed of dataMod.SHOWCASE_GALLERY_SEEDS) {
+    assert.ok(seed.metadata?.camera, `Seed ${seed.id} missing camera metadata`);
+    assert.ok(seed.metadata?.aperture, `Seed ${seed.id} missing aperture metadata`);
+    assert.ok(seed.metadata?.iso, `Seed ${seed.id} missing ISO metadata`);
+    assert.ok(seed.metadata?.dateTaken, `Seed ${seed.id} missing dateTaken metadata`);
+  }
+
+  // 2. Date formatting handles ISO strings and Firestore Timestamp objects
+  const isoFormatted = shareMod.formatCaptureDate("2026-10-14", "en");
+  assert.ok(isoFormatted.includes("2026") && isoFormatted.includes("14"));
+  const tsFormatted = shareMod.formatCaptureDate({ seconds: 1791979200 }, "en");
+  assert.ok(tsFormatted.includes("2026"));
+
+  // 3. Normalization adds f/ and ISO prefixes when raw numbers are supplied
+  const normalized = shareMod.extractLightboxImageMetadata(
+    {
+      exif: {
+        camera: "Nikon Z8",
+        lens: "50mm f/1.8 S",
+        aperture: "2.0",
+        shutterSpeed: "1/320s",
+        iso: 400
+      },
+      createdAt: { seconds: 1791979200 }
+    },
+    "en"
+  );
+  assert.equal(normalized.camera, "Nikon Z8");
+  assert.equal(normalized.aperture, "f/2.0");
+  assert.equal(normalized.iso, "ISO 400");
+  assert.equal(normalized.shutterSpeed, "1/320s");
+  assert.ok(normalized.dateTaken.includes("2026"));
+
+  // 4. Rendered EXIF panel HTML includes all fields & fallback archive chip when empty
+  const firstHtml = shareMod.renderLightboxMetadataHtml(dataMod.SHOWCASE_GALLERY_SEEDS[0], {
+    lang: "en",
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  for (const token of [
+    'data-exif-field="camera"',
+    'data-exif-field="aperture"',
+    'data-exif-field="shutter"',
+    'data-exif-field="iso"',
+    'data-exif-field="date"',
+    "Sony α7R V",
+    "f/2.2",
+    "ISO 100"
+  ]) {
+    assert.ok(firstHtml.includes(token), `Rendered EXIF HTML missing expected token: ${token}`);
+  }
+
+  const fallbackHtml = shareMod.renderLightboxMetadataHtml(
+    { id: "user_1", title: "Client Upload", category: "Portrait" },
+    {
+      lang: "en",
+      t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+    }
+  );
+  assert.ok(fallbackHtml.includes("Star Artist Studio Archive"));
+
+  // 5. HTML & CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="lightboxExifPanel"'), "Lightbox must include #lightboxExifPanel container");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".lightbox-exif-panel",
+    ".lightbox-exif-title",
+    ".lightbox-exif-grid",
+    ".lightbox-exif-chip",
+    ".lightbox-exif-dt",
+    ".lightbox-exif-dd"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing EXIF metadata rule for ${selector}`);
+  }
+});
+
+test("Automated binary EXIF reader extracts Camera, Lens, Aperture, Shutter, ISO, and Date Taken from JPEG, PNG, and Data URLs", async () => {
+  const exifMod = await import(pathToFileURL(path.join(webDir, "js/exif-reader.js")).href);
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // Helper to build a real binary TIFF EXIF block (supports both Intel 'II' little-endian and Motorola 'MM' big-endian)
+  function buildTestTiffBlock(littleEndian) {
+    const buf = new ArrayBuffer(512);
+    const view = new DataView(buf);
+    const bytes = new Uint8Array(buf);
+
+    // TIFF Header
+    view.setUint16(0, littleEndian ? 0x4949 : 0x4d4d, false);
+    view.setUint16(2, 0x002a, littleEndian);
+    view.setUint32(4, 8, littleEndian); // IFD0 starts at offset 8
+
+    // Helper to append ASCII string / RATIONAL value at dataCursor
+    let dataCursor = 200;
+    const writeAscii = (str) => {
+      const start = dataCursor;
+      for (let i = 0; i < str.length; i++) {
+        bytes[dataCursor++] = str.charCodeAt(i);
+      }
+      bytes[dataCursor++] = 0;
+      return { offset: start, count: str.length + 1 };
+    };
+    const writeRational = (num, den) => {
+      const start = dataCursor;
+      view.setUint32(dataCursor, num, littleEndian);
+      view.setUint32(dataCursor + 4, den, littleEndian);
+      dataCursor += 8;
+      return start;
+    };
+
+    const makeInfo = writeAscii("Canon");
+    const modelInfo = writeAscii("Canon EOS R5");
+    const lensInfo = writeAscii("RF50mm F1.2 L USM");
+    const dateInfo = writeAscii("2026:11:18 16:45:00");
+    const apertureOff = writeRational(18, 10); // f/1.8
+    const shutterOff = writeRational(1, 250); // 1/250s
+
+    // IFD0 at offset 8: 3 entries (Make, Model, ExifIFDPointer)
+    const exifIfdOffset = 80;
+    view.setUint16(8, 3, littleEndian);
+    const writeEntry = (pos, tag, type, count, valOrOff) => {
+      view.setUint16(pos, tag, littleEndian);
+      view.setUint16(pos + 2, type, littleEndian);
+      view.setUint32(pos + 4, count, littleEndian);
+      if (type === 3 && count === 1) {
+        view.setUint16(pos + 8, valOrOff, littleEndian);
+      } else {
+        view.setUint32(pos + 8, valOrOff, littleEndian);
+      }
+    };
+
+    writeEntry(10, 0x010f, 2, makeInfo.count, makeInfo.offset);
+    writeEntry(22, 0x0110, 2, modelInfo.count, modelInfo.offset);
+    writeEntry(34, 0x8769, 4, 1, exifIfdOffset);
+    view.setUint32(46, 0, littleEndian);
+
+    // Exif Sub-IFD at offset 80: 5 entries (ExposureTime, FNumber, ISO, DateTimeOriginal, LensModel)
+    view.setUint16(exifIfdOffset, 5, littleEndian);
+    writeEntry(exifIfdOffset + 2, 0x829a, 5, 1, shutterOff);
+    writeEntry(exifIfdOffset + 14, 0x829d, 5, 1, apertureOff);
+    writeEntry(exifIfdOffset + 26, 0x8827, 3, 1, 400);
+    writeEntry(exifIfdOffset + 38, 0x9003, 2, dateInfo.count, dateInfo.offset);
+    writeEntry(exifIfdOffset + 50, 0xa434, 2, lensInfo.count, lensInfo.offset);
+    view.setUint32(exifIfdOffset + 62, 0, littleEndian);
+
+    return bytes.slice(0, dataCursor);
+  }
+
+  function wrapAsJpeg(tiffBytes) {
+    const segLen = 2 + 6 + tiffBytes.length;
+    const out = new Uint8Array(2 + 2 + segLen + 2);
+    out[0] = 0xff;
+    out[1] = 0xd8; // SOI
+    out[2] = 0xff;
+    out[3] = 0xe1; // APP1
+    out[4] = (segLen >> 8) & 0xff;
+    out[5] = segLen & 0xff;
+    // "Exif\0\0"
+    out[6] = 0x45;
+    out[7] = 0x78;
+    out[8] = 0x69;
+    out[9] = 0x66;
+    out[10] = 0x00;
+    out[11] = 0x00;
+    out.set(tiffBytes, 12);
+    out[out.length - 2] = 0xff;
+    out[out.length - 1] = 0xd9; // EOI
+    return out;
+  }
+
+  function wrapAsPng(tiffBytes) {
+    const sig = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const out = new Uint8Array(sig.length + 12 + tiffBytes.length);
+    out.set(sig, 0);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(8, tiffBytes.length, false);
+    // "eXIf"
+    out[12] = 0x65;
+    out[13] = 0x58;
+    out[14] = 0x49;
+    out[15] = 0x66;
+    out.set(tiffBytes, 16);
+    return out;
+  }
+
+  // 1. Little-Endian JPEG APP1 EXIF parsing
+  const jpegLE = wrapAsJpeg(buildTestTiffBlock(true));
+  const parsedLE = exifMod.parseExifFromArrayBuffer(jpegLE);
+  assert.equal(parsedLE.hasExif, true);
+  assert.equal(parsedLE.camera, "Canon EOS R5");
+  assert.equal(parsedLE.lens, "RF50mm F1.2 L USM");
+  assert.equal(parsedLE.aperture, "f/1.8");
+  assert.equal(parsedLE.shutterSpeed, "1/250s");
+  assert.equal(parsedLE.iso, "ISO 400");
+  assert.equal(parsedLE.dateTaken, "2026-11-18");
+
+  // 2. Big-Endian JPEG APP1 EXIF parsing
+  const jpegBE = wrapAsJpeg(buildTestTiffBlock(false));
+  const parsedBE = exifMod.parseExifFromArrayBuffer(jpegBE);
+  assert.equal(parsedBE.hasExif, true);
+  assert.equal(parsedBE.camera, "Canon EOS R5");
+  assert.equal(parsedBE.aperture, "f/1.8");
+  assert.equal(parsedBE.shutterSpeed, "1/250s");
+  assert.equal(parsedBE.iso, "ISO 400");
+  assert.equal(parsedBE.dateTaken, "2026-11-18");
+
+  // 3. PNG eXIf chunk parsing
+  const pngBytes = wrapAsPng(buildTestTiffBlock(true));
+  const parsedPng = exifMod.parseExifFromArrayBuffer(pngBytes);
+  assert.equal(parsedPng.hasExif, true);
+  assert.equal(parsedPng.iso, "ISO 400");
+  assert.equal(parsedPng.aperture, "f/1.8");
+
+  // 4. Direct Data URL EXIF reading (used by lightbox auto-reader)
+  const dataUrl = `data:image/jpeg;base64,${Buffer.from(jpegLE).toString("base64")}`;
+  const parsedFromDataUrl = await exifMod.readExifFromImageUrl(dataUrl);
+  assert.equal(parsedFromDataUrl.hasExif, true);
+  assert.equal(parsedFromDataUrl.camera, "Canon EOS R5");
+  assert.equal(parsedFromDataUrl.iso, "ISO 400");
+
+  // 5. File reader helper (used before canvas compression during upload)
+  const mockFile = {
+    name: "studio_bridal.jpg",
+    lastModified: Date.UTC(2026, 10, 19),
+    slice: () => ({
+      arrayBuffer: async () => jpegLE.buffer.slice(jpegLE.byteOffset, jpegLE.byteOffset + jpegLE.byteLength)
+    })
+  };
+  const parsedFromFile = await exifMod.readExifFromFile(mockFile);
+  assert.equal(parsedFromFile.camera, "Canon EOS R5");
+  assert.equal(parsedFromFile.dateTaken, "2026-11-18");
+
+  // 6. Non-EXIF buffer gracefully returns hasExif: false
+  const nonExif = exifMod.parseExifFromArrayBuffer(new Uint8Array([0x00, 0x01, 0x02, 0x03]));
+  assert.equal(nonExif.hasExif, false);
+
+  // 7. Lightbox Auto-EXIF badge rendering & CSS verification
+  const autoHtml = shareMod.renderLightboxMetadataHtml(
+    { id: "uploaded_1", title: "Bridal Shot", metadata: parsedLE },
+    {
+      lang: "en",
+      t: (k) => i18nMod.TRANSLATIONS.en[k] || k,
+      autoExtracted: true
+    }
+  );
+  assert.ok(autoHtml.includes("lightbox-exif-badge is-auto"));
+  assert.ok(autoHtml.includes("Auto-EXIF"));
+  assert.ok(autoHtml.includes("Canon EOS R5"));
+  assert.ok(autoHtml.includes("ISO 400"));
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  assert.ok(css.includes(".lightbox-exif-badge"), "CSS missing .lightbox-exif-badge rule");
+});
+
+test("Gallery lightbox #lightboxImg supports mobile pinch-to-zoom, clamped pan, double-tap toggle, and zoom controls", async () => {
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+
+  // 1. Touch distance & midpoint geometry
+  const pA = { clientX: 100, clientY: 200 };
+  const pB = { clientX: 160, clientY: 280 };
+  assert.equal(shareMod.getTouchDistance(pA, pB), 100);
+  assert.deepEqual(shareMod.getTouchMidpoint(pA, pB), { x: 130, y: 240 });
+
+  // 2. Scale & pan clamping
+  assert.equal(shareMod.clampZoomScale(0.4), shareMod.LIGHTBOX_MIN_ZOOM);
+  assert.equal(shareMod.clampZoomScale(8.5), shareMod.LIGHTBOX_MAX_ZOOM);
+  assert.equal(shareMod.clampZoomScale(2.5), 2.5);
+  assert.deepEqual(shareMod.clampZoomPan(90, -50, 1.0, 400, 300), { x: 0, y: 0 });
+  // At 2x in 400x300 container: maxX = 200, maxY = 150
+  assert.deepEqual(shareMod.clampZoomPan(320, -240, 2.0, 400, 300), { x: 200, y: -150 });
+
+  // 3. DOM transform application on #lightboxImg
+  const attrs = {};
+  const classes = new Set();
+  const fakeImg = {
+    style: { transform: "" },
+    setAttribute: (k, v) => {
+      attrs[k] = v;
+    },
+    classList: {
+      toggle: (cls, force) => {
+        if (force) classes.add(cls);
+        else classes.delete(cls);
+      }
+    }
+  };
+
+  const zoomedSnap = shareMod.applyLightboxZoomTransform(fakeImg, { scale: 2.5, x: 42.5, y: -18 });
+  assert.equal(zoomedSnap.isZoomed, true);
+  assert.ok(fakeImg.style.transform.includes("translate3d(42.5px, -18.0px, 0)"));
+  assert.ok(fakeImg.style.transform.includes("scale(2.500)"));
+  assert.equal(attrs["data-zoom-scale"], "2.50");
+  assert.equal(classes.has("is-zoomed"), true);
+
+  const resetSnap = shareMod.applyLightboxZoomTransform(fakeImg, { scale: 1, x: 30, y: 20 });
+  assert.equal(resetSnap.isZoomed, false);
+  assert.equal(fakeImg.style.transform, "translate3d(0px, 0px, 0) scale(1)");
+  assert.equal(attrs["data-zoom-scale"], "1.00");
+  assert.equal(classes.has("is-zoomed"), false);
+
+  // 4. Stateful pinch-to-zoom controller lifecycle (two-finger pinch, clamped pan, snap-reset, double-tap, +/- buttons)
+  const history = [];
+  const zoom = shareMod.createLightboxZoomController({
+    onChange: (snap) => history.push(snap)
+  });
+
+  assert.equal(zoom.isZoomed(), false);
+  assert.equal(zoom.startPan(100, 100), false, "Pan must remain disabled when unzoomed");
+
+  // Start two-finger pinch at 100px separation -> spread to 250px (2.5x)
+  zoom.startPinch({ clientX: 100, clientY: 200 }, { clientX: 200, clientY: 200 });
+  const pinched = zoom.movePinch({ clientX: 25, clientY: 200 }, { clientX: 275, clientY: 200 }, 400, 300);
+  assert.equal(pinched.scale, 2.5);
+  assert.equal(pinched.isZoomed, true);
+
+  // Single-finger pan while zoomed in, clamped to container bounds (at 2.5x in 400x300 -> maxX=300, maxY=225)
+  assert.equal(zoom.startPan(150, 150), true);
+  const panned = zoom.movePan(650, -300, 400, 300);
+  assert.equal(panned.x, 300);
+  assert.equal(panned.y, -225);
+  zoom.endPan();
+
+  // Pinching back down near 1x snaps cleanly to 1.0x centered on endPinch
+  zoom.startPinch({ clientX: 0, clientY: 200 }, { clientX: 250, clientY: 200 });
+  zoom.movePinch({ clientX: 75, clientY: 200 }, { clientX: 177, clientY: 200 }, 400, 300);
+  const snapped = zoom.endPinch();
+  assert.equal(snapped.scale, 1);
+  assert.equal(snapped.x, 0);
+  assert.equal(snapped.y, 0);
+  assert.equal(snapped.isZoomed, false);
+
+  // Double-tap toggles 1x -> 2.25x -> 1x
+  const dtIn = zoom.toggleDoubleTap(400, 300);
+  assert.equal(dtIn.scale, shareMod.LIGHTBOX_DOUBLE_TAP_ZOOM);
+  assert.equal(dtIn.isZoomed, true);
+  const dtOut = zoom.toggleDoubleTap(400, 300);
+  assert.equal(dtOut.scale, 1);
+  assert.equal(dtOut.isZoomed, false);
+
+  // Stepper buttons zoomIn / zoomOut / reset
+  assert.equal(zoom.zoomIn(400, 300).scale, 1.5);
+  assert.equal(zoom.zoomIn(400, 300).scale, 2.0);
+  assert.equal(zoom.zoomOut(400, 300).scale, 1.5);
+  assert.equal(zoom.reset().scale, 1);
+  assert.ok(history.length >= 6);
+
+  // 5. HTML, JS wiring, and CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="lightboxImg"',
+    'data-zoom-scale="1.00"',
+    'id="lightboxZoomOutBtn"',
+    'id="lightboxZoomResetBtn"',
+    'id="lightboxZoomInBtn"'
+  ]) {
+    assert.ok(html.includes(token), `Lightbox HTML missing pinch-to-zoom token: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    "createLightboxZoomController",
+    "applyLightboxZoomTransform",
+    "startPinch",
+    "movePinch",
+    "toggleDoubleTap"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing pinch-to-zoom wiring: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    "touch-action: none",
+    ".lightbox-image.is-zoomed",
+    ".lightbox-image.is-pinching",
+    ".lightbox-zoom-controls",
+    ".lightbox-zoom-btn",
+    ".lightbox-zoom-level"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing pinch-to-zoom rule for ${selector}`);
+  }
+});
+
+test("Gallery lightbox 'Download All' packages all active folder images into a valid single ZIP archive", async () => {
+  const zipMod = await import(pathToFileURL(path.join(webDir, "js/zip-builder.js")).href);
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+
+  // 1. Standard IEEE 802.3 CRC-32 check vector ("123456789" === 0xCBF43926)
+  const checkBytes = new TextEncoder().encode("123456789");
+  assert.equal(zipMod.crc32(checkBytes), 0xcbf43926);
+
+  // 2. Path-traversal sanitization & case-insensitive deduplication
+  assert.equal(zipMod.sanitizeZipEntryName("../../secret/bridal:01?.jpg"), "bridal01.jpg");
+  const used = new Set();
+  assert.equal(zipMod.makeUniqueZipEntryName("bridal.jpg", used), "bridal.jpg");
+  assert.equal(zipMod.makeUniqueZipEntryName("Bridal.JPG", used), "Bridal-2.JPG");
+  assert.equal(zipMod.makeUniqueZipEntryName("bridal.jpg", used), "bridal-3.jpg");
+
+  // 3. Build ZIP directly and inspect PKZIP Local Headers, Central Directory, and EOCD
+  const imgA = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0xff, 0xd9]);
+  const imgB = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const rawZip = zipMod.buildZipArchive([
+    { name: "editorial.jpg", data: imgA },
+    { name: "editorial.jpg", data: imgB }
+  ]);
+  const dv = new DataView(rawZip.buffer, rawZip.byteOffset, rawZip.byteLength);
+  // Local header #1 signature
+  assert.equal(dv.getUint32(0, true), 0x04034b50);
+  // EOCD record at end (last 22 bytes)
+  const eocdOffset = rawZip.byteLength - 22;
+  assert.equal(dv.getUint32(eocdOffset, true), 0x06054b50);
+  assert.equal(dv.getUint16(eocdOffset + 8, true), 2); // 2 entries on disk
+  assert.equal(dv.getUint16(eocdOffset + 10, true), 2); // 2 total entries
+  const cdOffset = dv.getUint32(eocdOffset + 16, true);
+  assert.equal(dv.getUint32(cdOffset, true), 0x02014b50); // Central directory signature
+
+  // 4. Folder filename formatting & Data URL decoding
+  assert.equal(shareMod.buildFolderZipFileName("Bridal"), "star-artist-studio-bridal-gallery.zip");
+  assert.equal(shareMod.buildFolderZipFileName("All"), "star-artist-studio-all-gallery.zip");
+  const pngDataUrl = `data:image/png;base64,${Buffer.from(imgB).toString("base64")}`;
+  const decoded = shareMod.decodeDataUrlToBytes(pngDataUrl);
+  assert.equal(decoded.mime, "image/png");
+  assert.deepEqual(Array.from(decoded.bytes), Array.from(imgB));
+
+  // 5. End-to-end downloadGalleryFolderAsZip (HTTP fetch + Data URL + progress callback + anchor download)
+  const createdAnchors = [];
+  let createdBlob = null;
+  const mockDoc = {
+    body: { appendChild: () => {}, removeChild: () => {} },
+    createElement: (tag) => {
+      const el = {
+        tag,
+        href: "",
+        download: "",
+        style: {},
+        clicked: false,
+        click() {
+          this.clicked = true;
+        },
+        remove() {}
+      };
+      createdAnchors.push(el);
+      return el;
+    }
+  };
+  class MockBlob {
+    constructor(parts, opts) {
+      this.parts = parts;
+      this.type = opts?.type || "";
+    }
+  }
+  const progressEvents = [];
+  const folderItems = [
+    { id: "g1", title: "Royal Bridal Portrait", category: "Bridal", mediaUrl: "/images/gallery-bridal.jpg" },
+    { id: "g2", title: "Royal Bridal Portrait", category: "Bridal", mediaUrl: pngDataUrl }
+  ];
+
+  const zipRes = await shareMod.downloadGalleryFolderAsZip(folderItems, {
+    folderName: "Bridal",
+    doc: mockDoc,
+    BlobCtor: MockBlob,
+    fetchImpl: async () => ({
+      ok: true,
+      headers: { get: () => "image/jpeg" },
+      arrayBuffer: async () => imgA.buffer
+    }),
+    urlApi: {
+      createObjectURL: (blob) => {
+        createdBlob = blob;
+        return "blob:star-artist/bridal-gallery-zip";
+      },
+      revokeObjectURL: () => {}
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/",
+    onProgress: (ev) => progressEvents.push(ev)
+  });
+
+  assert.equal(zipRes.status, "downloaded-zip");
+  assert.equal(zipRes.count, 2);
+  assert.equal(zipRes.total, 2);
+  assert.equal(zipRes.failedCount, 0);
+  assert.equal(zipRes.fileName, "star-artist-studio-bridal-gallery.zip");
+  assert.equal(progressEvents.length, 2);
+  assert.equal(createdBlob.type, "application/zip");
+  assert.equal(createdAnchors[0].href, "blob:star-artist/bridal-gallery-zip");
+  assert.equal(createdAnchors[0].download, "star-artist-studio-bridal-gallery.zip");
+  assert.equal(createdAnchors[0].clicked, true);
+
+  // Verify partial success when one remote item fails CORS/network
+  const partialRes = await shareMod.downloadGalleryFolderAsZip(folderItems, {
+    folderName: "Bridal",
+    doc: mockDoc,
+    BlobCtor: MockBlob,
+    fetchImpl: async () => {
+      throw new Error("CORS blocked");
+    },
+    urlApi: {
+      createObjectURL: () => "blob:star-artist/partial-zip",
+      revokeObjectURL: () => {}
+    },
+    baseUrl: "https://gen-lang-client-0548683163.web.app/"
+  });
+  assert.equal(partialRes.status, "downloaded-partial");
+  assert.equal(partialRes.count, 1);
+  assert.equal(partialRes.failedCount, 1);
+
+  // 6. HTML, JS wiring, and CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="lightboxDownloadAllBtn"',
+    'id="lightboxDownloadAllLabel"',
+    'id="lightboxDownloadAllCount"'
+  ]) {
+    assert.ok(html.includes(token), `Lightbox HTML missing Download All ZIP token: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("downloadGalleryFolderAsZip"), "app.js must wire downloadGalleryFolderAsZip");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".lightbox-download-all-btn",
+    ".lightbox-download-all-btn.is-packing",
+    ".lightbox-count-pill"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing Download All ZIP rule for ${selector}`);
+  }
+});
+
+test("Gallery upload dropzone progress bar updates in real-time during Firebase Storage resumable uploads", async () => {
+  const uploadMod = await import(pathToFileURL(path.join(webDir, "js/image-upload.js")).href);
+  const firebaseMod = await import(pathToFileURL(path.join(webDir, "js/firebase.js")).href);
+
+  // 1. Byte formatting & progress percentage math
+  assert.equal(uploadMod.formatUploadBytes(0), "0 B");
+  assert.equal(uploadMod.formatUploadBytes(512), "512 B");
+  assert.equal(uploadMod.formatUploadBytes(196608), "192 KB");
+  assert.equal(uploadMod.formatUploadBytes(2.5 * 1024 * 1024), "2.5 MB");
+  assert.equal(uploadMod.computeUploadProgress(0, 0), 0);
+  assert.equal(uploadMod.computeUploadProgress(150, 300), 50);
+  assert.equal(uploadMod.computeUploadProgress(450, 300), 100);
+
+  // 2. Sanitized Firebase Storage object path (no path traversal)
+  const storagePath = uploadMod.buildStorageObjectPath("uid_123", "../../Bridal Shoot #1?.jpg", 1700000000000);
+  assert.equal(storagePath, "gallery_uploads/uid_123/1700000000000-Bridal-Shoot-1-.jpg");
+
+  // 3. Progress bar DOM controller updates width, ARIA attributes, byte text, and states
+  const makeClassList = () => {
+    const set = new Set(["hidden"]);
+    return {
+      set,
+      toggle(cls, force) {
+        if (force) set.add(cls);
+        else set.delete(cls);
+      }
+    };
+  };
+  const dropzoneClasses = makeClassList();
+  dropzoneClasses.set.delete("hidden");
+  const wrapClasses = makeClassList();
+  const barAttrs = {};
+  const fillEl = { style: { width: "0%" } };
+  const labelEl = { textContent: "" };
+  const pctEl = { textContent: "" };
+  const bytesEl = { textContent: "" };
+
+  const ctrl = uploadMod.createUploadProgressController({
+    dropzoneEl: { classList: dropzoneClasses },
+    wrapEl: { classList: wrapClasses },
+    barEl: { setAttribute: (k, v) => (barAttrs[k] = v) },
+    fillEl,
+    labelEl,
+    pctEl,
+    bytesEl
+  });
+
+  ctrl.update({
+    percent: 42,
+    bytesTransferred: 210 * 1024,
+    totalBytes: 500 * 1024,
+    label: "Uploading to Firebase Storage...",
+    status: "uploading"
+  });
+  assert.equal(wrapClasses.set.has("hidden"), false);
+  assert.equal(wrapClasses.set.has("is-uploading"), true);
+  assert.equal(dropzoneClasses.set.has("is-uploading"), true);
+  assert.equal(fillEl.style.width, "42%");
+  assert.equal(barAttrs["aria-valuenow"], "42");
+  assert.equal(pctEl.textContent, "42%");
+  assert.equal(bytesEl.textContent, "210 KB / 500 KB");
+
+  ctrl.complete("Upload complete!");
+  assert.equal(fillEl.style.width, "100%");
+  assert.equal(barAttrs["aria-valuenow"], "100");
+  assert.equal(wrapClasses.set.has("is-complete"), true);
+  assert.equal(dropzoneClasses.set.has("is-uploading"), false);
+
+  // 4. Real-time Firebase Storage resumable upload streams state_changed snapshots into the progress bar
+  const streamedEvents = [];
+  const fakeFile = { name: "studio_bridal.jpg", type: "image/jpeg", size: 400000 };
+  const mockStorageAdapter = {
+    uid: "artist_42",
+    ref: (p) => ({ fullPath: p }),
+    uploadBytesResumable: (refObj) => ({
+      snapshot: { ref: refObj, totalBytes: 400000 },
+      on(_event, nextFn, _errFn, completeFn) {
+        nextFn({ bytesTransferred: 100000, totalBytes: 400000, state: "running" });
+        nextFn({ bytesTransferred: 280000, totalBytes: 400000, state: "running" });
+        nextFn({ bytesTransferred: 400000, totalBytes: 400000, state: "running" });
+        completeFn();
+      }
+    }),
+    getDownloadURL: async (refObj) =>
+      `https://firebasestorage.googleapis.com/v0/b/gen-lang-client-0548683163.appspot.com/o/${encodeURIComponent(refObj.fullPath)}?alt=media`
+  };
+
+  const uploadRes = await firebaseMod.uploadGalleryImageToStorage(fakeFile, {
+    storageAdapter: mockStorageAdapter,
+    onProgress: (ev) => {
+      streamedEvents.push(ev.percent);
+      ctrl.update({
+        percent: ev.percent,
+        bytesTransferred: ev.bytesTransferred,
+        totalBytes: ev.totalBytes,
+        label: "Uploading to Firebase Storage...",
+        status: "uploading"
+      });
+    }
+  });
+
+  assert.deepEqual(streamedEvents, [0, 25, 70, 100, 100]);
+  assert.ok(uploadRes.downloadUrl.startsWith("https://firebasestorage.googleapis.com/"));
+  assert.ok(uploadRes.storagePath.startsWith("gallery_uploads/artist_42/"));
+  assert.equal(fillEl.style.width, "100%");
+  assert.equal(barAttrs["aria-valuenow"], "100");
+
+  // 5. HTML, Service Worker bypass, JS wiring, and CSS verification
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="galleryUploadDropzone"',
+    'id="galleryUploadProgressWrap"',
+    'id="galleryUploadProgressBar"',
+    'role="progressbar"',
+    'id="galleryUploadProgressFill"',
+    'id="galleryUploadProgressPct"',
+    'id="galleryUploadProgressBytes"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing upload progress bar token: ${token}`);
+  }
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("firebasestorage.googleapis.com"), "sw.js must bypass firebasestorage.googleapis.com");
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of ["createUploadProgressController", "uploadGalleryImageToStorage"]) {
+    assert.ok(appJs.includes(token), `app.js missing upload progress wiring: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".gallery-upload-dropzone.is-uploading",
+    ".gallery-upload-progress",
+    ".gallery-upload-progress-track",
+    ".gallery-upload-progress-fill",
+    ".gallery-upload-progress.is-complete",
+    ".gallery-upload-progress.is-error"
+  ]) {
+    assert.ok(css.includes(selector), `CSS missing upload progress rule for ${selector}`);
+  }
+});
+
+test("Admin Dashboard is restricted exclusively to verified chanderstudio0@gmail.com, hidden from visitors, and protected against direct URL access", async () => {
+  const guardMod = await import(pathToFileURL(path.join(webDir, "js/admin-guard.js")).href);
+
+  // 1. Strict single-Gmail authorization check (case-insensitive, emailVerified required)
+  assert.equal(guardMod.AUTHORIZED_ADMIN_EMAIL, "chanderstudio0@gmail.com");
+  assert.equal(guardMod.isAuthorizedAdminUser(null), false);
+  assert.equal(guardMod.isAuthorizedAdminUser(undefined), false);
+  assert.equal(guardMod.isAuthorizedAdminUser({ email: "chanderstudio0@gmail.com", emailVerified: false }), false);
+  assert.equal(guardMod.isAuthorizedAdminUser({ email: "visitor@gmail.com", emailVerified: true }), false);
+  assert.equal(guardMod.isAuthorizedAdminUser({ email: "chanderstudio0@gmail.com.evil.com", emailVerified: true }), false);
+  assert.equal(guardMod.isAuthorizedAdminUser({ email: "chanderstudio0@gmail.com", emailVerified: true }), true);
+  assert.equal(guardMod.isAuthorizedAdminUser({ email: "  CHANDERSTUDIO0@GMAIL.COM  ", emailVerified: true }), true);
+
+  // 2. Direct admin URL detection and route resolution for unauthorized vs authorized users
+  const adminUrlAttempts = [
+    { pathname: "/admin", hash: "", search: "" },
+    { pathname: "/admin/", hash: "", search: "" },
+    { pathname: "/admin/dashboard", hash: "", search: "" },
+    { pathname: "/admin.html", hash: "", search: "" },
+    { pathname: "/", hash: "#admin", search: "" },
+    { pathname: "/", hash: "#/admin", search: "" },
+    { pathname: "/", hash: "#admin/bookings", search: "" },
+    { pathname: "/", hash: "", search: "?route=admin" },
+    { pathname: "/", hash: "", search: "?page=admin" },
+    { pathname: "/", hash: "", search: "?admin=1" }
+  ];
+
+  for (const loc of adminUrlAttempts) {
+    assert.equal(guardMod.isAdminUrlAttempt(loc), true, `Expected admin attempt for ${JSON.stringify(loc)}`);
+    assert.equal(guardMod.extractRequestedRoute(loc), "admin");
+
+    const blocked = guardMod.resolveSafeRoute({ ...loc, isAdmin: false });
+    assert.equal(blocked.route, "home");
+    assert.equal(blocked.blockedAdminAttempt, true);
+    assert.equal(blocked.shouldNormalizeUrl, true);
+
+    const allowed = guardMod.resolveSafeRoute({ ...loc, isAdmin: true });
+    assert.equal(allowed.route, "admin");
+    assert.equal(allowed.blockedAdminAttempt, false);
+  }
+
+  // Non-admin public routes remain unaffected
+  assert.equal(guardMod.isAdminUrlAttempt({ pathname: "/", hash: "#gallery", search: "" }), false);
+  assert.deepEqual(guardMod.resolveSafeRoute({ requestedRoute: "gallery", isAdmin: false }), {
+    route: "gallery",
+    blockedAdminAttempt: false,
+    shouldNormalizeUrl: false
+  });
+
+  // 3. DOM visibility sync hides all admin buttons/views and wipes sensitive DOM nodes when unauthorized
+  const makeFakeEl = (id, initialText = "") => {
+    const classes = new Set();
+    const attrs = {};
+    return {
+      id,
+      hidden: false,
+      innerHTML: initialText,
+      textContent: initialText,
+      classList: {
+        toggle: (cls, force) => {
+          if (force) classes.add(cls);
+          else classes.delete(cls);
+        },
+        has: (cls) => classes.has(cls)
+      },
+      setAttribute: (k, v) => {
+        attrs[k] = v;
+      },
+      removeAttribute: (k) => {
+        delete attrs[k];
+      },
+      attrs
+    };
+  };
+
+  const els = {
+    desktopAdminNavBtn: makeFakeEl("desktopAdminNavBtn"),
+    openAdminConsoleQuickBtn: makeFakeEl("openAdminConsoleQuickBtn"),
+    mobileAdminNavBtn: makeFakeEl("mobileAdminNavBtn"),
+    "view-admin": makeFakeEl("view-admin"),
+    adminLockedPanel: makeFakeEl("adminLockedPanel"),
+    adminConsoleContent: makeFakeEl("adminConsoleContent"),
+    adminStatsGrid: makeFakeEl("adminStatsGrid", "<div>Secret Stats</div>"),
+    adminTabBody: makeFakeEl("adminTabBody", "<div>Client Phone Numbers</div>"),
+    adminVerifiedEmailBadge: makeFakeEl("adminVerifiedEmailBadge", "chanderstudio0@gmail.com")
+  };
+  const fakeDoc = { getElementById: (id) => els[id] || null };
+
+  // Unauthorized visitor: everything hidden & wiped
+  guardMod.syncAdminUiVisibility(fakeDoc, { isAdmin: false, adminEmail: "" });
+  for (const id of [
+    "desktopAdminNavBtn",
+    "openAdminConsoleQuickBtn",
+    "mobileAdminNavBtn",
+    "view-admin",
+    "adminConsoleContent"
+  ]) {
+    assert.equal(els[id].hidden, true, `${id} must be hidden for visitors`);
+    assert.equal(els[id].classList.has("hidden"), true, `${id} must have .hidden class for visitors`);
+    assert.equal(els[id].attrs["aria-hidden"], "true", `${id} must have aria-hidden="true"`);
+  }
+  assert.equal(els.adminStatsGrid.innerHTML, "", "adminStatsGrid must be wiped on unauthorized state");
+  assert.equal(els.adminTabBody.innerHTML, "", "adminTabBody must be wiped on unauthorized state");
+  assert.equal(els.adminVerifiedEmailBadge.textContent, "");
+
+  // Verified admin: admin navigation links and console content become visible (view-admin shown when navigated)
+  guardMod.syncAdminUiVisibility(fakeDoc, { isAdmin: true, adminEmail: "chanderstudio0@gmail.com" });
+  for (const id of [
+    "desktopAdminNavBtn",
+    "openAdminConsoleQuickBtn",
+    "mobileAdminNavBtn",
+    "adminConsoleContent"
+  ]) {
+    assert.equal(els[id].hidden, false, `${id} must be unhidden for verified admin`);
+    assert.equal(els[id].classList.has("hidden"), false, `${id} must remove .hidden for verified admin`);
+  }
+  assert.equal(els.adminLockedPanel.hidden, true);
+  assert.equal(els.adminVerifiedEmailBadge.textContent, "chanderstudio0@gmail.com");
+
+  // 4. Static HTML ships with all admin controls & view hidden by default
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const id of [
+    "desktopAdminNavBtn",
+    "openAdminConsoleQuickBtn",
+    "mobileAdminNavBtn",
+    "view-admin",
+    "adminConsoleContent"
+  ]) {
+    const tagMatch = html.match(new RegExp(`<[^>]+id="${id}"[^>]*>`));
+    assert.ok(tagMatch, `index.html missing #${id}`);
+    assert.ok(/\bhidden\b/.test(tagMatch[0]), `#${id} must include HTML hidden attribute by default`);
+    assert.ok(tagMatch[0].includes('aria-hidden="true"'), `#${id} must include aria-hidden="true" by default`);
+  }
+
+  // 5. Firebase client layer guards every admin action with requireAuthorizedAdmin
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(firebaseJs.includes("isAuthorizedAdminUser"), "firebase.js must enforce isAuthorizedAdminUser");
+  assert.ok(firebaseJs.includes("requireAuthorizedAdmin"), "firebase.js must guard admin operations");
+  assert.ok(!firebaseJs.includes('doc(ctx.db, "admins"'), "firebase.js must not allow /admins doc fallback");
+
+  // 6. Firestore Security Rules strictly enforce verified chanderstudio0@gmail.com only
+  const rulesPath = path.resolve(webDir, "..", "firestore.rules");
+  const rules = fs.readFileSync(rulesPath, "utf8");
+  assert.ok(
+    rules.includes("request.auth.token.email.lower() == 'chanderstudio0@gmail.com'"),
+    "firestore.rules must enforce chanderstudio0@gmail.com"
+  );
+  assert.ok(
+    rules.includes("request.auth.token.email_verified == true"),
+    "firestore.rules must require email_verified == true"
+  );
+  assert.ok(
+    !rules.includes("exists(/databases/$(database)/documents/admins/$(request.auth.uid))"),
+    "firestore.rules must not permit secondary /admins UID bypass"
+  );
+
+  // 7. Zero hardcoded admin passwords or secret keys in web frontend files
+  const jsDir = path.join(webDir, "js");
+  for (const fname of fs.readdirSync(jsDir).filter((f) => f.endsWith(".js"))) {
+    const src = fs.readFileSync(path.join(jsDir, fname), "utf8");
+    assert.equal(/adminPassword\s*[:=]\s*["'][^"']+["']/i.test(src), false, `Hardcoded admin password in ${fname}`);
+    assert.equal(/-----BEGIN PRIVATE KEY-----/.test(src), false, `Private key found in ${fname}`);
+  }
+});
+
+
+
+
+
+
+
+
+
 
 
 

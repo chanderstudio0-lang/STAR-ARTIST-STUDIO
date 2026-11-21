@@ -142,7 +142,7 @@
         <button class="nav-pill" data-route="booking" data-i18n="navBooking">Book Shoot</button>
         <button class="nav-pill" data-route="models" data-i18n="navModels">Models 18+</button>
         <button class="nav-pill" data-route="gallery" data-i18n="navGallery">Gallery</button>
-        <button class="nav-pill hidden" id="desktopAdminNavBtn" data-route="admin" data-i18n="navAdmin">Admin</button>
+        <button class="nav-pill hidden" id="desktopAdminNavBtn" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
       </nav>
 
       <div class="topbar-actions">
@@ -165,7 +165,7 @@
       </div>
       <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
         <span id="signedInUserLabel" class="badge hidden"></span>
-        <button id="openAdminConsoleQuickBtn" class="chip-btn hidden" style="min-height: 36px; padding: 4px 12px;" data-route="admin" data-i18n="navAdmin">Admin</button>
+        <button id="openAdminConsoleQuickBtn" class="chip-btn hidden" style="min-height: 36px; padding: 4px 12px;" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
         <button id="openFirebaseSetupBtn" class="chip-btn" style="min-height: 36px; padding: 4px 12px;" type="button" data-i18n="setupFirebaseBtn">Firebase Setup</button>
       </div>
     </div>
@@ -515,6 +515,42 @@
         <div class="field full">
           <h3 style="margin: 0; color: var(--gold);" data-i18n="galleryUploadTitle">Submit Artwork to Gallery</h3>
         </div>
+        <div class="field full">
+          <label for="galleryImageFile" data-i18n="uploadPhotoLabel">Upload Photo from Phone / Computer</label>
+          <div id="galleryUploadDropzone" class="gallery-upload-dropzone" role="button" tabindex="0" aria-label="Upload photo from device">
+            <input id="galleryImageFile" class="hidden" type="file" accept="image/*" />
+            <div class="gallery-upload-dropzone-content">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              <div>
+                <strong data-i18n="uploadDropzoneTitle">Tap to choose a photo or drag &amp; drop here</strong>
+                <p class="gallery-upload-hint" data-i18n="uploadDropzoneHint">JPG, PNG, or WebP • Auto-compressed for 100% Free Cloud Sync</p>
+              </div>
+              <button id="pickGalleryImageBtn" type="button" class="btn-outline btn-sm" data-i18n="choosePhotoBtn">Choose Photo</button>
+            </div>
+            <div id="galleryUploadProgressWrap" class="gallery-upload-progress hidden" aria-live="polite">
+              <div class="gallery-upload-progress-head">
+                <span id="galleryUploadProgressLabel" class="gallery-upload-progress-label" data-i18n="uploadProgressUploading">Uploading to Firebase Storage...</span>
+                <span id="galleryUploadProgressPct" class="gallery-upload-progress-pct">0%</span>
+              </div>
+              <div id="galleryUploadProgressBar" class="gallery-upload-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Image upload progress">
+                <div id="galleryUploadProgressFill" class="gallery-upload-progress-fill" style="width: 0%;"></div>
+              </div>
+              <div id="galleryUploadProgressBytes" class="gallery-upload-progress-bytes"></div>
+            </div>
+          </div>
+          <div id="galleryUploadPreviewBox" class="gallery-upload-preview hidden">
+            <img id="galleryUploadPreviewImg" class="gallery-upload-preview-img" src="" alt="Selected studio upload preview" />
+            <div class="gallery-upload-preview-info">
+              <strong id="galleryUploadPreviewName">studio-photo.jpg</strong>
+              <span id="galleryUploadPreviewMeta" class="gallery-upload-meta">Ready for upload</span>
+              <button id="clearGalleryImageBtn" type="button" class="btn-outline btn-sm" data-i18n="removePhotoBtn">Remove Photo</button>
+            </div>
+          </div>
+        </div>
         <div class="field">
           <label for="galleryTitle" data-i18n="artworkTitleLabel">Artwork Title</label>
           <input id="galleryTitle" class="input" required maxlength="120" />
@@ -538,17 +574,17 @@
           </select>
         </div>
         <div class="field">
-          <label for="galleryMediaUrl" data-i18n="mediaUrlLabel">Image or Video URL</label>
-          <input id="galleryMediaUrl" class="input" type="url" required placeholder="https://..." />
+          <label for="galleryMediaUrl" data-i18n="mediaUrlLabel">Or Paste Image / Video URL (Optional)</label>
+          <input id="galleryMediaUrl" class="input" type="url" placeholder="https://..." />
         </div>
         <div class="field full">
-          <button type="submit" class="btn-gold" data-i18n="submitGalleryBtn">Submit for Gallery</button>
+          <button id="submitGalleryBtn" type="submit" class="btn-gold" data-i18n="submitGalleryBtn">Upload &amp; Submit to Gallery</button>
         </div>
       </form>
     </section>
 
     <!-- ADMIN DASHBOARD VIEW -->
-    <section id="view-admin" class="view-section hidden">
+    <section id="view-admin" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow">SECURITY-RULE ENFORCED CONSOLE</span>
         <h2 data-i18n="adminHeading">Authorized Admin Console</h2>
@@ -556,10 +592,17 @@
       <div id="adminLockedPanel" class="studio-card">
         <h3 style="margin: 0; color: var(--gold);" data-i18n="adminLockedTitle">Restricted to Authorized Studio Admin</h3>
         <p style="margin: 0; color: var(--text-secondary);" data-i18n="adminLockedDesc">
-          Admin access is enforced by Firebase Firestore security rules. Client-side overrides are blocked.
+          Only the verified Studio Administrator Gmail account can access this dashboard. All other visitors are blocked by Firebase Authentication and Firestore Security Rules.
         </p>
       </div>
-      <div id="adminConsoleContent" class="hidden">
+      <div id="adminConsoleContent" class="hidden" hidden aria-hidden="true">
+        <div id="adminVerifiedBar" class="studio-card admin-verified-bar">
+          <div class="admin-verified-meta">
+            <span class="admin-verified-pill" data-i18n="adminVerifiedLabel">Verified Studio Admin</span>
+            <strong id="adminVerifiedEmailBadge"></strong>
+          </div>
+          <button id="adminSignOutBtn" type="button" class="btn-outline btn-sm" data-i18n="signOutBtn">Sign Out</button>
+        </div>
         <div id="adminStatsGrid" class="stats-grid"></div>
         <div class="filter-bar">
           <button type="button" class="chip-btn active" data-admin-tab="bookings">
@@ -673,6 +716,10 @@
       <span>▣</span>
       <span data-i18n="navGallery">Gallery</span>
     </button>
+    <button id="mobileAdminNavBtn" class="bottom-nav-btn hidden" data-route="admin" hidden aria-hidden="true">
+      <span>⚑</span>
+      <span data-i18n="navAdmin">Admin</span>
+    </button>
   </nav>
 
   <!-- AUTH MODAL -->
@@ -682,6 +729,9 @@
         <h3 style="margin: 0; color: var(--gold);" data-i18n="accountTitle">Studio Member Account</h3>
         <button id="closeAuthModalBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
       </div>
+      <p id="authAdminHint" class="auth-admin-hint hidden" data-i18n="authAdminNotice">
+        Admin Dashboard access is restricted exclusively to the authorized Studio Administrator Gmail account. Sign in with Google to continue.
+      </p>
       <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="authRequiredNotice"></p>
       <button id="googleSignInBtn" class="btn-gold" type="button" data-i18n="signInWithGoogle">Continue with Google</button>
       <div style="text-align: center; font-size: 0.8rem; color: var(--text-muted);" data-i18n="orEmail">or sign in with email</div>
@@ -743,19 +793,93 @@
         <h3 id="lightboxTitle" style="margin: 0; color: var(--gold);"></h3>
         <button id="closeLightboxBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
       </div>
-      <img id="lightboxImg" src="" alt="Gallery preview" style="border-radius: 14px; max-height: 65vh; object-fit: contain; background: #000;" />
+      <div id="lightboxStage" class="lightbox-stage">
+        <button id="lightboxPrevBtn" class="lightbox-nav-btn is-prev" type="button" aria-label="Previous photo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <img id="lightboxImg" class="lightbox-image" src="" alt="Gallery preview" data-active-filter="original" data-zoom-scale="1.00" />
+        <button id="lightboxNextBtn" class="lightbox-nav-btn is-next" type="button" aria-label="Next photo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+        <span id="lightboxCounter" class="lightbox-counter-badge" aria-live="polite">1 / 1</span>
+      </div>
+      <div class="lightbox-slideshow-bar">
+        <button id="lightboxSlideshowBtn" class="btn-outline btn-sm lightbox-slideshow-btn" type="button" aria-pressed="false">
+          <span id="lightboxSlideshowIcon" aria-hidden="true">▶</span>
+          <span id="lightboxSlideshowLabel" data-i18n="lightboxPlaySlideshow">Play Slideshow</span>
+        </button>
+        <div class="lightbox-zoom-controls" role="group" aria-label="Zoom controls">
+          <button id="lightboxZoomOutBtn" class="lightbox-zoom-btn" type="button" aria-label="Zoom out" disabled>−</button>
+          <button id="lightboxZoomResetBtn" class="lightbox-zoom-level" type="button" aria-label="Reset zoom">1.0×</button>
+          <button id="lightboxZoomInBtn" class="lightbox-zoom-btn" type="button" aria-label="Zoom in">+</button>
+        </div>
+        <span class="lightbox-keyboard-hint" data-i18n="lightboxSlideshowHint">Pinch or double-tap to zoom • ← / →</span>
+      </div>
+      <div id="lightboxExifPanel" class="lightbox-exif-panel" aria-label="Image camera metadata"></div>
+      <div class="lightbox-filter-section">
+        <span class="lightbox-filter-label" data-i18n="lightboxFilterLabel">Style Presets</span>
+        <div id="lightboxFilterBar" class="lightbox-filter-bar" role="group" aria-label="Image CSS filter presets">
+          <button type="button" class="lightbox-filter-btn active" data-lightbox-filter="original" aria-pressed="true">
+            <span class="lightbox-filter-swatch is-original" aria-hidden="true"></span>
+            <span data-i18n="filterPresetOriginal">Original</span>
+          </button>
+          <button type="button" class="lightbox-filter-btn" data-lightbox-filter="grayscale" aria-pressed="false">
+            <span class="lightbox-filter-swatch is-grayscale" aria-hidden="true"></span>
+            <span data-i18n="filterPresetGrayscale">Grayscale</span>
+          </button>
+          <button type="button" class="lightbox-filter-btn" data-lightbox-filter="sepia" aria-pressed="false">
+            <span class="lightbox-filter-swatch is-sepia" aria-hidden="true"></span>
+            <span data-i18n="filterPresetSepia">Sepia</span>
+          </button>
+          <button type="button" class="lightbox-filter-btn" data-lightbox-filter="vivid" aria-pressed="false">
+            <span class="lightbox-filter-swatch is-vivid" aria-hidden="true"></span>
+            <span data-i18n="filterPresetVivid">Vivid</span>
+          </button>
+          <button type="button" class="lightbox-filter-btn" data-lightbox-filter="noir" aria-pressed="false">
+            <span class="lightbox-filter-swatch is-noir" aria-hidden="true"></span>
+            <span data-i18n="filterPresetNoir">Noir</span>
+          </button>
+          <button type="button" class="lightbox-filter-btn" data-lightbox-filter="golden" aria-pressed="false">
+            <span class="lightbox-filter-swatch is-golden" aria-hidden="true"></span>
+            <span data-i18n="filterPresetGolden">Golden</span>
+          </button>
+        </div>
+      </div>
       <div class="lightbox-footer">
         <div id="lightboxMeta" style="color: var(--text-secondary); font-size: 0.9rem;"></div>
-        <button id="lightboxShareBtn" class="btn-gold lightbox-share-btn" type="button" aria-label="Share studio image">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="18" cy="5" r="3"></circle>
-            <circle cx="6" cy="12" r="3"></circle>
-            <circle cx="18" cy="19" r="3"></circle>
-            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-          </svg>
-          <span data-i18n="shareImageBtn">Share</span>
-        </button>
+        <div class="lightbox-actions">
+          <button id="lightboxDownloadBtn" class="btn-outline lightbox-action-btn" type="button" aria-label="Download studio image">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span data-i18n="downloadImageBtn">Download</span>
+          </button>
+          <button id="lightboxDownloadAllBtn" class="btn-outline lightbox-action-btn lightbox-download-all-btn" type="button" aria-label="Download all images in active folder as ZIP">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 8v13H3V8"></path>
+              <path d="M1 3h22v5H1z"></path>
+              <path d="M10 12h4"></path>
+            </svg>
+            <span id="lightboxDownloadAllLabel" data-i18n="downloadAllImagesBtn">Download All</span>
+            <span id="lightboxDownloadAllCount" class="lightbox-count-pill">1</span>
+          </button>
+          <button id="lightboxShareBtn" class="btn-gold lightbox-share-btn" type="button" aria-label="Share studio image">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="18" cy="5" r="3"></circle>
+              <circle cx="6" cy="12" r="3"></circle>
+              <circle cx="18" cy="19" r="3"></circle>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+            <span data-i18n="shareImageBtn">Share</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>

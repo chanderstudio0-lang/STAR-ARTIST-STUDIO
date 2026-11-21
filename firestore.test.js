@@ -802,3 +802,120 @@ test("Appointment Notifications: admin can notify user, owner can read & mark re
     })
   );
 });
+
+// --- STRICT SINGLE-GMAIL ADMIN ACCESS TESTS ---
+
+test("Strict Admin: another verified Gmail account is DENIED all admin privileges even if listed in /admins/{uid}", async () => {
+  const OTHER_GMAIL_UID = "other_gmail_uid";
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("admins").doc(OTHER_GMAIL_UID).set({
+      email: "visitor@gmail.com",
+      role: "admin",
+    });
+    await context.firestore().collection("bookings").doc("alice_booking_strict").set({
+      userId: ALICE_UID,
+      clientName: "Alice Client",
+      contactNumber: "9812890081",
+      serviceType: "Photography",
+      preferredDate: "2026-12-15",
+      status: "Pending",
+      createdAt: new Date(),
+    });
+    await context.firestore().collection("models").doc("alice_model_strict").set({
+      userId: ALICE_UID,
+      fullName: "Alice Wonder",
+      age: 22,
+      city: "Sirsa",
+      phoneNumber: "9812890081",
+      consentGiven: true,
+      status: "pending",
+      createdAt: new Date(),
+    });
+    await context.firestore().collection("gallery").doc("alice_gallery_strict").set({
+      userId: ALICE_UID,
+      title: "Pending Shoot",
+      category: "Fashion",
+      mediaType: "photo",
+      mediaUrl: "https://example.com/shoot.jpg",
+      isDemo: false,
+      status: "pending",
+      createdAt: new Date(),
+    });
+  });
+
+  const otherGmailDb = testEnv
+    .authenticatedContext(OTHER_GMAIL_UID, { email: "visitor@gmail.com", email_verified: true })
+    .firestore();
+
+  // Cannot read own or others' /admins doc
+  await assertFails(otherGmailDb.collection("admins").doc(OTHER_GMAIL_UID).get());
+  await assertFails(otherGmailDb.collection("admins").get());
+
+  // Cannot read or modify bookings, models, pending gallery, or announcements
+  await assertFails(otherGmailDb.collection("bookings").doc("alice_booking_strict").get());
+  await assertFails(
+    otherGmailDb.collection("bookings").doc("alice_booking_strict").update({
+      status: "Confirmed",
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(otherGmailDb.collection("models").doc("alice_model_strict").get());
+  await assertFails(
+    otherGmailDb.collection("models").doc("alice_model_strict").update({
+      status: "approved",
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    otherGmailDb.collection("gallery").doc("alice_gallery_strict").update({
+      status: "approved",
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    otherGmailDb.collection("announcements").doc("other_gmail_announce").set({
+      authorId: OTHER_GMAIL_UID,
+      title: "Unauthorized Broadcast",
+      message: "Should be denied because email is not chanderstudio0@gmail.com.",
+      category: "Studio Update",
+      priority: "normal",
+      createdAt: new Date(),
+    })
+  );
+});
+
+test("Booking integrity: regular owner can cancel own booking but CANNOT self-confirm or complete it", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("bookings").doc("alice_self_confirm").set({
+      userId: ALICE_UID,
+      clientName: "Alice Client",
+      contactNumber: "9812890081",
+      serviceType: "Modeling",
+      preferredDate: "2026-12-20",
+      status: "Pending",
+      createdAt: new Date(),
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@gmail.com", email_verified: true }).firestore();
+
+  await assertFails(
+    aliceDb.collection("bookings").doc("alice_self_confirm").update({
+      status: "Confirmed",
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookings").doc("alice_self_confirm").update({
+      status: "Completed",
+      updatedAt: new Date(),
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("bookings").doc("alice_self_confirm").update({
+      status: "Cancelled",
+      updatedAt: new Date(),
+    })
+  );
+});
+

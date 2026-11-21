@@ -517,7 +517,15 @@ export const SHOWCASE_GALLERY_SEEDS = [
     mediaType: "photo",
     mediaUrl: "/images/gallery-fashion.jpg",
     status: "approved",
-    isDemo: true
+    isDemo: true,
+    metadata: {
+      camera: "Sony α7R V",
+      lens: "85mm f/1.4 GM",
+      aperture: "f/2.2",
+      shutterSpeed: "1/200s",
+      iso: "ISO 100",
+      dateTaken: "2026-10-14"
+    }
   },
   {
     id: "seed_bridal",
@@ -526,7 +534,15 @@ export const SHOWCASE_GALLERY_SEEDS = [
     mediaType: "photo",
     mediaUrl: "/images/gallery-bridal.jpg",
     status: "approved",
-    isDemo: true
+    isDemo: true,
+    metadata: {
+      camera: "Canon EOS R5",
+      lens: "50mm f/1.2L",
+      aperture: "f/1.8",
+      shutterSpeed: "1/250s",
+      iso: "ISO 160",
+      dateTaken: "2026-10-28"
+    }
   },
   {
     id: "seed_portrait",
@@ -535,7 +551,15 @@ export const SHOWCASE_GALLERY_SEEDS = [
     mediaType: "photo",
     mediaUrl: "/images/gallery-portrait.jpg",
     status: "approved",
-    isDemo: true
+    isDemo: true,
+    metadata: {
+      camera: "Sony α7R V",
+      lens: "85mm f/1.4 GM",
+      aperture: "f/2.8",
+      shutterSpeed: "1/160s",
+      iso: "ISO 100",
+      dateTaken: "2026-11-02"
+    }
   },
   {
     id: "seed_commercial",
@@ -544,7 +568,15 @@ export const SHOWCASE_GALLERY_SEEDS = [
     mediaType: "photo",
     mediaUrl: "/images/gallery-commercial.jpg",
     status: "approved",
-    isDemo: true
+    isDemo: true,
+    metadata: {
+      camera: "Canon EOS R5",
+      lens: "100mm f/2.8L Macro",
+      aperture: "f/8.0",
+      shutterSpeed: "1/125s",
+      iso: "ISO 100",
+      dateTaken: "2026-11-07"
+    }
   },
   {
     id: "seed_model",
@@ -553,6 +585,14 @@ export const SHOWCASE_GALLERY_SEEDS = [
     mediaType: "photo",
     mediaUrl: "/images/model-portrait.jpg",
     status: "approved",
-    isDemo: true
+    isDemo: true,
+    metadata: {
+      camera: "Sony α7 IV",
+      lens: "70-200mm f/2.8 GM II",
+      aperture: "f/2.8",
+      shutterSpeed: "1/250s",
+      iso: "ISO 200",
+      dateTaken: "2026-11-12"
+    }
   }
 ];

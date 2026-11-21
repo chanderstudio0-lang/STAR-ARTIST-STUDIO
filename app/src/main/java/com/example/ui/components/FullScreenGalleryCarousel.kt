@@ -1,10 +1,12 @@
 package com.example.ui.components
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -37,6 +39,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
@@ -44,6 +48,7 @@ import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,9 +66,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -90,9 +102,23 @@ import com.example.ui.theme.DarkStudioElevatedSurface
 import com.example.ui.theme.DarkStudioOutline
 import com.example.ui.theme.DarkTextSecondary
 import com.example.ui.theme.WhatsAppGreen
+import com.example.util.ImageDownloadHelper
 import com.example.util.ShareHelper
 import com.example.util.StudioStrings
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+internal const val CAROUSEL_SLIDESHOW_INTERVAL_MS = 3800L
+
+/**
+ * Computes the next page index when stepping through the lightbox carousel,
+ * wrapping continuously between the first and last slide.
+ */
+internal fun nextCarouselIndex(currentIndex: Int, totalCount: Int, delta: Int): Int {
+    if (totalCount <= 1) return 0
+    val safeCurrent = currentIndex.coerceIn(0, totalCount - 1)
+    return ((safeCurrent + delta) % totalCount + totalCount) % totalCount
+}
 
 /**
  * Resolves bundled `drawable://` keys into local Android drawable resource IDs so curated
@@ -137,14 +163,37 @@ fun FullScreenGalleryCarousel(
     val safeInitialIndex = initialIndex.coerceIn(0, items.size - 1)
     val pagerState = rememberPagerState(initialPage = safeInitialIndex) { items.size }
     val thumbnailListState = rememberLazyListState()
+    val focusRequester = remember { FocusRequester() }
     var currentZoomScale by remember { mutableFloatStateOf(1f) }
     var zoomResetSignal by remember { mutableStateOf(0) }
+    var isDownloading by remember { mutableStateOf(false) }
+    var isSlideshowPlaying by remember { mutableStateOf(false) }
+
+    fun stepSlide(delta: Int) {
+        if (items.size <= 1) return
+        val nextPage = nextCarouselIndex(pagerState.currentPage, items.size, delta)
+        coroutineScope.launch {
+            pagerState.animateScrollToPage(nextPage)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
 
     LaunchedEffect(pagerState.currentPage) {
         currentZoomScale = 1f
         thumbnailListState.animateScrollToItem(
             (pagerState.currentPage - 2).coerceAtLeast(0)
         )
+    }
+
+    LaunchedEffect(isSlideshowPlaying, pagerState.currentPage, currentZoomScale, items.size) {
+        if (isSlideshowPlaying && items.size > 1 && currentZoomScale <= 1.05f) {
+            delay(CAROUSEL_SLIDESHOW_INTERVAL_MS)
+            val nextPage = nextCarouselIndex(pagerState.currentPage, items.size, 1)
+            pagerState.animateScrollToPage(nextPage)
+        }
     }
 
     val currentItem = items[pagerState.currentPage]
@@ -162,6 +211,34 @@ fun FullScreenGalleryCarousel(
             modifier = modifier
                 .fillMaxSize()
                 .background(Color(0xFF080808))
+                .focusRequester(focusRequester)
+                .focusable()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (keyEvent.key) {
+                        Key.DirectionLeft -> {
+                            stepSlide(-1)
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            stepSlide(1)
+                            true
+                        }
+                        Key.Spacebar -> {
+                            if (items.size > 1) {
+                                isSlideshowPlaying = !isSlideshowPlaying
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Key.Escape -> {
+                            onDismiss()
+                            true
+                        }
+                        else -> false
+                    }
+                }
                 .testTag("gallery_fullscreen_carousel"),
             color = Color(0xFF080808)
         ) {
@@ -214,31 +291,87 @@ fun FullScreenGalleryCarousel(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Current Page Indicator Badge
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color.Black.copy(alpha = 0.78f))
-                            .border(1.dp, DarkGoldPrimary.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
-                            .semantics(mergeDescendants = true) {}
-                            .testTag("carousel_counter")
-                            .padding(horizontal = 14.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = "${pagerState.currentPage + 1} / ${items.size}",
-                            color = DarkGoldLight,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-
-                    // Action Icons: Zoom Toggle, Share & Close (48.dp touch targets)
+                    // Current Page Indicator Badge + Slideshow Live Pill
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Color.Black.copy(alpha = 0.78f))
+                                .border(1.dp, DarkGoldPrimary.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                                .semantics(mergeDescendants = true) {}
+                                .testTag("carousel_counter")
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "${pagerState.currentPage + 1} / ${items.size}",
+                                color = DarkGoldLight,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+
+                        if (isSlideshowPlaying && items.size > 1) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(DarkGoldContainer.copy(alpha = 0.92f))
+                                    .border(1.dp, DarkGoldPrimary, RoundedCornerShape(20.dp))
+                                    .testTag("carousel_slideshow_badge")
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (language == AppLanguage.HINDI) "स्लाइडशो" else "AUTO",
+                                    color = DarkGoldLight,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 10.5.sp,
+                                    letterSpacing = 0.6.sp,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+
+                    // Action Icons: Slideshow Play/Pause, Zoom Toggle, Download, Share & Close (48.dp touch targets)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (items.size > 1) {
+                            IconButton(
+                                onClick = { isSlideshowPlaying = !isSlideshowPlaying },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isSlideshowPlaying) DarkGoldContainer.copy(alpha = 0.92f)
+                                        else Color.Black.copy(alpha = 0.78f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isSlideshowPlaying) DarkGoldPrimary else DarkStudioOutline,
+                                        CircleShape
+                                    )
+                                    .testTag("carousel_slideshow_toggle_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isSlideshowPlaying) {
+                                        if (language == AppLanguage.HINDI) "स्लाइडशो रोकें" else "Pause Slideshow"
+                                    } else {
+                                        if (language == AppLanguage.HINDI) "स्लाइडशो चलाएं" else "Play Slideshow"
+                                    },
+                                    tint = DarkGoldLight,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
                         IconButton(
                             onClick = { zoomResetSignal += 1 },
                             modifier = Modifier
@@ -254,6 +387,59 @@ fun FullScreenGalleryCarousel(
                                 tint = DarkGoldLight,
                                 modifier = Modifier.size(20.dp)
                             )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                if (!isDownloading) {
+                                    isDownloading = true
+                                    val targetItem = currentItem
+                                    coroutineScope.launch {
+                                        val result = ImageDownloadHelper.savePortfolioImageToGallery(
+                                            context = context,
+                                            title = targetItem.title,
+                                            mediaUrl = targetItem.mediaUrl
+                                        )
+                                        isDownloading = false
+                                        val toastMsg = if (result.success) {
+                                            if (language == AppLanguage.HINDI) {
+                                                "इमेज डाउनलोड हो गई: ${result.fileName}"
+                                            } else {
+                                                "Saved to Gallery: ${result.fileName}"
+                                            }
+                                        } else {
+                                            if (language == AppLanguage.HINDI) {
+                                                "इमेज डाउनलोड नहीं हो सकी। कृपया पुनः प्रयास करें।"
+                                            } else {
+                                                result.errorMessage ?: "Could not download image."
+                                            }
+                                        }
+                                        Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            enabled = !isDownloading,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.78f))
+                                .border(1.dp, DarkStudioOutline, CircleShape)
+                                .testTag("carousel_download_button")
+                        ) {
+                            if (isDownloading) {
+                                CircularProgressIndicator(
+                                    color = DarkGoldPrimary,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = if (language == AppLanguage.HINDI) "इमेज डाउनलोड करें" else "Download Image",
+                                    tint = DarkGoldPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
 
                         IconButton(
@@ -301,15 +487,11 @@ fun FullScreenGalleryCarousel(
                 }
 
                 // =============================================================
-                // 3. LATERAL NAVIGATION CHEVRONS (48.dp TOUCH TARGETS)
+                // 3. LATERAL NAVIGATION CHEVRONS (WRAP-AROUND, 48.dp TOUCH TARGETS)
                 // =============================================================
-                if (pagerState.currentPage > 0) {
+                if (items.size > 1) {
                     IconButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                            }
-                        },
+                        onClick = { stepSlide(-1) },
                         modifier = Modifier
                             .align(Alignment.CenterStart)
                             .padding(start = 12.dp)
@@ -326,15 +508,9 @@ fun FullScreenGalleryCarousel(
                             modifier = Modifier.size(22.dp)
                         )
                     }
-                }
 
-                if (pagerState.currentPage < items.size - 1) {
                     IconButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
-                        },
+                        onClick = { stepSlide(1) },
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 12.dp)

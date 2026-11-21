@@ -15,6 +15,13 @@ import {
   validateManualModelVerification,
   renderAdminModelsSectionHtml
 } from "./admin-models.js";
+import {
+  isAuthorizedAdminUser,
+  isAdminUrlAttempt,
+  extractRequestedRoute,
+  resolveSafeRoute,
+  syncAdminUiVisibility
+} from "./admin-guard.js";
 import { renderCatalogTierSectionHtml } from "./tier-info.js";
 import {
   renderLazyBlurImageHtml,
@@ -45,8 +52,31 @@ import {
 import {
   countCatalogByCategory,
   countGalleryByCategory,
-  shareGalleryImage
+  shareGalleryImage,
+  downloadGalleryImage,
+  downloadGalleryFolderAsZip,
+  applyLightboxFilterToElement,
+  getVisibleGalleryItems,
+  getNextLightboxIndex,
+  formatLightboxSlideCounter,
+  resolveLightboxKeyAction,
+  createLightboxSlideshowController,
+  applyLightboxZoomTransform,
+  createLightboxZoomController,
+  LIGHTBOX_MAX_ZOOM,
+  renderLightboxMetadataHtml
 } from "./gallery-share.js";
+import {
+  validateGallerySubmission,
+  suggestTitleFromFileName,
+  encodeImageFileToStudioPayloads,
+  createUploadProgressController
+} from "./image-upload.js";
+import {
+  readExifFromImageUrl,
+  hasMeaningfulExif,
+  sanitizeExifMetadata
+} from "./exif-reader.js";
 import {
   subscribeAuthState,
   signInWithGooglePopup,
@@ -61,6 +91,7 @@ import {
   fetchMyModels,
   submitModelRegistration,
   submitGalleryUpload,
+  uploadGalleryImageToStorage,
   fetchServiceReviews,
   submitCatalogReview,
   adminFetchDashboardData,
@@ -81,6 +112,8 @@ const state = {
   route: "home",
   user: null,
   isAdmin: false,
+  authResolved: false,
+  pendingAdminRoute: false,
   firebaseReady: false,
   deferredInstallPrompt: null,
   catalogCategory: "all",
@@ -105,6 +138,15 @@ const state = {
   testimonialAutoplay: true,
   testimonialTimer: null,
   activeLightboxItem: null,
+  activeLightboxItems: [],
+  activeLightboxFolder: "All",
+  activeLightboxIndex: -1,
+  activeLightboxFilter: "original",
+  lightboxSlideshowPlaying: false,
+  isPackingGalleryZip: false,
+  exifCache: {},
+  uploadedGalleryMedia: null,
+  isEncodingGalleryImage: false,
   adminData: { bookings: [], models: [], gallery: [], announcements: [] }
 };
 
@@ -149,6 +191,23 @@ function applyTranslations() {
 
   const authBtn = document.getElementById("authActionBtn");
   if (authBtn) authBtn.textContent = state.user ? t("signOutBtn") : t("signInBtn");
+
+  if (state.activeLightboxItem) {
+    const exifEl = document.getElementById("lightboxExifPanel");
+    if (exifEl) {
+      const cacheKey = state.activeLightboxItem.id || state.activeLightboxItem.mediaUrl || "";
+      const cached = state.exifCache[cacheKey];
+      const mergedItem = cached?.hasExif
+        ? { ...state.activeLightboxItem, metadata: { ...cached, ...(state.activeLightboxItem.metadata || {}) } }
+        : state.activeLightboxItem;
+      exifEl.innerHTML = renderLightboxMetadataHtml(mergedItem, {
+        lang: state.lang,
+        t,
+        escapeHtml,
+        autoExtracted: Boolean(cached?.hasExif)
+      });
+    }
+  }
 }
 
 function applyTheme() {
@@ -159,24 +218,78 @@ function applyTheme() {
   }
 }
 
-function navigateTo(route) {
+function hasVerifiedAdminSession() {
+  return Boolean(state.isAdmin && isAuthorizedAdminUser(state.user));
+}
+
+function openAuthModal({ adminNotice = false } = {}) {
+  const hint = document.getElementById("authAdminHint");
+  if (hint) {
+    hint.classList.toggle("hidden", !adminNotice);
+  }
+  document.getElementById("authModal")?.classList.remove("hidden");
+}
+
+function closeAuthModal() {
+  document.getElementById("authAdminHint")?.classList.add("hidden");
+  document.getElementById("authModal")?.classList.add("hidden");
+}
+
+function navigateTo(route, { silentBlock = false } = {}) {
   const validRoutes = ["home", "catalog", "booking", "models", "gallery", "admin"];
-  const target = validRoutes.includes(route) ? route : "home";
+  const isAdminNow = hasVerifiedAdminSession();
+  const resolution = resolveSafeRoute({
+    requestedRoute: route,
+    pathname: window.location.pathname,
+    hash: window.location.hash,
+    search: window.location.search,
+    isAdmin: isAdminNow
+  });
+
+  if (resolution.blockedAdminAttempt) {
+    syncAdminUiVisibility(document, { isAdmin: false });
+    if (resolution.shouldNormalizeUrl) {
+      history.replaceState(null, "", "/#home");
+    }
+    if (!state.authResolved) {
+      state.pendingAdminRoute = true;
+    } else if (!silentBlock) {
+      if (state.user) {
+        showToast(t("adminAccessDeniedToast"));
+      } else {
+        state.pendingAdminRoute = true;
+        showToast(t("adminSignInRequiredToast"));
+        if (state.firebaseReady) {
+          openAuthModal({ adminNotice: true });
+        } else {
+          document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+        }
+      }
+    }
+  }
+
+  const target = resolution.route;
   state.route = target;
-  if (window.location.hash !== `#${target}`) {
-    history.replaceState(null, "", `#${target}`);
+  if (resolution.shouldNormalizeUrl || window.location.hash !== `#${target}`) {
+    history.replaceState(null, "", `/#${target}`);
   }
 
   validRoutes.forEach((r) => {
     const sec = document.getElementById(`view-${r}`);
-    if (sec) sec.classList.toggle("hidden", r !== target);
+    if (!sec) return;
+    const show = r === target && (r !== "admin" || isAdminNow);
+    sec.classList.toggle("hidden", !show);
+    sec.hidden = !show;
+    if (r === "admin") {
+      sec.setAttribute("aria-hidden", show ? "false" : "true");
+    }
   });
 
   document.querySelectorAll("[data-route]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-route") === target);
   });
 
-  if (target === "admin" && state.isAdmin) {
+  if (target === "admin" && isAdminNow) {
     loadAdminConsole();
   }
 }
@@ -543,15 +656,15 @@ function renderMyModels() {
 }
 
 async function loadAdminConsole() {
-  const locked = document.getElementById("adminLockedPanel");
-  const content = document.getElementById("adminConsoleContent");
-  if (!state.isAdmin) {
-    locked?.classList.remove("hidden");
-    content?.classList.add("hidden");
+  if (!hasVerifiedAdminSession()) {
+    state.adminData = { bookings: [], models: [], gallery: [], announcements: [] };
+    syncAdminUiVisibility(document, { isAdmin: false });
+    if (state.route === "admin") {
+      navigateTo("home", { silentBlock: true });
+    }
     return;
   }
-  locked?.classList.add("hidden");
-  content?.classList.remove("hidden");
+  syncAdminUiVisibility(document, { isAdmin: true, adminEmail: state.user?.email || "" });
 
   try {
     state.adminData = await adminFetchDashboardData();
@@ -562,6 +675,10 @@ async function loadAdminConsole() {
 }
 
 function renderAdminConsole() {
+  if (!hasVerifiedAdminSession()) {
+    syncAdminUiVisibility(document, { isAdmin: false });
+    return;
+  }
   const stats = document.getElementById("adminStatsGrid");
   if (stats) {
     stats.innerHTML = `
@@ -695,8 +812,7 @@ function updateFirebaseUiStatus() {
   const dot = document.getElementById("firebaseStatusDot");
   const txt = document.getElementById("firebaseStatusText");
   const userLabel = document.getElementById("signedInUserLabel");
-  const adminNav = document.getElementById("desktopAdminNavBtn");
-  const adminQuick = document.getElementById("openAdminConsoleQuickBtn");
+  const isAdminNow = hasVerifiedAdminSession();
 
   if (dot) dot.classList.toggle("ready", state.firebaseReady);
   if (txt) txt.textContent = state.firebaseReady ? t("firebaseStatusReady") : t("firebaseStatusOffline");
@@ -704,8 +820,10 @@ function updateFirebaseUiStatus() {
     userLabel.textContent = state.user?.email || state.user?.displayName || "";
     userLabel.classList.toggle("hidden", !state.user);
   }
-  adminNav?.classList.toggle("hidden", !state.isAdmin);
-  adminQuick?.classList.toggle("hidden", !state.isAdmin);
+  syncAdminUiVisibility(document, {
+    isAdmin: isAdminNow,
+    adminEmail: state.user?.email || ""
+  });
   applyTranslations();
 }
 
@@ -889,13 +1007,17 @@ function wireEvents() {
     const cardLightbox = e.target.closest("[data-lightbox-id]");
     if (cardLightbox) {
       const id = cardLightbox.getAttribute("data-lightbox-id");
-      const item = state.galleryItems.find((g) => g.id === id);
-      if (item) {
-        state.activeLightboxItem = item;
-        document.getElementById("lightboxTitle").textContent = item.title;
-        document.getElementById("lightboxImg").src = item.mediaUrl || item.thumbnailUrl;
-        document.getElementById("lightboxMeta").textContent = `${item.category} • ${item.mediaType || "photo"}`;
-        document.getElementById("lightboxModal").classList.remove("hidden");
+      const fromGalleryGrid = Boolean(cardLightbox.closest("#galleryGrid"));
+      const folderName = fromGalleryGrid ? state.galleryFilter : "All";
+      const pool = fromGalleryGrid
+        ? getVisibleGalleryItems(state.galleryItems, state.galleryFilter)
+        : [...state.galleryItems];
+      const idx = pool.findIndex((g) => g.id === id);
+      if (idx >= 0) {
+        openLightboxAt(pool, idx, folderName);
+      } else {
+        const fallbackIdx = state.galleryItems.findIndex((g) => g.id === id);
+        if (fallbackIdx >= 0) openLightboxAt([...state.galleryItems], fallbackIdx, "All");
       }
       return;
     }
@@ -1029,6 +1151,10 @@ function wireEvents() {
 
     const adminTabBtn = e.target.closest("[data-admin-tab]");
     if (adminTabBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       state.adminTab = adminTabBtn.getAttribute("data-admin-tab");
       document.querySelectorAll("[data-admin-tab]").forEach((b) => b.classList.toggle("active", b === adminTabBtn));
       renderAdminConsole();
@@ -1037,6 +1163,7 @@ function wireEvents() {
 
     const admModelFilterBtn = e.target.closest("[data-adm-model-filter]");
     if (admModelFilterBtn) {
+      if (!hasVerifiedAdminSession()) return;
       state.adminModelFilter = admModelFilterBtn.getAttribute("data-adm-model-filter") || "pending";
       renderAdminConsole();
       return;
@@ -1044,6 +1171,7 @@ function wireEvents() {
 
     const admQuickNoteBtn = e.target.closest("[data-adm-model-quicknote]");
     if (admQuickNoteBtn) {
+      if (!hasVerifiedAdminSession()) return;
       const modelId = admQuickNoteBtn.getAttribute("data-adm-model-quicknote");
       const val = admQuickNoteBtn.getAttribute("data-adm-quicknote-val") || "";
       state.adminModelDrafts[modelId] = {
@@ -1055,14 +1183,26 @@ function wireEvents() {
     }
 
     if (e.target.matches("[data-adm-bk-id]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       await adminUpdateBookingStatus(e.target.getAttribute("data-adm-bk-id"), e.target.getAttribute("data-adm-bk-st"));
       showToast("Booking status updated.");
       await loadAdminConsole();
     } else if (e.target.matches("[data-adm-bk-del]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       await adminDeleteBooking(e.target.getAttribute("data-adm-bk-del"));
       showToast("Booking removed.");
       await loadAdminConsole();
     } else if (e.target.matches("[data-adm-mdl-id]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       const modelId = e.target.getAttribute("data-adm-mdl-id");
       const nextStatus = e.target.getAttribute("data-adm-mdl-st");
       const targetModel = state.adminData.models.find((m) => m.id === modelId);
@@ -1102,10 +1242,18 @@ function wireEvents() {
         showToast(updateErr.message || "Unable to update model verification status.");
       }
     } else if (e.target.matches("[data-adm-gal-id]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       await adminUpdateGalleryStatus(e.target.getAttribute("data-adm-gal-id"), e.target.getAttribute("data-adm-gal-st"));
       showToast("Gallery item updated.");
       await loadAdminConsole();
     } else if (e.target.matches("[data-adm-gal-del]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       await adminDeleteGalleryItem(e.target.getAttribute("data-adm-gal-del"));
       showToast("Gallery item deleted.");
       await loadAdminConsole();
@@ -1227,12 +1375,18 @@ function wireEvents() {
     } else if (!state.firebaseReady) {
       document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
     } else {
-      document.getElementById("authModal")?.classList.remove("hidden");
+      openAuthModal({ adminNotice: false });
     }
   });
 
+  document.getElementById("adminSignOutBtn")?.addEventListener("click", async () => {
+    await signOutFirebase();
+    showToast("Signed out.");
+  });
+
   document.getElementById("closeAuthModalBtn")?.addEventListener("click", () => {
-    document.getElementById("authModal")?.classList.add("hidden");
+    state.pendingAdminRoute = false;
+    closeAuthModal();
   });
 
   document.getElementById("openFirebaseSetupBtn")?.addEventListener("click", () => {
@@ -1243,9 +1397,505 @@ function wireEvents() {
     document.getElementById("firebaseSetupModal")?.classList.add("hidden");
   });
 
-  document.getElementById("closeLightboxBtn")?.addEventListener("click", () => {
+  function setActiveLightboxFilter(presetId = "original") {
+    const imgEl = document.getElementById("lightboxImg");
+    const applied = applyLightboxFilterToElement(imgEl, presetId);
+    state.activeLightboxFilter = applied.id;
+    document.querySelectorAll("#lightboxFilterBar [data-lightbox-filter]").forEach((btn) => {
+      const isMatch = btn.getAttribute("data-lightbox-filter") === applied.id;
+      btn.classList.toggle("active", isMatch);
+      btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+    });
+  }
+
+  function syncLightboxSlideshowUi() {
+    const playing = state.lightboxSlideshowPlaying;
+    const total = state.activeLightboxItems.length;
+    const btn = document.getElementById("lightboxSlideshowBtn");
+    const iconEl = document.getElementById("lightboxSlideshowIcon");
+    const labelEl = document.getElementById("lightboxSlideshowLabel");
+    const prevBtn = document.getElementById("lightboxPrevBtn");
+    const nextBtn = document.getElementById("lightboxNextBtn");
+    const canCycle = total > 1;
+
+    if (prevBtn) {
+      prevBtn.disabled = !canCycle;
+      prevBtn.setAttribute("aria-label", t("lightboxPrevLabel"));
+    }
+    if (nextBtn) {
+      nextBtn.disabled = !canCycle;
+      nextBtn.setAttribute("aria-label", t("lightboxNextLabel"));
+    }
+    if (btn) {
+      btn.disabled = !canCycle;
+      btn.classList.toggle("is-playing", playing && canCycle);
+      btn.setAttribute("aria-pressed", playing && canCycle ? "true" : "false");
+    }
+    if (iconEl) iconEl.textContent = playing && canCycle ? "⏸" : "▶";
+    if (labelEl) {
+      labelEl.textContent = playing && canCycle ? t("lightboxPauseSlideshow") : t("lightboxPlaySlideshow");
+    }
+    const downloadAllBtn = document.getElementById("lightboxDownloadAllBtn");
+    const downloadAllCountEl = document.getElementById("lightboxDownloadAllCount");
+    if (downloadAllCountEl) {
+      downloadAllCountEl.textContent = String(total);
+    }
+    if (downloadAllBtn) {
+      downloadAllBtn.disabled = total <= 0 || state.isPackingGalleryZip;
+    }
+  }
+
+  function getLightboxStageSize() {
+    const stageEl = document.getElementById("lightboxStage");
+    const rect = stageEl?.getBoundingClientRect?.();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      return { width: rect.width, height: rect.height };
+    }
+    return { width: 600, height: 400 };
+  }
+
+  function syncLightboxZoomUi(snapshot = { scale: 1, x: 0, y: 0, isZoomed: false }) {
+    const outBtn = document.getElementById("lightboxZoomOutBtn");
+    const resetBtn = document.getElementById("lightboxZoomResetBtn");
+    const inBtn = document.getElementById("lightboxZoomInBtn");
+    const scale = Number(snapshot?.scale || 1);
+    const zoomed = Boolean(snapshot?.isZoomed);
+
+    if (resetBtn) {
+      resetBtn.textContent = `${scale.toFixed(1)}×`;
+      resetBtn.classList.toggle("is-active", zoomed);
+      resetBtn.setAttribute("aria-label", t("lightboxZoomResetLabel"));
+      resetBtn.setAttribute("title", t("lightboxZoomResetLabel"));
+    }
+    if (outBtn) {
+      outBtn.disabled = !zoomed;
+      outBtn.setAttribute("aria-label", t("lightboxZoomOutLabel"));
+      outBtn.setAttribute("title", t("lightboxZoomOutLabel"));
+    }
+    if (inBtn) {
+      inBtn.disabled = scale >= LIGHTBOX_MAX_ZOOM - 0.01;
+      inBtn.setAttribute("aria-label", t("lightboxZoomInLabel"));
+      inBtn.setAttribute("title", t("lightboxZoomInLabel"));
+    }
+  }
+
+  const lightboxZoom = createLightboxZoomController({
+    onChange: (snapshot) => {
+      const imgEl = document.getElementById("lightboxImg");
+      applyLightboxZoomTransform(imgEl, snapshot);
+      syncLightboxZoomUi(snapshot);
+    }
+  });
+
+  const lightboxSlideshow = createLightboxSlideshowController({
+    onStep: () => {
+      if (state.activeLightboxItems.length > 1 && !lightboxZoom.isZoomed()) {
+        stepLightboxSlide(1, { fromAutoplay: true });
+      }
+    },
+    onStateChange: (isPlaying) => {
+      state.lightboxSlideshowPlaying = isPlaying;
+      syncLightboxSlideshowUi();
+    }
+  });
+
+  function renderLightboxSlide() {
+    const total = state.activeLightboxItems.length;
+    if (total <= 0 || state.activeLightboxIndex < 0 || state.activeLightboxIndex >= total) return;
+    const item = state.activeLightboxItems[state.activeLightboxIndex];
+    state.activeLightboxItem = item;
+    setActiveLightboxFilter("original");
+    lightboxZoom.reset();
+    const titleEl = document.getElementById("lightboxTitle");
+    const imgEl = document.getElementById("lightboxImg");
+    const metaEl = document.getElementById("lightboxMeta");
+    const counterEl = document.getElementById("lightboxCounter");
+    const exifEl = document.getElementById("lightboxExifPanel");
+    if (titleEl) titleEl.textContent = item.title;
+    if (imgEl) {
+      imgEl.classList.remove("is-pinching");
+      imgEl.src = item.mediaUrl || item.thumbnailUrl;
+      imgEl.alt = item.title || "Gallery preview";
+    }
+    if (metaEl) metaEl.textContent = `${item.category} • ${item.mediaType || "photo"}`;
+    if (counterEl) counterEl.textContent = formatLightboxSlideCounter(state.activeLightboxIndex, total);
+    if (exifEl) {
+      const imgSrc = item.mediaUrl || item.thumbnailUrl || "";
+      const cacheKey = item.id || imgSrc;
+      const existingMeta = item.metadata || item.exif || null;
+      const hasPresetCameraExif = Boolean(
+        existingMeta && (existingMeta.camera || existingMeta.aperture || existingMeta.iso || existingMeta.shutterSpeed)
+      );
+      const cachedExif = state.exifCache[cacheKey];
+      const shouldAutoRead = !hasPresetCameraExif && !cachedExif && Boolean(imgSrc);
+      const mergedItem = cachedExif?.hasExif
+        ? { ...item, metadata: { ...cachedExif, ...(existingMeta || {}) } }
+        : item;
+
+      exifEl.innerHTML = renderLightboxMetadataHtml(mergedItem, {
+        lang: state.lang,
+        t,
+        escapeHtml,
+        autoExtracted: Boolean(cachedExif?.hasExif),
+        isReadingExif: shouldAutoRead
+      });
+
+      if (shouldAutoRead) {
+        readExifFromImageUrl(imgSrc).then((parsed) => {
+          state.exifCache[cacheKey] = parsed;
+          if (state.activeLightboxItem?.id !== item.id) return;
+          const updatedItem = parsed.hasExif
+            ? { ...item, metadata: { ...parsed, ...(existingMeta || {}) } }
+            : item;
+          exifEl.innerHTML = renderLightboxMetadataHtml(updatedItem, {
+            lang: state.lang,
+            t,
+            escapeHtml,
+            autoExtracted: Boolean(parsed.hasExif),
+            isReadingExif: false
+          });
+        });
+      }
+    }
+    syncLightboxSlideshowUi();
+  }
+
+  function openLightboxAt(items, index = 0, folderName = "All") {
+    if (!Array.isArray(items) || !items.length) return;
+    lightboxSlideshow.stop();
+    state.activeLightboxItems = items;
+    state.activeLightboxFolder = folderName || "All";
+    state.activeLightboxIndex = Math.max(0, Math.min(items.length - 1, index));
+    renderLightboxSlide();
+    document.getElementById("lightboxModal")?.classList.remove("hidden");
+  }
+
+  function stepLightboxSlide(delta = 1, { fromAutoplay = false } = {}) {
+    const total = state.activeLightboxItems.length;
+    if (total <= 1) return;
+    const nextIdx = getNextLightboxIndex(state.activeLightboxIndex, total, delta);
+    if (nextIdx < 0) return;
+    state.activeLightboxIndex = nextIdx;
+    renderLightboxSlide();
+    if (!fromAutoplay && lightboxSlideshow.isPlaying()) {
+      lightboxSlideshow.reset();
+    }
+  }
+
+  function closeLightbox() {
+    lightboxSlideshow.stop();
+    lightboxZoom.reset();
+    document.getElementById("lightboxImg")?.classList.remove("is-pinching");
     state.activeLightboxItem = null;
+    state.activeLightboxItems = [];
+    state.activeLightboxFolder = "All";
+    state.activeLightboxIndex = -1;
+    state.lightboxSlideshowPlaying = false;
+    setActiveLightboxFilter("original");
     document.getElementById("lightboxModal")?.classList.add("hidden");
+  }
+
+  document.getElementById("lightboxFilterBar")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-lightbox-filter]");
+    if (!btn) return;
+    const requested = btn.getAttribute("data-lightbox-filter") || "original";
+    const nextPreset = requested !== "original" && state.activeLightboxFilter === requested
+      ? "original"
+      : requested;
+    setActiveLightboxFilter(nextPreset);
+  });
+
+  document.getElementById("lightboxPrevBtn")?.addEventListener("click", () => {
+    stepLightboxSlide(-1);
+  });
+
+  document.getElementById("lightboxNextBtn")?.addEventListener("click", () => {
+    stepLightboxSlide(1);
+  });
+
+  document.getElementById("lightboxZoomInBtn")?.addEventListener("click", () => {
+    const { width, height } = getLightboxStageSize();
+    lightboxZoom.zoomIn(width, height);
+  });
+
+  document.getElementById("lightboxZoomOutBtn")?.addEventListener("click", () => {
+    const { width, height } = getLightboxStageSize();
+    lightboxZoom.zoomOut(width, height);
+  });
+
+  document.getElementById("lightboxZoomResetBtn")?.addEventListener("click", () => {
+    if (lightboxZoom.isZoomed()) {
+      lightboxZoom.reset();
+    } else {
+      const { width, height } = getLightboxStageSize();
+      lightboxZoom.toggleDoubleTap(width, height);
+    }
+  });
+
+  document.getElementById("lightboxSlideshowBtn")?.addEventListener("click", () => {
+    if (state.activeLightboxItems.length <= 1) return;
+    const nowPlaying = lightboxSlideshow.toggle();
+    showToast(nowPlaying ? t("lightboxSlideshowStartedToast") : t("lightboxSlideshowPausedToast"));
+  });
+
+  document.getElementById("closeLightboxBtn")?.addEventListener("click", () => {
+    closeLightbox();
+  });
+
+  document.getElementById("lightboxModal")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) {
+      closeLightbox();
+    }
+  });
+
+  const lightboxStageEl = document.getElementById("lightboxStage");
+  const lightboxImgEl = document.getElementById("lightboxImg");
+  let lightboxTouchStartX = null;
+  let lightboxTouchStartY = null;
+  let isPinchingLightbox = false;
+  let isPanningLightbox = false;
+  let hadMultiTouchInGesture = false;
+  let lastLightboxTapTime = 0;
+  let lastLightboxTapPos = { x: 0, y: 0 };
+
+  if (lightboxStageEl) {
+    lightboxStageEl.addEventListener("touchstart", (e) => {
+      if (e.target.closest(".lightbox-nav-btn")) return;
+
+      if (e.touches.length === 2) {
+        hadMultiTouchInGesture = true;
+        isPinchingLightbox = true;
+        isPanningLightbox = false;
+        lightboxTouchStartX = null;
+        lightboxTouchStartY = null;
+        lightboxImgEl?.classList.add("is-pinching");
+        lightboxZoom.startPinch(e.touches[0], e.touches[1]);
+        return;
+      }
+
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        if (lightboxZoom.isZoomed()) {
+          isPanningLightbox = lightboxZoom.startPan(touch.clientX, touch.clientY);
+          lightboxImgEl?.classList.add("is-pinching");
+          lightboxTouchStartX = touch.clientX;
+          lightboxTouchStartY = touch.clientY;
+        } else {
+          hadMultiTouchInGesture = false;
+          isPanningLightbox = false;
+          lightboxTouchStartX = touch.clientX;
+          lightboxTouchStartY = touch.clientY;
+        }
+      }
+    }, { passive: true });
+
+    lightboxStageEl.addEventListener("touchmove", (e) => {
+      if (isPinchingLightbox && e.touches.length >= 2) {
+        e.preventDefault();
+        const { width, height } = getLightboxStageSize();
+        lightboxZoom.movePinch(e.touches[0], e.touches[1], width, height);
+        return;
+      }
+
+      if (isPanningLightbox && e.touches.length === 1 && lightboxZoom.isZoomed()) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const { width, height } = getLightboxStageSize();
+        lightboxZoom.movePan(touch.clientX, touch.clientY, width, height);
+      }
+    }, { passive: false });
+
+    const finishLightboxTouch = (e) => {
+      if (isPinchingLightbox && e.touches.length < 2) {
+        isPinchingLightbox = false;
+        lightboxZoom.endPinch();
+        if (e.touches.length === 1 && lightboxZoom.isZoomed()) {
+          isPanningLightbox = lightboxZoom.startPan(e.touches[0].clientX, e.touches[0].clientY);
+          return;
+        }
+        lightboxImgEl?.classList.remove("is-pinching");
+      }
+
+      if (e.touches.length === 0) {
+        lightboxImgEl?.classList.remove("is-pinching");
+        const wasPanning = isPanningLightbox;
+        if (isPanningLightbox) {
+          isPanningLightbox = false;
+          lightboxZoom.endPan();
+        }
+
+        const changed = e.changedTouches?.[0];
+        if (!hadMultiTouchInGesture && lightboxTouchStartX !== null && changed) {
+          const dx = changed.clientX - lightboxTouchStartX;
+          const dy = changed.clientY - (lightboxTouchStartY ?? changed.clientY);
+          lightboxTouchStartX = null;
+          lightboxTouchStartY = null;
+
+          if (!wasPanning && !lightboxZoom.isZoomed() && Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy)) {
+            lastLightboxTapTime = 0;
+            stepLightboxSlide(dx < 0 ? 1 : -1);
+            return;
+          }
+
+          if (Math.abs(dx) < 14 && Math.abs(dy) < 14 && !e.target.closest(".lightbox-nav-btn")) {
+            const now = Date.now();
+            const tapDist = Math.hypot(changed.clientX - lastLightboxTapPos.x, changed.clientY - lastLightboxTapPos.y);
+            if (now - lastLightboxTapTime <= 300 && tapDist < 36) {
+              lastLightboxTapTime = 0;
+              const { width, height } = getLightboxStageSize();
+              lightboxZoom.toggleDoubleTap(width, height);
+            } else {
+              lastLightboxTapTime = now;
+              lastLightboxTapPos = { x: changed.clientX, y: changed.clientY };
+            }
+          }
+          return;
+        }
+
+        lightboxTouchStartX = null;
+        lightboxTouchStartY = null;
+        hadMultiTouchInGesture = false;
+      }
+    };
+
+    lightboxStageEl.addEventListener("touchend", finishLightboxTouch, { passive: true });
+    lightboxStageEl.addEventListener("touchcancel", finishLightboxTouch, { passive: true });
+
+    // Desktop trackpad pinch / wheel zoom
+    lightboxStageEl.addEventListener("wheel", (e) => {
+      if (!state.activeLightboxItem) return;
+      if (!e.ctrlKey && !lightboxZoom.isZoomed()) return;
+      e.preventDefault();
+      const { width, height } = getLightboxStageSize();
+      const current = lightboxZoom.getState();
+      const step = e.deltaY < 0 ? 0.35 : -0.35;
+      const nextScale = current.scale + step;
+      if (nextScale <= 1.05) {
+        lightboxZoom.reset();
+      } else {
+        lightboxZoom.setZoom(nextScale, current.x, current.y, width, height);
+      }
+    }, { passive: false });
+  }
+
+  // Desktop double-click toggle & mouse-drag pan when zoomed
+  if (lightboxImgEl) {
+    lightboxImgEl.addEventListener("dblclick", () => {
+      const { width, height } = getLightboxStageSize();
+      lightboxZoom.toggleDoubleTap(width, height);
+    });
+
+    let isMousePanning = false;
+    lightboxImgEl.addEventListener("mousedown", (e) => {
+      if (!lightboxZoom.isZoomed() || e.button !== 0) return;
+      e.preventDefault();
+      isMousePanning = lightboxZoom.startPan(e.clientX, e.clientY);
+      lightboxImgEl.classList.add("is-pinching");
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isMousePanning) return;
+      const { width, height } = getLightboxStageSize();
+      lightboxZoom.movePan(e.clientX, e.clientY, width, height);
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!isMousePanning) return;
+      isMousePanning = false;
+      lightboxZoom.endPan();
+      lightboxImgEl.classList.remove("is-pinching");
+    });
+  }
+
+  window.addEventListener("keydown", (e) => {
+    const modal = document.getElementById("lightboxModal");
+    if (!state.activeLightboxItem || !modal || modal.classList.contains("hidden")) return;
+    const tag = String(e.target?.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+    const action = resolveLightboxKeyAction(e.key);
+    if (!action) return;
+
+    if (action === "prev") {
+      e.preventDefault();
+      stepLightboxSlide(-1);
+    } else if (action === "next") {
+      e.preventDefault();
+      stepLightboxSlide(1);
+    } else if (action === "toggle-play") {
+      e.preventDefault();
+      if (state.activeLightboxItems.length > 1) {
+        const nowPlaying = lightboxSlideshow.toggle();
+        showToast(nowPlaying ? t("lightboxSlideshowStartedToast") : t("lightboxSlideshowPausedToast"));
+      }
+    } else if (action === "close") {
+      e.preventDefault();
+      closeLightbox();
+    }
+  });
+
+  document.getElementById("lightboxDownloadBtn")?.addEventListener("click", async () => {
+    if (!state.activeLightboxItem) return;
+    const result = await downloadGalleryImage(state.activeLightboxItem, {
+      baseUrl: window.location.href,
+      filterPresetId: state.activeLightboxFilter
+    });
+    if (result.status === "downloaded-filtered") {
+      showToast(t("downloadFilteredSuccessToast"));
+    } else if (result.status === "downloaded-blob" || result.status === "downloaded-link") {
+      showToast(t("downloadImageSuccessToast"));
+    } else {
+      showToast(t("downloadImageErrorToast"));
+    }
+  });
+
+  document.getElementById("lightboxDownloadAllBtn")?.addEventListener("click", async () => {
+    if (state.isPackingGalleryZip || !state.activeLightboxItems.length) return;
+    const btn = document.getElementById("lightboxDownloadAllBtn");
+    const labelEl = document.getElementById("lightboxDownloadAllLabel");
+    state.isPackingGalleryZip = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("is-packing");
+    }
+    if (labelEl) {
+      labelEl.textContent = t("downloadAllPackingLabel");
+    }
+
+    try {
+      const itemsToPack = [...state.activeLightboxItems];
+      const folderName = state.activeLightboxFolder || "All";
+      const result = await downloadGalleryFolderAsZip(itemsToPack, {
+        folderName,
+        baseUrl: window.location.href,
+        onProgress: ({ current, total }) => {
+          if (labelEl) {
+            labelEl.textContent = `${t("downloadAllPackingLabel")} (${current}/${total})`;
+          }
+        }
+      });
+
+      if (result.status === "downloaded-zip") {
+        showToast(t("downloadAllSuccessToast").replace("{count}", String(result.count)));
+      } else if (result.status === "downloaded-partial") {
+        showToast(
+          t("downloadAllPartialToast")
+            .replace("{count}", String(result.count))
+            .replace("{total}", String(result.total))
+        );
+      } else {
+        showToast(t("downloadAllErrorToast"));
+      }
+    } finally {
+      state.isPackingGalleryZip = false;
+      if (btn) {
+        btn.disabled = state.activeLightboxItems.length <= 0;
+        btn.classList.remove("is-packing");
+      }
+      if (labelEl) {
+        labelEl.textContent = t("downloadAllImagesBtn");
+      }
+    }
   });
 
   document.getElementById("lightboxShareBtn")?.addEventListener("click", async () => {
@@ -1265,7 +1915,7 @@ function wireEvents() {
   document.getElementById("googleSignInBtn")?.addEventListener("click", async () => {
     try {
       await signInWithGooglePopup();
-      document.getElementById("authModal")?.classList.add("hidden");
+      closeAuthModal();
       showToast("Signed in with Google!");
     } catch (err) {
       showToast(err.message || "Google Sign-In failed");
@@ -1279,7 +1929,7 @@ function wireEvents() {
         document.getElementById("authEmail").value,
         document.getElementById("authPassword").value
       );
-      document.getElementById("authModal")?.classList.add("hidden");
+      closeAuthModal();
       showToast("Signed in!");
     } catch (err) {
       showToast(err.message);
@@ -1292,7 +1942,7 @@ function wireEvents() {
         document.getElementById("authEmail").value,
         document.getElementById("authPassword").value
       );
-      document.getElementById("authModal")?.classList.add("hidden");
+      closeAuthModal();
       showToast("Account created! Verification email sent.");
     } catch (err) {
       showToast(err.message);
@@ -1408,23 +2058,258 @@ function wireEvents() {
     }
   });
 
+  const galleryFileInput = document.getElementById("galleryImageFile");
+  const galleryDropzone = document.getElementById("galleryUploadDropzone");
+  const pickGalleryBtn = document.getElementById("pickGalleryImageBtn");
+  const clearGalleryBtn = document.getElementById("clearGalleryImageBtn");
+  const previewBox = document.getElementById("galleryUploadPreviewBox");
+  const previewImg = document.getElementById("galleryUploadPreviewImg");
+  const previewName = document.getElementById("galleryUploadPreviewName");
+  const previewMeta = document.getElementById("galleryUploadPreviewMeta");
+
+  const uploadProgress = createUploadProgressController({
+    dropzoneEl: galleryDropzone,
+    wrapEl: document.getElementById("galleryUploadProgressWrap"),
+    barEl: document.getElementById("galleryUploadProgressBar"),
+    fillEl: document.getElementById("galleryUploadProgressFill"),
+    labelEl: document.getElementById("galleryUploadProgressLabel"),
+    pctEl: document.getElementById("galleryUploadProgressPct"),
+    bytesEl: document.getElementById("galleryUploadProgressBytes")
+  });
+  let uploadProgressClearTimer = null;
+  let isUploadingGalleryFile = false;
+
+  function clearGalleryUploadSelection({ keepProgress = false } = {}) {
+    state.uploadedGalleryMedia = null;
+    state.isEncodingGalleryImage = false;
+    if (galleryFileInput) galleryFileInput.value = "";
+    if (previewImg) previewImg.removeAttribute("src");
+    if (previewName) previewName.textContent = "";
+    if (previewMeta) previewMeta.textContent = "";
+    previewBox?.classList.add("hidden");
+    if (!keepProgress) {
+      clearTimeout(uploadProgressClearTimer);
+      uploadProgress.reset();
+    }
+  }
+
+  async function handleGalleryImageFile(file) {
+    if (!file || isUploadingGalleryFile) return;
+    clearTimeout(uploadProgressClearTimer);
+    state.isEncodingGalleryImage = true;
+    if (previewBox) previewBox.classList.remove("hidden");
+    if (previewName) previewName.textContent = file.name || "studio-photo.jpg";
+    if (previewMeta) previewMeta.textContent = t("uploadOptimizingMsg");
+    uploadProgress.update({
+      percent: 25,
+      bytesTransferred: 0,
+      totalBytes: Number(file.size || 0),
+      label: t("uploadProgressPreparing"),
+      status: "uploading"
+    });
+
+    try {
+      const encoded = await encodeImageFileToStudioPayloads(file);
+      state.uploadedGalleryMedia = encoded;
+      if (previewImg) previewImg.src = encoded.thumbnailUrl || encoded.mediaUrl;
+      if (previewName) previewName.textContent = encoded.originalName;
+      if (previewMeta) {
+        const exifParts = encoded.metadata
+          ? [encoded.metadata.camera, encoded.metadata.aperture, encoded.metadata.iso, encoded.metadata.dateTaken].filter(Boolean)
+          : [];
+        const baseInfo = `${encoded.width}×${encoded.height}px • ~${encoded.approxKb} KB`;
+        previewMeta.textContent = exifParts.length
+          ? `${baseInfo} • EXIF: ${exifParts.join(" · ")}`
+          : baseInfo;
+      }
+      const mediaTypeEl = document.getElementById("galleryMediaType");
+      if (mediaTypeEl) mediaTypeEl.value = "photo";
+      const titleEl = document.getElementById("galleryTitle");
+      if (titleEl && !titleEl.value.trim()) {
+        titleEl.value = suggestTitleFromFileName(encoded.originalName);
+      }
+      uploadProgress.reset();
+      showToast(t("uploadReadyToast"));
+    } catch (err) {
+      clearGalleryUploadSelection();
+      uploadProgress.error(err.message || t("uploadProgressFailed"));
+      showToast(err.message || "Could not process selected photo.");
+    } finally {
+      state.isEncodingGalleryImage = false;
+    }
+  }
+
+  pickGalleryBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (isUploadingGalleryFile) return;
+    galleryFileInput?.click();
+  });
+
+  galleryDropzone?.addEventListener("click", (e) => {
+    if (isUploadingGalleryFile || e.target === pickGalleryBtn) return;
+    galleryFileInput?.click();
+  });
+
+  galleryDropzone?.addEventListener("keydown", (e) => {
+    if (isUploadingGalleryFile) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      galleryFileInput?.click();
+    }
+  });
+
+  galleryDropzone?.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    if (!isUploadingGalleryFile) {
+      galleryDropzone.classList.add("is-dragover");
+    }
+  });
+
+  galleryDropzone?.addEventListener("dragleave", () => {
+    galleryDropzone.classList.remove("is-dragover");
+  });
+
+  galleryDropzone?.addEventListener("drop", (e) => {
+    e.preventDefault();
+    galleryDropzone.classList.remove("is-dragover");
+    if (isUploadingGalleryFile) return;
+    const droppedFile = e.dataTransfer?.files?.[0];
+    if (droppedFile) handleGalleryImageFile(droppedFile);
+  });
+
+  galleryFileInput?.addEventListener("change", (e) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) handleGalleryImageFile(selectedFile);
+  });
+
+  clearGalleryBtn?.addEventListener("click", () => {
+    if (isUploadingGalleryFile) return;
+    clearGalleryUploadSelection();
+  });
+
   document.getElementById("galleryUploadForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (state.isEncodingGalleryImage) {
+      showToast(t("uploadOptimizingMsg"));
+      return;
+    }
+    if (isUploadingGalleryFile) return;
+
+    const submitBtn = document.getElementById("submitGalleryBtn");
+    const title = document.getElementById("galleryTitle")?.value || "";
+    const category = document.getElementById("galleryCategory")?.value || "Fashion";
+    const mediaType = document.getElementById("galleryMediaType")?.value || "photo";
+    const pastedUrl = (document.getElementById("galleryMediaUrl")?.value || "").trim();
+
+    let mediaUrl = state.uploadedGalleryMedia?.mediaUrl || pastedUrl;
+    const thumbnailUrl = state.uploadedGalleryMedia?.thumbnailUrl || "";
+    let extractedMetadata = state.uploadedGalleryMedia?.metadata || null;
+    const selectedFile = state.uploadedGalleryMedia?.file || null;
+
+    const validationError = validateGallerySubmission({ title, mediaUrl, thumbnailUrl });
+    if (validationError) {
+      showToast(validationError);
+      return;
+    }
+
+    clearTimeout(uploadProgressClearTimer);
+    isUploadingGalleryFile = true;
+    if (submitBtn) submitBtn.disabled = true;
     try {
+      if (selectedFile && state.firebaseReady && state.user) {
+        uploadProgress.update({
+          percent: 0,
+          bytesTransferred: 0,
+          totalBytes: Number(selectedFile.size || 0),
+          label: t("uploadProgressUploading"),
+          status: "uploading"
+        });
+        try {
+          const storageResult = await uploadGalleryImageToStorage(selectedFile, {
+            originalName: state.uploadedGalleryMedia?.originalName || selectedFile.name,
+            onProgress: ({ percent, bytesTransferred, totalBytes }) => {
+              uploadProgress.update({
+                percent: Math.min(95, percent),
+                bytesTransferred,
+                totalBytes,
+                label: t("uploadProgressUploading"),
+                status: "uploading"
+              });
+            }
+          });
+          if (storageResult?.downloadUrl) {
+            mediaUrl = storageResult.downloadUrl;
+          }
+        } catch (storageErr) {
+          // Graceful 100% free Spark-plan fallback when Storage bucket is unprovisioned or restricted
+          console.warn("Firebase Storage unavailable on Spark plan; falling back to free Firestore upload:", storageErr?.message || storageErr);
+          uploadProgress.update({
+            percent: 78,
+            bytesTransferred: Number(selectedFile.size || 0),
+            totalBytes: Number(selectedFile.size || 0),
+            label: t("uploadProgressSavingCloud"),
+            status: "uploading"
+          });
+        }
+      } else if (selectedFile) {
+        uploadProgress.update({
+          percent: 55,
+          bytesTransferred: 0,
+          totalBytes: Number(selectedFile.size || 0),
+          label: t("uploadProgressSavingCloud"),
+          status: "uploading"
+        });
+      }
+
+      if (!extractedMetadata && pastedUrl && mediaType === "photo") {
+        const remoteExif = await readExifFromImageUrl(pastedUrl);
+        if (hasMeaningfulExif(remoteExif)) {
+          extractedMetadata = sanitizeExifMetadata(remoteExif);
+        }
+      }
+
+      if (selectedFile) {
+        uploadProgress.update({
+          percent: 96,
+          label: t("uploadProgressSavingCloud"),
+          status: "uploading"
+        });
+      }
+
       await submitGalleryUpload(
         {
-          title: document.getElementById("galleryTitle").value,
-          category: document.getElementById("galleryCategory").value,
-          mediaType: document.getElementById("galleryMediaType").value,
-          mediaUrl: document.getElementById("galleryMediaUrl").value
+          title,
+          category,
+          mediaType,
+          mediaUrl,
+          thumbnailUrl,
+          metadata: extractedMetadata
         },
         state.isAdmin
       );
+
+      if (selectedFile) {
+        uploadProgress.complete(t("uploadProgressComplete"));
+        uploadProgressClearTimer = setTimeout(() => {
+          uploadProgress.reset();
+        }, 2000);
+      }
+
       e.target.reset();
+      clearGalleryUploadSelection({ keepProgress: Boolean(selectedFile) });
       showToast(state.isAdmin ? "Artwork published to gallery!" : "Artwork submitted for admin review!");
       await refreshCloudData();
     } catch (err) {
+      if (selectedFile) {
+        uploadProgress.error(t("uploadProgressFailed"));
+      }
       showToast(err.message);
+      if (!state.user && state.firebaseReady) {
+        document.getElementById("authModal")?.classList.remove("hidden");
+      }
+    } finally {
+      isUploadingGalleryFile = false;
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 
@@ -1503,6 +2388,10 @@ function wireEvents() {
   document.addEventListener("submit", async (e) => {
     if (e.target.id === "adminAnnouncementForm") {
       e.preventDefault();
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
       try {
         await adminPublishAnnouncement({
           title: document.getElementById("annTitle").value,
@@ -1517,6 +2406,23 @@ function wireEvents() {
       }
     }
   });
+
+  const handleBrowserUrlChange = () => {
+    const requested = extractRequestedRoute({
+      pathname: window.location.pathname,
+      hash: window.location.hash,
+      search: window.location.search
+    });
+    if (requested !== state.route || isAdminUrlAttempt({
+      pathname: window.location.pathname,
+      hash: window.location.hash,
+      search: window.location.search
+    })) {
+      navigateTo(requested);
+    }
+  };
+  window.addEventListener("hashchange", handleBrowserUrlChange);
+  window.addEventListener("popstate", handleBrowserUrlChange);
 }
 
 function updateNewsletterRealtimeValidation({ showEmptyError = false } = {}) {
@@ -1601,12 +2507,17 @@ async function bootstrap() {
   renderMyBookings();
   renderMyModels();
   renderSavedNewsletterStatus();
+  syncAdminUiVisibility(document, { isAdmin: false });
   await refreshOfflineBookingQueue();
   setupPwaInstall();
   wireEvents();
 
-  const initialRoute = window.location.hash.replace("#", "").trim() || "home";
-  navigateTo(initialRoute);
+  const initialRoute = extractRequestedRoute({
+    pathname: window.location.pathname,
+    hash: window.location.hash,
+    search: window.location.search
+  });
+  navigateTo(initialRoute, { silentBlock: true });
 
   const clientStatus = await initFirebaseClient();
   state.firebaseReady = Boolean(clientStatus.ready);
@@ -1615,9 +2526,34 @@ async function bootstrap() {
   if (state.firebaseReady) {
     await subscribeAuthState(async ({ user, isAdmin, firebaseReady }) => {
       state.user = user;
-      state.isAdmin = isAdmin;
+      state.isAdmin = Boolean(isAdmin && isAuthorizedAdminUser(user));
+      state.authResolved = true;
       state.firebaseReady = firebaseReady;
+
+      if (!state.isAdmin) {
+        state.adminData = { bookings: [], models: [], gallery: [], announcements: [] };
+      }
+
       updateFirebaseUiStatus();
+
+      if (state.pendingAdminRoute) {
+        state.pendingAdminRoute = false;
+        if (state.isAdmin) {
+          closeAuthModal();
+          navigateTo("admin");
+        } else if (user) {
+          closeAuthModal();
+          navigateTo("home", { silentBlock: true });
+          showToast(t("adminAccessDeniedToast"));
+        } else {
+          navigateTo("home", { silentBlock: true });
+          showToast(t("adminSignInRequiredToast"));
+          openAuthModal({ adminNotice: true });
+        }
+      } else if (state.route === "admin" && !state.isAdmin) {
+        navigateTo("home", { silentBlock: true });
+      }
+
       renderMyBookings();
       renderMyModels();
       if (user) {
@@ -1625,6 +2561,13 @@ async function bootstrap() {
       }
       await refreshCloudData();
     });
+  } else {
+    state.authResolved = true;
+    if (state.pendingAdminRoute) {
+      state.pendingAdminRoute = false;
+      showToast(t("adminSignInRequiredToast"));
+      document.getElementById("firebaseSetupModal")?.classList.remove("hidden");
+    }
   }
 }
 

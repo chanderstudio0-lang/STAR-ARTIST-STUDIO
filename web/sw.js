@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v15";
+const CACHE_VERSION = "star-artist-pwa-v25";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -14,19 +14,23 @@ const APP_SHELL_URLS = [
   "/index.html",
   "/styles.css",
   "/manifest.webmanifest",
+  "/js/admin-guard.js",
   "/js/admin-models.js",
   "/js/app.js",
   "/js/booking-status.js",
   "/js/catalog-reviews.js",
   "/js/data.js",
+  "/js/exif-reader.js",
   "/js/firebase.js",
   "/js/gallery-share.js",
   "/js/i18n.js",
+  "/js/image-upload.js",
   "/js/lazy-images.js",
   "/js/newsletter.js",
   "/js/offline-sync.js",
   "/js/testimonials.js",
   "/js/tier-info.js",
+  "/js/zip-builder.js",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
@@ -41,6 +45,7 @@ const APP_SHELL_URLS = [
 
 const BYPASS_ORIGINS = [
   "firestore.googleapis.com",
+  "firebasestorage.googleapis.com",
   "identitytoolkit.googleapis.com",
   "securetoken.googleapis.com",
   "www.googleapis.com",
