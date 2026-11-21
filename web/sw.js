@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v30";
+const CACHE_VERSION = "star-artist-pwa-v31";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -289,6 +289,7 @@ self.addEventListener("activate", (event) => {
         )
       )
       .then(() => self.clients.claim())
+      .then(() => notifyClients({ type: "SW_UPDATED", version: CACHE_VERSION }))
   );
 });
 
@@ -339,7 +340,7 @@ self.addEventListener("fetch", (event) => {
   // Network-first with cached shell fallback for HTML navigations
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: "no-store" })
         .then((response) => {
           if (response && response.ok) {
             const copy = response.clone();
@@ -352,7 +353,31 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for static studio shell (index.html, styles.css, js/app.js, modules) & local images
+  // Network-first with cache fallback for JS, CSS, manifest, and shared Firebase config so mobile browsers
+  // always receive the latest production build immediately without stale cached popups or scripts.
+  const isFreshCodeAsset =
+    url.pathname === "/index.html" ||
+    url.pathname === "/styles.css" ||
+    url.pathname === "/firebase-config.json" ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname.startsWith("/js/");
+
+  if (isFreshCodeAsset) {
+    event.respondWith(
+      fetch(request, { cache: "no-cache" })
+        .then((response) => {
+          if (response && response.ok && response.type === "basic") {
+            const copy = response.clone();
+            caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Cache-first for static studio images & icons
   event.respondWith(
     caches.match(request, { ignoreSearch: true }).then((cached) => {
       if (cached) {

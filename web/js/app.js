@@ -135,6 +135,8 @@ import {
   adminDeleteGalleryItem,
   adminPublishAnnouncement,
   initFirebaseClient,
+  shouldShowManualFirebaseSetup,
+  saveLocalDevFirebaseConfig,
   syncWorkshopNewsletterOptIn
 } from "./firebase.js";
 
@@ -1109,6 +1111,102 @@ async function refreshCloudData() {
   }
 }
 
+function syncLocalDevSetupAffordance() {
+  const existingBtn = document.getElementById("localDevFirebaseBtn");
+  const existingDialog = document.getElementById("localDevFirebaseDialog");
+  const allowLocalManualSetup = shouldShowManualFirebaseSetup({
+    hostname: window.location?.hostname || "",
+    firebaseReady: state.firebaseReady
+  });
+
+  // Never show any manual Firebase setup UI on production (.web.app / .firebaseapp.com) or once connected
+  if (!allowLocalManualSetup) {
+    existingBtn?.remove();
+    existingDialog?.remove();
+    return;
+  }
+
+  if (!existingBtn) {
+    const statusStripActions = document.getElementById("openAdminConsoleQuickBtn")?.parentElement;
+    if (statusStripActions) {
+      const btn = document.createElement("button");
+      btn.id = "localDevFirebaseBtn";
+      btn.type = "button";
+      btn.className = "chip-btn";
+      btn.style.minHeight = "36px";
+      btn.style.padding = "4px 12px";
+      btn.textContent = "Local Dev Cloud Config";
+      btn.addEventListener("click", () => {
+        openLocalDevFirebaseDialog();
+      });
+      statusStripActions.appendChild(btn);
+    }
+  }
+}
+
+function openLocalDevFirebaseDialog() {
+  if (
+    !shouldShowManualFirebaseSetup({
+      hostname: window.location?.hostname || "",
+      firebaseReady: state.firebaseReady
+    })
+  ) {
+    return;
+  }
+  if (document.getElementById("localDevFirebaseDialog")) return;
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "localDevFirebaseDialog";
+  backdrop.className = "modal-backdrop";
+  backdrop.setAttribute("role", "dialog");
+  backdrop.setAttribute("aria-modal", "true");
+  backdrop.innerHTML = `
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;color:var(--gold);">Local Development Preview Config</h3>
+        <button id="closeLocalDevFirebaseDialogBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p style="margin:0;font-size:0.86rem;color:var(--text-secondary);">
+        Only shown on localhost when /__/firebase/init.json and /firebase-config.json are unavailable. Production (.web.app / .firebaseapp.com) always auto-connects.
+      </p>
+      <form id="localDevFirebaseForm" class="form-grid">
+        <div class="field">
+          <label for="localDevApiKey">Firebase Web API Key</label>
+          <input id="localDevApiKey" type="text" class="input" required autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="localDevAppId">Firebase Web App ID</label>
+          <input id="localDevAppId" type="text" class="input" required autocomplete="off" />
+        </div>
+        <button type="submit" class="btn-gold">Connect Local Preview</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  backdrop.querySelector("#closeLocalDevFirebaseDialogBtn")?.addEventListener("click", () => {
+    backdrop.remove();
+  });
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  backdrop.querySelector("#localDevFirebaseForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const apiKey = backdrop.querySelector("#localDevApiKey")?.value || "";
+    const appId = backdrop.querySelector("#localDevAppId")?.value || "";
+    try {
+      saveLocalDevFirebaseConfig({ apiKey, appId }, { hostname: window.location?.hostname || "" });
+      backdrop.remove();
+      const ready = await connectFirebaseCloud();
+      if (ready) {
+        showToast("Local preview connected to Firebase Cloud.");
+      }
+    } catch (err) {
+      showToast(err?.message || "Invalid local preview configuration.");
+    }
+  });
+}
+
 function updateFirebaseUiStatus() {
   const dot = document.getElementById("firebaseStatusDot");
   const txt = document.getElementById("firebaseStatusText");
@@ -1128,6 +1226,7 @@ function updateFirebaseUiStatus() {
     isAdmin: isAdminNow,
     adminEmail: state.user?.email || ""
   });
+  syncLocalDevSetupAffordance();
   applyTranslations();
 }
 
@@ -1200,10 +1299,25 @@ function setupPwaInstall() {
   bannerCta?.addEventListener("click", handleInstallClick);
 
   if ("serviceWorker" in navigator) {
+    const hadExistingController = Boolean(navigator.serviceWorker.controller);
+    let swRefreshTriggered = false;
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (hadExistingController && !swRefreshTriggered) {
+        swRefreshTriggered = true;
+        window.location.reload();
+      }
+    });
+
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js").catch((err) => {
-        console.warn("Service worker registration failed:", err?.message || err);
-      });
+      navigator.serviceWorker
+        .register("/sw.js", { updateViaCache: "none" })
+        .then((registration) => {
+          registration.update().catch(() => {});
+        })
+        .catch((err) => {
+          console.warn("Service worker registration failed:", err?.message || err);
+        });
     });
 
     navigator.serviceWorker.addEventListener("message", async (event) => {

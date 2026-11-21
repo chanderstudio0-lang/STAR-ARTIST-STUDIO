@@ -4,8 +4,11 @@ import { isAuthorizedAdminUser } from "./admin-guard.js";
 import { sanitizePublicModelProfile } from "./company-booking.js";
 
 const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
+const LOCAL_DEV_SESSION_CONFIG_KEY = "star_artist_local_dev_firebase_config_v1";
 const FIREBASE_SDK_VERSION = "11.4.0";
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
+const CLOUD_UNAVAILABLE_MESSAGE =
+  "Unable to reach Star Artist Studio Cloud right now. Please check your internet connection and try again.";
 
 let sdkPromise = null;
 let storageSdkPromise = null;
@@ -13,6 +16,51 @@ let appInstance = null;
 let authInstance = null;
 let dbInstance = null;
 let activeConfig = null;
+
+function getCurrentHostname(hostnameOverride) {
+  if (typeof hostnameOverride === "string") {
+    return hostnameOverride.trim().toLowerCase();
+  }
+  if (typeof window !== "undefined" && window.location && typeof window.location.hostname === "string") {
+    return window.location.hostname.trim().toLowerCase();
+  }
+  return "";
+}
+
+/**
+ * Returns true on Firebase Hosting production domains (*.web.app and *.firebaseapp.com).
+ */
+export function isFirebaseHostingProductionHost(hostname) {
+  const host = getCurrentHostname(hostname);
+  if (!host) return false;
+  return host === "web.app" || host.endsWith(".web.app") || host === "firebaseapp.com" || host.endsWith(".firebaseapp.com");
+}
+
+/**
+ * Returns true strictly for local developer preview environments.
+ */
+export function isLocalDevelopmentHost(hostname) {
+  const host = getCurrentHostname(hostname);
+  if (!host) return false;
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.endsWith(".local")
+  );
+}
+
+/**
+ * Manual Firebase setup is NEVER permitted on production Firebase Hosting (.web.app / .firebaseapp.com)
+ * or any visitor/mobile domain. It may only appear in local development preview when auto-config is unavailable.
+ */
+export function shouldShowManualFirebaseSetup({ hostname, firebaseReady = false } = {}) {
+  if (firebaseReady) return false;
+  if (isFirebaseHostingProductionHost(hostname)) return false;
+  return isLocalDevelopmentHost(hostname);
+}
 
 export function sanitizeWebConfig(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -47,6 +95,46 @@ export function clearLegacyLocalWebConfig() {
   }
 }
 
+function readLocalDevSessionConfig(hostname) {
+  if (!isLocalDevelopmentHost(hostname)) return null;
+  try {
+    if (typeof sessionStorage === "undefined") return null;
+    const raw = sessionStorage.getItem(LOCAL_DEV_SESSION_CONFIG_KEY);
+    if (!raw) return null;
+    return sanitizeWebConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveLocalDevFirebaseConfig(rawConfig, { hostname } = {}) {
+  if (!isLocalDevelopmentHost(hostname)) {
+    return null;
+  }
+  const clean = sanitizeWebConfig(rawConfig);
+  if (!clean) {
+    throw new Error("Please enter a valid Firebase Web API Key and Web App ID for local preview.");
+  }
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(LOCAL_DEV_SESSION_CONFIG_KEY, JSON.stringify(clean));
+    }
+  } catch {
+    // Ignore restricted storage contexts
+  }
+  return clean;
+}
+
+export function clearLocalDevFirebaseConfig() {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem(LOCAL_DEV_SESSION_CONFIG_KEY);
+    }
+  } catch {
+    // Ignore restricted storage contexts
+  }
+}
+
 async function fetchJsonConfig(url, { fetchImpl = globalThis.fetch, cache = "no-store" } = {}) {
   if (typeof fetchImpl !== "function") return null;
   try {
@@ -66,22 +154,39 @@ async function fetchJsonConfig(url, { fetchImpl = globalThis.fetch, cache = "no-
 
 /**
  * Permanently resolves the shared Firebase Web App configuration for all devices:
- * 1. Automatic Firebase Hosting auto-init endpoint (/__/firebase/init.json) on free Spark plan
- * 2. Centralized shared web configuration (/firebase-config.json) for custom domains, mobile previews, and offline PWA cache
- * 3. Optional runtime global override (window.__STAR_ARTIST_FIREBASE_CONFIG__)
- * Never prompts visitors or relies on per-device localStorage.
+ * 1. On Firebase Hosting production domains (.web.app / .firebaseapp.com), automatically loads
+ *    /__/firebase/init.json (with a single network retry on flaky mobile links).
+ * 2. Falls back to the centralized shared web configuration (/firebase-config.json) for offline PWA
+ *    launches, custom domains, or preview servers.
+ * 3. Optional runtime global override (window.__STAR_ARTIST_FIREBASE_CONFIG__).
+ * 4. Strictly on localhost/127.0.0.1 development previews only, supports a sessionStorage override if needed.
+ * Never prompts production visitors or relies on per-device localStorage.
  */
 export async function resolveFirebaseWebConfig({
   fetchImpl = globalThis.fetch,
+  hostname,
   runtimeGlobal = typeof window !== "undefined" ? window.__STAR_ARTIST_FIREBASE_CONFIG__ : null
 } = {}) {
+  const host = getCurrentHostname(hostname);
+  const isProdHosting = isFirebaseHostingProductionHost(host);
+
   clearLegacyLocalWebConfig();
+  if (!isLocalDevelopmentHost(host)) {
+    clearLocalDevFirebaseConfig();
+  }
 
   // 1. Firebase Hosting free Spark auto-provisioned config endpoint
-  const hostedCfg = await fetchJsonConfig("/__/firebase/init.json", {
+  let hostedCfg = await fetchJsonConfig("/__/firebase/init.json", {
     fetchImpl,
     cache: "no-store"
   });
+  if (!hostedCfg && isProdHosting) {
+    // Single resilient retry on production Firebase Hosting in case of a brief mobile network blip
+    hostedCfg = await fetchJsonConfig("/__/firebase/init.json", {
+      fetchImpl,
+      cache: "no-store"
+    });
+  }
   if (hostedCfg) {
     return {
       ...hostedCfg,
@@ -89,7 +194,7 @@ export async function resolveFirebaseWebConfig({
     };
   }
 
-  // 2. Centralized shared Firebase Web App config bundled with the deployed website
+  // 2. Centralized shared Firebase Web App config bundled with the deployed website (also offline PWA fallback)
   const sharedCfg = await fetchJsonConfig("/firebase-config.json", {
     fetchImpl,
     cache: "no-cache"
@@ -107,6 +212,15 @@ export async function resolveFirebaseWebConfig({
     return {
       ...globalCfg,
       configSource: "runtime-global"
+    };
+  }
+
+  // 4. Local developer preview fallback ONLY (never read on production .web.app / .firebaseapp.com)
+  const localDevCfg = readLocalDevSessionConfig(host);
+  if (localDevCfg) {
+    return {
+      ...localDevCfg,
+      configSource: "local-dev-session"
     };
   }
 
@@ -263,13 +377,13 @@ export async function signInWithGooglePopup() {
 
 export async function signInWithEmailPassword(email, password) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured yet.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   return ctx.authMod.signInWithEmailAndPassword(ctx.auth, email.trim(), password);
 }
 
 export async function registerWithEmailPassword(email, password) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured yet.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const cred = await ctx.authMod.createUserWithEmailAndPassword(ctx.auth, email.trim(), password);
   try {
     await ctx.authMod.sendEmailVerification(cred.user);
@@ -315,7 +429,7 @@ export async function fetchMyBookings(uid) {
 
 export async function createShootBooking(payload) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to submit a booking.");
 
@@ -381,7 +495,7 @@ export async function fetchMyModels(uid) {
 
 export async function submitModelRegistration(payload) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to apply as an 18+ model.");
 
@@ -414,7 +528,7 @@ export async function submitModelRegistration(payload) {
 
 export async function submitGalleryUpload(payload, autoApprove = false) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to submit gallery artwork.");
 
@@ -492,7 +606,7 @@ export async function uploadGalleryImageToStorage(
   if (!adapter) {
     const ctx = await initFirebaseClient();
     if (!ctx.ready) {
-      throw new Error("Firebase Web App is not configured.");
+      throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
     }
     const user = ctx.auth.currentUser;
     if (!user) {
@@ -596,7 +710,7 @@ export async function fetchServiceReviews() {
 
 export async function submitCatalogReview({ packageId, serviceType, rating, comment }) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to post a star rating and comment.");
 
@@ -670,7 +784,7 @@ export async function fetchMyCompanyProfile(uid) {
 
 export async function saveCompanyRegistration(payload) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to register your company or organizer profile.");
 
@@ -715,7 +829,7 @@ export async function fetchMyCompanyBookings(uid) {
 
 export async function submitCompanyModelBooking(payload) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) throw new Error("Firebase Web App is not configured.");
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to submit a model requirement booking.");
 

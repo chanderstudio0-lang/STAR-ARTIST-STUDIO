@@ -2987,6 +2987,121 @@ test("Permanent shared Firebase Web configuration loads automatically on all mob
   assert.ok(swJs.includes('"/firebase-config.json"'), "sw.js must pre-cache /firebase-config.json for offline PWA support");
 });
 
+test("Production Firebase Hosting (.web.app / .firebaseapp.com) auto-loads /__/firebase/init.json, never shows setup popup, and prevents stale mobile caches", async () => {
+  const firebaseMod = await import(pathToFileURL(path.join(webDir, "js/firebase.js")).href);
+
+  // 1. Production domain classification (.web.app and .firebaseapp.com) vs local development preview
+  assert.equal(firebaseMod.isFirebaseHostingProductionHost("gen-lang-client-0548683163.web.app"), true);
+  assert.equal(firebaseMod.isFirebaseHostingProductionHost("gen-lang-client-0548683163.firebaseapp.com"), true);
+  assert.equal(firebaseMod.isFirebaseHostingProductionHost("GEN-LANG-CLIENT-0548683163.WEB.APP"), true);
+  assert.equal(firebaseMod.isFirebaseHostingProductionHost("localhost"), false);
+  assert.equal(firebaseMod.isFirebaseHostingProductionHost("127.0.0.1"), false);
+
+  assert.equal(firebaseMod.isLocalDevelopmentHost("localhost"), true);
+  assert.equal(firebaseMod.isLocalDevelopmentHost("127.0.0.1"), true);
+  assert.equal(firebaseMod.isLocalDevelopmentHost("::1"), true);
+  assert.equal(firebaseMod.isLocalDevelopmentHost("gen-lang-client-0548683163.web.app"), false);
+  assert.equal(firebaseMod.isLocalDevelopmentHost("gen-lang-client-0548683163.firebaseapp.com"), false);
+
+  // 2. Manual setup is NEVER shown on production Firebase Hosting domains (even if offline/unready) or once connected
+  assert.equal(
+    firebaseMod.shouldShowManualFirebaseSetup({ hostname: "gen-lang-client-0548683163.web.app", firebaseReady: false }),
+    false,
+    "Production .web.app must NEVER show manual Firebase setup"
+  );
+  assert.equal(
+    firebaseMod.shouldShowManualFirebaseSetup({ hostname: "gen-lang-client-0548683163.firebaseapp.com", firebaseReady: false }),
+    false,
+    "Production .firebaseapp.com must NEVER show manual Firebase setup"
+  );
+  assert.equal(
+    firebaseMod.shouldShowManualFirebaseSetup({ hostname: "starartiststudio.in", firebaseReady: false }),
+    false,
+    "Custom visitor domains must NEVER show manual Firebase setup"
+  );
+  assert.equal(
+    firebaseMod.shouldShowManualFirebaseSetup({ hostname: "localhost", firebaseReady: true }),
+    false,
+    "Local dev preview must hide manual setup once Firebase is connected"
+  );
+  assert.equal(
+    firebaseMod.shouldShowManualFirebaseSetup({ hostname: "localhost", firebaseReady: false }),
+    true,
+    "Local dev preview may offer fallback manual setup ONLY when auto-config is unavailable"
+  );
+
+  // 3. saveLocalDevFirebaseConfig is a strict no-op on production domains
+  const blockedProdSave = firebaseMod.saveLocalDevFirebaseConfig(
+    { apiKey: "test-key-12345678901234567890", appId: "1:634443186065:web:1fed1386efeed679c12430" },
+    { hostname: "gen-lang-client-0548683163.web.app" }
+  );
+  assert.equal(blockedProdSave, null, "Production domains must ignore manual local-dev config saves");
+
+  // 4. Production .web.app retries /__/firebase/init.json once on transient mobile network blip and resolves automatically on a fresh session
+  const sharedCfg = JSON.parse(fs.readFileSync(path.join(webDir, "firebase-config.json"), "utf8"));
+  let initAttempts = 0;
+  const prodRes = await firebaseMod.resolveFirebaseWebConfig({
+    hostname: "gen-lang-client-0548683163.web.app",
+    fetchImpl: async (url) => {
+      if (url === "/__/firebase/init.json") {
+        initAttempts += 1;
+        if (initAttempts === 1) {
+          throw new Error("Transient mobile network drop");
+        }
+        return {
+          ok: true,
+          headers: { get: () => "application/json; charset=utf-8" },
+          json: async () => ({
+            apiKey: sharedCfg.apiKey,
+            appId: sharedCfg.appId,
+            projectId: sharedCfg.projectId,
+            authDomain: sharedCfg.authDomain,
+            storageBucket: sharedCfg.storageBucket,
+            messagingSenderId: sharedCfg.messagingSenderId
+          })
+        };
+      }
+      return { ok: false, headers: { get: () => "" } };
+    }
+  });
+  assert.equal(initAttempts, 2, "Production Hosting should retry /__/firebase/init.json once on transient mobile drop");
+  assert.equal(prodRes.configSource, "firebase-hosting");
+  assert.equal(prodRes.projectId, "gen-lang-client-0548683163");
+  assert.equal(prodRes.databaseId, "ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b");
+
+  // 5. No stale "Firebase Web App is not configured" error messages remain in firebase.js
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.equal(
+    firebaseJs.includes("Firebase Web App is not configured"),
+    false,
+    "firebase.js must not show legacy unconfigured setup errors to visitors"
+  );
+
+  // 6. firebase.json prevents stale 1-hour caching of /, /index.html, /sw.js, /firebase-config.json, and /js/**
+  const firebaseJson = JSON.parse(fs.readFileSync(path.join(rootDir, "firebase.json"), "utf8"));
+  const headerMap = new Map(
+    (firebaseJson.hosting?.headers || []).map((entry) => [
+      entry.source,
+      Object.fromEntries((entry.headers || []).map((h) => [h.key.toLowerCase(), h.value]))
+    ])
+  );
+  for (const src of ["/", "/index.html", "/sw.js", "/firebase-config.json", "/js/**", "/styles.css"]) {
+    const cc = headerMap.get(src)?.["cache-control"] || "";
+    assert.ok(cc.includes("no-cache"), `firebase.json must set no-cache header on ${src}`);
+  }
+
+  // 7. Service Worker v31 uses network-first for JS/CSS/HTML/config and app.js forces SW updateViaCache: none + controllerchange reload
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('CACHE_VERSION = "star-artist-pwa-v31"'), "sw.js must bump cache version to v31");
+  assert.ok(swJs.includes("isFreshCodeAsset"), "sw.js must serve code & config network-first with cache fallback");
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes('updateViaCache: "none"'), "app.js must register sw.js with updateViaCache: none");
+  assert.ok(appJs.includes("controllerchange"), "app.js must refresh once when an updated Service Worker takes control");
+  assert.ok(appJs.includes("shouldShowManualFirebaseSetup"), "app.js must gate any local-dev setup behind shouldShowManualFirebaseSetup");
+});
+
+
 
 
 
