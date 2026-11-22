@@ -35,6 +35,11 @@ import {
   renderAdminBookingTrackerHtml,
   renderBookingTimelineChipHtml
 } from "./admin-booking-tracker.js";
+import {
+  buildAdminEmailPreview,
+  getPreviewRecordsForType,
+  renderAdminEmailPreviewSectionHtml
+} from "./admin-email-preview.js";
 import { renderCatalogTierSectionHtml } from "./tier-info.js";
 import {
   renderLazyBlurImageHtml,
@@ -163,6 +168,13 @@ const state = {
   adminCompanyFilter: "all",
   adminCompanySearch: "",
   adminCompanyNoteDrafts: {},
+  adminEmailPreview: {
+    type: "booking",
+    recordId: "__sample__",
+    viewMode: "html",
+    viewport: "desktop",
+    overrides: {}
+  },
   publicModels: mergePublicModels([]),
   publicModelGenderFilter: "all",
   publicModelSearch: "",
@@ -986,6 +998,7 @@ function renderAdminConsole() {
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Confirmed">Confirm</button>
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Completed">Complete</button>
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Cancelled">Cancel</button>
+          <button type="button" class="chip-btn" data-open-email-preview-type="booking" data-open-email-preview-id="${escapeHtml(b.id)}">${escapeHtml(t("adminEmailPreviewQuickBtn"))}</button>
           <button type="button" class="btn-danger" data-adm-bk-del="${escapeHtml(b.id)}">Delete</button>
         </div>
       </div>`
@@ -1029,6 +1042,13 @@ function renderAdminConsole() {
       </div>`
       )
       .join("");
+  } else if (state.adminTab === "email-preview") {
+    body.innerHTML = renderAdminEmailPreviewSectionHtml({
+      previewState: state.adminEmailPreview,
+      adminData: state.adminData,
+      t,
+      escapeHtml
+    });
   } else {
     body.innerHTML = `
       <form id="adminAnnouncementForm" class="studio-card form-grid">
@@ -1048,6 +1068,30 @@ function renderAdminConsole() {
         )
         .join("")}`;
   }
+}
+
+function getActiveEmailPreviewPayload() {
+  const { type, recordId, overrides } = state.adminEmailPreview;
+  const records = getPreviewRecordsForType(type, state.adminData);
+  const matched = recordId !== "__sample__" ? records.find((r) => r.id === recordId) || null : null;
+  return buildAdminEmailPreview({
+    type,
+    record: matched,
+    recordId: matched?.id || "",
+    brandOverrides: overrides
+  });
+}
+
+function refreshEmailPreviewLiveStage() {
+  const preview = getActiveEmailPreviewPayload();
+  const subjectEl = document.getElementById("adminEmailPreviewSubjectText");
+  if (subjectEl) subjectEl.textContent = preview.subject;
+  const frame = document.getElementById("adminEmailPreviewFrame");
+  if (frame) frame.setAttribute("srcdoc", preview.html);
+  const textBody = document.getElementById("adminEmailPreviewTextBody");
+  if (textBody) textBody.textContent = preview.text;
+  const srcBody = document.getElementById("adminEmailPreviewSourceBody");
+  if (srcBody) srcBody.textContent = preview.html;
 }
 
 async function refreshCloudData() {
@@ -1638,6 +1682,72 @@ function wireEvents() {
       return;
     }
 
+    const openPreviewBtn = e.target.closest("[data-open-email-preview-type]");
+    if (openPreviewBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      state.adminEmailPreview.type = openPreviewBtn.getAttribute("data-open-email-preview-type") || "booking";
+      state.adminEmailPreview.recordId = openPreviewBtn.getAttribute("data-open-email-preview-id") || "__sample__";
+      state.adminTab = "email-preview";
+      document
+        .querySelectorAll("[data-admin-tab]")
+        .forEach((b) => b.classList.toggle("active", b.getAttribute("data-admin-tab") === "email-preview"));
+      renderAdminConsole();
+      document.getElementById("adminEmailPreviewPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    const previewTypeBtn = e.target.closest("[data-email-preview-type]");
+    if (previewTypeBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailPreview.type = previewTypeBtn.getAttribute("data-email-preview-type") || "booking";
+      state.adminEmailPreview.recordId = "__sample__";
+      renderAdminConsole();
+      return;
+    }
+
+    const previewModeBtn = e.target.closest("[data-email-preview-mode]");
+    if (previewModeBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailPreview.viewMode = previewModeBtn.getAttribute("data-email-preview-mode") || "html";
+      renderAdminConsole();
+      return;
+    }
+
+    const previewViewportBtn = e.target.closest("[data-email-preview-viewport]");
+    if (previewViewportBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailPreview.viewport = previewViewportBtn.getAttribute("data-email-preview-viewport") || "desktop";
+      renderAdminConsole();
+      return;
+    }
+
+    const previewResetBtn = e.target.closest("[data-email-preview-reset]");
+    if (previewResetBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailPreview.overrides = {};
+      renderAdminConsole();
+      showToast(t("adminEmailResetToast"));
+      return;
+    }
+
+    const previewCopyBtn = e.target.closest("[data-email-preview-copy]");
+    if (previewCopyBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const copyTarget = previewCopyBtn.getAttribute("data-email-preview-copy");
+      const preview = getActiveEmailPreviewPayload();
+      const textToCopy = copyTarget === "subject" ? preview.subject : preview.html;
+      try {
+        await navigator.clipboard?.writeText?.(textToCopy);
+        showToast(copyTarget === "subject" ? t("adminEmailCopiedSubjectToast") : t("adminEmailCopiedHtmlToast"));
+      } catch {
+        showToast("Unable to access clipboard on this browser.");
+      }
+      return;
+    }
+
     const admModelFilterBtn = e.target.closest("[data-adm-model-filter]");
     if (admModelFilterBtn) {
       if (!hasVerifiedAdminSession()) return;
@@ -1809,6 +1919,14 @@ function wireEvents() {
   });
 
   document.addEventListener("change", (e) => {
+    const emailRecordSelect = e.target.closest("[data-email-preview-record]");
+    if (emailRecordSelect) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailPreview.recordId = emailRecordSelect.value || "__sample__";
+      renderAdminConsole();
+      return;
+    }
+
     const checkInput = e.target.closest("[data-adm-model-check]");
     if (!checkInput) return;
     const modelId = checkInput.getAttribute("data-adm-model-check");
@@ -1819,6 +1937,17 @@ function wireEvents() {
   });
 
   document.addEventListener("input", (e) => {
+    const emailOverrideInput = e.target.closest("[data-email-override-key]");
+    if (emailOverrideInput) {
+      if (!hasVerifiedAdminSession()) return;
+      const key = emailOverrideInput.getAttribute("data-email-override-key");
+      if (key) {
+        state.adminEmailPreview.overrides[key] = emailOverrideInput.value;
+        refreshEmailPreviewLiveStage();
+      }
+      return;
+    }
+
     const admSearchInput = e.target.closest("[data-adm-model-search]");
     if (admSearchInput) {
       state.adminModelSearch = admSearchInput.value || "";

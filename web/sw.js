@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v31";
+const CACHE_VERSION = "star-artist-pwa-v32";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -17,6 +17,7 @@ const APP_SHELL_URLS = [
   "/firebase-config.json",
   "/js/admin-booking-tracker.js",
   "/js/admin-bookings-export.js",
+  "/js/admin-email-preview.js",
   "/js/admin-guard.js",
   "/js/admin-model-growth.js",
   "/js/admin-models.js",

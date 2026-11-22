@@ -3090,9 +3090,9 @@ test("Production Firebase Hosting (.web.app / .firebaseapp.com) auto-loads /__/f
     assert.ok(cc.includes("no-cache"), `firebase.json must set no-cache header on ${src}`);
   }
 
-  // 7. Service Worker v31 uses network-first for JS/CSS/HTML/config and app.js forces SW updateViaCache: none + controllerchange reload
+  // 7. Service Worker v32+ uses network-first for JS/CSS/HTML/config and app.js forces SW updateViaCache: none + controllerchange reload
   const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
-  assert.ok(swJs.includes('CACHE_VERSION = "star-artist-pwa-v31"'), "sw.js must bump cache version to v31");
+  assert.match(swJs, /CACHE_VERSION = "star-artist-pwa-v3[1-9]"/, "sw.js must use v31+ cache version");
   assert.ok(swJs.includes("isFreshCodeAsset"), "sw.js must serve code & config network-first with cache fallback");
 
   const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
@@ -3100,6 +3100,93 @@ test("Production Firebase Hosting (.web.app / .firebaseapp.com) auto-loads /__/f
   assert.ok(appJs.includes("controllerchange"), "app.js must refresh once when an updated Service Worker takes control");
   assert.ok(appJs.includes("shouldShowManualFirebaseSetup"), "app.js must gate any local-dev setup behind shouldShowManualFirebaseSetup");
 });
+
+test("Admin Dashboard Email Preview mode renders branded booking, 18+ model, and company alerts safely inside a sandboxed preview", async () => {
+  const previewMod = await import(pathToFileURL(path.join(webDir, "js/admin-email-preview.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const t = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Booking preview with live record + XSS injection attempt safely escaped
+  const bookingPreview = previewMod.buildAdminEmailPreview({
+    type: "booking",
+    recordId: "bk_live_77",
+    record: {
+      id: "bk_live_77",
+      clientName: "Rohan <img src=x onerror=alert(1)>",
+      serviceType: "4K Music Video",
+      preferredDate: "2026-12-25",
+      preferredTime: "02:00 PM",
+      contactNumber: "+91 9812890081",
+      location: "Studio Floor Sirsa",
+      status: "Pending",
+      notes: "Need crane shot & <script>evil()</script>"
+    },
+    brandOverrides: {
+      brandName: "STAR ARTIST LUXURY",
+      accentColor: "#E5B842",
+      bookingCtaLabel: "Approve Shoot Now"
+    }
+  });
+  assert.equal(bookingPreview.type, "booking");
+  assert.equal(bookingPreview.isSample, false);
+  assert.equal(bookingPreview.to, "chanderstudio0@gmail.com");
+  assert.ok(bookingPreview.subject.includes("4K Music Video"));
+  assert.equal(bookingPreview.html.includes("<script>evil()</script>"), false, "HTML preview must escape script tags");
+  assert.ok(bookingPreview.html.includes("&lt;script&gt;evil()&lt;/script&gt;"));
+  assert.ok(bookingPreview.html.includes("STAR ARTIST LUXURY"));
+  assert.ok(bookingPreview.html.includes("Approve Shoot Now"));
+  assert.ok(bookingPreview.html.includes("#E5B842"));
+
+  // 2. 18+ Model Application preview (sample + javascript: URL rejection)
+  const modelPreview = previewMod.buildAdminEmailPreview({
+    type: "model",
+    record: {
+      id: "mdl_test_1",
+      fullName: "Kavya Verma",
+      age: 23,
+      gender: "Female",
+      city: "Sirsa",
+      phoneNumber: "+91 9812890081",
+      skills: "Fashion Editorial, Bridal",
+      portfolioUrls: "javascript:alert(1)",
+      consentGiven: true,
+      status: "pending"
+    }
+  });
+  assert.equal(modelPreview.type, "model");
+  assert.equal(modelPreview.statusBadgeLabel, "18+ VERIFIED");
+  assert.ok(modelPreview.subject.includes("Kavya Verma"));
+  assert.equal(modelPreview.html.includes('href="javascript:'), false, "Must strip dangerous javascript: portfolio URLs");
+
+  // 3. Company Request preview (sample fallback)
+  const companyPreview = previewMod.buildAdminEmailPreview({ type: "company" });
+  assert.equal(companyPreview.type, "company");
+  assert.equal(companyPreview.isSample, true);
+  assert.ok(companyPreview.subject.includes("Royal Heritage Couture Events"));
+  assert.ok(companyPreview.html.includes("CORPORATE BOOKING ALERT"));
+  assert.ok(companyPreview.text.includes("Grand Courtyard Banquet, Sirsa"));
+
+  // 4. Rendered Admin Email Preview section uses strictly sandboxed iframe (sandbox="")
+  const renderedHtml = previewMod.renderAdminEmailPreviewSectionHtml({
+    previewState: { type: "company", recordId: "__sample__", viewMode: "html", viewport: "mobile", overrides: {} },
+    adminData: { bookings: [], models: [], companyBookings: [] },
+    t
+  });
+  assert.ok(renderedHtml.includes('id="adminEmailPreviewPanel"'));
+  assert.ok(renderedHtml.includes('id="adminEmailPreviewFrame"'));
+  assert.ok(renderedHtml.includes('sandbox=""'), "Preview iframe must enforce empty sandbox attribute");
+  assert.ok(renderedHtml.includes("is-mobile"), "Mobile viewport toggle must apply is-mobile class");
+
+  // 5. Email Preview tab exists strictly inside #adminConsoleContent and sw.js pre-caches the module
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const adminContentIdx = indexHtml.indexOf('id="adminConsoleContent"');
+  const emailTabIdx = indexHtml.indexOf('data-admin-tab="email-preview"');
+  assert.ok(adminContentIdx > 0 && emailTabIdx > adminContentIdx, "Email Preview tab must live inside admin-only console");
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('"/js/admin-email-preview.js"'), "sw.js must pre-cache /js/admin-email-preview.js");
+});
+
 
 
 

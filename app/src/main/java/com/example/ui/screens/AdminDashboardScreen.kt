@@ -101,6 +101,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.ui.components.AdminBookingRequestsComponent
 import com.example.ui.components.AdminDashboardMetrics
+import com.example.ui.components.AdminEmailPreviewSection
 import com.example.ui.components.AdminItemStatus
 import com.example.ui.components.AdminModelVerificationCard
 import com.example.ui.components.AdminModelVerificationSection
@@ -360,6 +361,22 @@ fun AdminDashboardScreen(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (selectedTab == 5) GoldPrimary else Color.Gray
+                    )
+                }
+            )
+            Tab(
+                selected = selectedTab == 6,
+                onClick = { selectedTab = 6 },
+                modifier = Modifier.testTag("admin_tab_email_preview"),
+                text = {
+                    Text(
+                        text = if (language == AppLanguage.HINDI)
+                            "✉️ ईमेल प्रीव्यू"
+                        else
+                            "✉️ Email Preview",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (selectedTab == 6) GoldPrimary else Color.Gray
                     )
                 }
             )
@@ -719,6 +736,13 @@ fun AdminDashboardScreen(
                         }
                     )
                 }
+            }
+            6 -> {
+                AdminEmailPreviewSection(
+                    bookings = allBookings,
+                    models = allModels,
+                    language = language
+                )
             }
         }
     }
