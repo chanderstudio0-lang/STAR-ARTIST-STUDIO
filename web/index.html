@@ -14,8 +14,17 @@
   <title>STAR ARTIST STUDIO — Luxury Photography, Modeling & 4K Cinema PWA</title>
 
   <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="48x48" href="/icons/favicon-48x48.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+  <meta name="msapplication-TileColor" content="#0C0C0C" />
+  <meta name="msapplication-TileImage" content="/icons/icon-192.png" />
+  <meta property="og:image" content="/icons/icon-512.png" />
   <link rel="stylesheet" href="/styles.css" />
 
   <script type="application/ld+json">
@@ -363,7 +372,7 @@
         <h2 data-i18n="catalogHeading">Studio Service Catalog</h2>
       </div>
       <div class="filter-bar">
-        <input id="catalogSearchInput" type="search" class="input" style="max-width: 340px;" placeholder="Search bridal, editorial, 4K video, catalog..." />
+        <input id="catalogSearchInput" type="search" class="input" style="max-width: 340px;" placeholder="Search wedding, bridal, editorial, 4K video, catalog..." />
         <button type="button" class="chip-btn active" data-cat-filter="all">
           <span data-i18n="filterAll">All</span>
           <span class="filter-count-badge" data-cat-count="all">0</span>
@@ -404,6 +413,7 @@
           <div class="field full">
             <label for="bookingService" data-i18n="serviceLabel">Service Package</label>
             <select id="bookingService" class="input" required></select>
+            <div id="bookingWeddingSummary" class="booking-wedding-summary hidden" aria-live="polite"></div>
           </div>
           <div class="field">
             <label for="bookingDate" data-i18n="dateLabel">Preferred Shoot Date</label>
@@ -983,6 +993,10 @@
           <button type="button" class="chip-btn" data-admin-tab="announcements">
             <span data-i18n="adminTabAnnouncements">Announcements</span>
             <span class="filter-count-badge" data-admin-count="announcements">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="wedding-packages">
+            <span data-i18n="adminTabWeddingPackages">Wedding Packages</span>
+            <span class="filter-count-badge" data-admin-count="wedding-packages">3</span>
           </button>
           <button type="button" class="chip-btn" data-admin-tab="email-preview">
             <span data-i18n="adminTabEmailPreview">Email Preview</span>

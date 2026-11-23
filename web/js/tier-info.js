@@ -19,6 +19,27 @@ const TIER_META = {
     tone: "flagship",
     summaryEn: "All-inclusive flagship campaign with creative direction, VIP styling, RAW/4K masters & express delivery.",
     summaryHi: "क्रिएटिव डायरेक्शन, VIP स्टाइलिंग, RAW/4K मास्टर और एक्सप्रेस डिलीवरी वाला ऑल-इनक्लूसिव पैकेज।"
+  },
+  wedding_basic: {
+    badgeEn: "BASIC WEDDING",
+    badgeHi: "बेसिक वेडिंग",
+    tone: "essential",
+    summaryEn: "Complete single-day wedding ceremony photography, HD video coverage & printed wedding album.",
+    summaryHi: "एक-दिवसीय विवाह समारोह की पारंपरिक व कैंडिड फोटोग्राफी, HD वीडियो और प्रिंटेड एल्बम।"
+  },
+  wedding_premium: {
+    badgeEn: "PREMIUM WEDDING",
+    badgeHi: "प्रीमियम वेडिंग",
+    tone: "pro",
+    summaryEn: "Multi-day Haldi, Mehndi & Wedding candid stills, 4K cinematic film, drone aerials & Karizma album.",
+    summaryHi: "हल्दी, मेहंदी और शादी के लिए कैंडिड स्टिल्स, 4K सिनेमाई फिल्म, ड्रोन और करिश्मा एल्बम।"
+  },
+  wedding_luxury: {
+    badgeEn: "LUXURY ROYAL",
+    badgeHi: "लक्ज़री रॉयल",
+    tone: "flagship",
+    summaryEn: "3-day royal destination cinema unit, pre-wedding shoot, same-day reception edit & Italian leather albums.",
+    summaryHi: "3-दिवसीय रॉयल डेस्टिनेशन सिनेमा क्रू, प्री-वेडिंग शूट, सेम-डे एडिट और इटैलियन लेदर एल्बम।"
   }
 };
 

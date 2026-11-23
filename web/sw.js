@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v37";
+const CACHE_VERSION = "star-artist-pwa-v43";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -14,11 +14,14 @@ const APP_SHELL_URLS = [
   "/index.html",
   "/styles.css",
   "/manifest.webmanifest",
+  "/manifest.json",
+  "/favicon.ico",
   "/firebase-config.json",
   "/js/admin-booking-tracker.js",
   "/js/admin-bookings-export.js",
   "/js/admin-email-preview.js",
   "/js/admin-guard.js",
+  "/js/admin-model-experience.js",
   "/js/admin-model-growth.js",
   "/js/admin-models.js",
   "/js/app.js",
@@ -38,8 +41,13 @@ const APP_SHELL_URLS = [
   "/js/offline-sync.js",
   "/js/testimonials.js",
   "/js/tier-info.js",
+  "/js/wedding-packages.js",
   "/js/zip-builder.js",
+  "/icons/favicon-16x16.png",
+  "/icons/favicon-32x32.png",
+  "/icons/favicon-48x48.png",
   "/icons/icon-192.png",
+  "/icons/icon-maskable-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",
   "/icons/apple-touch-icon.png",
@@ -363,6 +371,9 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/styles.css" ||
     url.pathname === "/firebase-config.json" ||
     url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/manifest.json" ||
+    url.pathname === "/favicon.ico" ||
+    url.pathname.startsWith("/icons/") ||
     url.pathname.startsWith("/js/");
 
   if (isFreshCodeAsset) {

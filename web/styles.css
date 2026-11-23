@@ -4810,6 +4810,598 @@ textarea:focus {
   color: #b91c1c;
 }
 
+/* ============================================================================
+   Configurable Wedding Packages (Booking Summary & Admin Manager)
+   ============================================================================ */
+
+.booking-wedding-summary {
+  margin-top: 10px;
+}
+
+.booking-wedding-summary-card {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  background: linear-gradient(145deg, rgba(212, 175, 55, 0.1), var(--bg-elevated));
+}
+
+.booking-wedding-summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.booking-wedding-price {
+  color: var(--gold);
+  font-size: 1.25rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.booking-wedding-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-wedding-tiers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.admin-wedding-tier-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-color: rgba(212, 175, 55, 0.36);
+}
+
+.admin-wedding-tier-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-wedding-live-price {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--gold);
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(212, 175, 55, 0.14);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  white-space: nowrap;
+}
+
+[data-theme="light"] .booking-wedding-summary-card {
+  background: linear-gradient(145deg, rgba(139, 98, 0, 0.08), var(--bg-elevated));
+}
+
+[data-theme="light"] .booking-wedding-price,
+[data-theme="light"] .admin-wedding-live-price {
+  color: var(--gold-dark);
+}
+
+.booking-wedding-addons-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(212, 175, 55, 0.25);
+}
+
+.booking-wedding-addons-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.booking-wedding-addons-head strong {
+  color: var(--gold-light);
+  font-size: 0.88rem;
+}
+
+.booking-wedding-addons-head span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.booking-wedding-addons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.booking-wedding-addon-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.booking-wedding-addon-item:hover {
+  border-color: rgba(212, 175, 55, 0.6);
+}
+
+.booking-wedding-addon-item.is-selected {
+  border-color: var(--gold);
+  background: rgba(212, 175, 55, 0.14);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.35);
+}
+
+.booking-wedding-addon-checkbox {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--gold);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.booking-wedding-addon-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.booking-wedding-addon-copy strong {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+
+.booking-wedding-addon-copy span {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.booking-wedding-addon-price {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--gold);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.booking-wedding-total-box {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  background: rgba(12, 12, 12, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.booking-wedding-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.booking-wedding-total-row strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.booking-wedding-addons-count {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.booking-wedding-total-row.is-grand {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(212, 175, 55, 0.4);
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.booking-wedding-grand-total {
+  color: var(--gold-light) !important;
+  font-size: 1.22rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+[data-theme="light"] .booking-wedding-addons-head strong,
+[data-theme="light"] .booking-wedding-addon-price,
+[data-theme="light"] .booking-wedding-grand-total {
+  color: var(--gold-dark) !important;
+}
+
+[data-theme="light"] .booking-wedding-addon-item.is-selected {
+  background: rgba(139, 98, 0, 0.1);
+}
+
+[data-theme="light"] .booking-wedding-total-box {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+/* Admin Models Tab: Experience Distribution Recharts Pie Chart */
+.model-experience-card {
+  margin-bottom: 14px;
+  gap: 14px;
+  border-color: rgba(212, 175, 55, 0.44);
+  background: linear-gradient(155deg, rgba(212, 175, 55, 0.08), var(--bg-card));
+}
+
+.model-experience-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.model-experience-title {
+  margin: 4px 0 2px;
+  font-size: 1.18rem;
+  color: var(--gold-light);
+}
+
+.model-experience-subtitle {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.model-experience-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.model-experience-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+
+@media (max-width: 780px) {
+  .model-experience-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.model-experience-chart-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-experience-chart-host {
+  width: 100%;
+  min-height: 256px;
+  border-radius: 14px;
+  padding: 6px;
+  border: 1px solid var(--outline);
+  background: rgba(0, 0, 0, 0.24);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.model-experience-fallback-svg {
+  width: 100%;
+  max-width: 260px;
+  height: 230px;
+  display: block;
+}
+
+.model-experience-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.model-experience-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-experience-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.model-experience-dot.is-fresher {
+  background: #38bdf8;
+}
+
+.model-experience-dot.is-experienced {
+  background: var(--gold);
+}
+
+.model-experience-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-experience-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
+.model-experience-stat {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-experience-stat.is-fresher {
+  border-color: rgba(56, 189, 248, 0.38);
+}
+
+.model-experience-stat.is-experienced {
+  border-color: rgba(212, 175, 55, 0.45);
+}
+
+.model-experience-stat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-experience-stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-experience-stat-value {
+  font-size: 1.32rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-experience-pct {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-experience-pct.is-fresher {
+  background: rgba(56, 189, 248, 0.16);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+}
+
+.model-experience-pct.is-experienced {
+  background: rgba(212, 175, 55, 0.16);
+  color: var(--gold-light);
+  border: 1px solid rgba(212, 175, 55, 0.44);
+}
+
+.model-experience-stat-sub {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.model-experience-breakdown {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-experience-breakdown-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-experience-breakdown-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-experience-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .model-experience-card {
+  background: linear-gradient(155deg, rgba(139, 98, 0, 0.06), var(--bg-card));
+}
+
+[data-theme="light"] .model-experience-title {
+  color: var(--gold-dark);
+}
+
+[data-theme="light"] .model-experience-chart-host {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+[data-theme="light"] .model-experience-dot.is-fresher {
+  background: #0284c7;
+}
+
+[data-theme="light"] .model-experience-dot.is-experienced {
+  background: #9a6b00;
+}
+
+[data-theme="light"] .model-experience-pct.is-fresher {
+  background: #e0f2fe;
+  color: #0369a1;
+  border-color: #7dd3fc;
+}
+
+[data-theme="light"] .model-experience-pct.is-experienced {
+  background: rgba(139, 98, 0, 0.12);
+  color: var(--gold-dark);
+  border-color: rgba(139, 98, 0, 0.36);
+}
+
+/* Admin Models Tab: Experience Overview Summary Card (Above Pie Chart) */
+.model-experience-overview-card {
+  margin-bottom: 14px;
+  gap: 12px;
+  border-color: rgba(212, 175, 55, 0.48);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.12), var(--bg-card));
+}
+
+.model-experience-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.model-experience-overview-title {
+  display: block;
+  font-size: 1.02rem;
+  color: var(--gold-light);
+}
+
+.model-experience-overview-subtitle {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.model-experience-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 680px) {
+  .model-experience-overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.model-experience-overview-tile {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-experience-overview-tile.is-approved {
+  border-color: rgba(74, 222, 128, 0.42);
+}
+
+.model-experience-overview-tile.is-fresher {
+  border-color: rgba(56, 189, 248, 0.42);
+}
+
+.model-experience-overview-tile.is-experienced {
+  border-color: rgba(212, 175, 55, 0.48);
+}
+
+.model-experience-overview-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-experience-overview-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-experience-overview-value {
+  font-size: 1.48rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-experience-overview-sub {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.model-experience-dot.is-approved {
+  background: #4ade80;
+}
+
+[data-theme="light"] .model-experience-overview-card {
+  background: linear-gradient(135deg, rgba(139, 98, 0, 0.08), var(--bg-card));
+}
+
+[data-theme="light"] .model-experience-overview-title {
+  color: var(--gold-dark);
+}
+
+[data-theme="light"] .model-experience-dot.is-approved {
+  background: #15803d;
+}
+
+
+
+
+
 
 
 

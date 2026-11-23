@@ -1,0 +1,70 @@
+{
+  "id": "/",
+  "name": "STAR ARTIST STUDIO",
+  "short_name": "Star Artist",
+  "description": "Premium Modeling, Photography & 4K Cinema Video Production Studio in Talwara Khurd, Sirsa, Haryana.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#0C0C0C",
+  "theme_color": "#0C0C0C",
+  "categories": ["photography", "lifestyle", "business"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icons/favicon-48x48.png",
+      "sizes": "48x48",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Book a Shoot",
+      "short_name": "Book Shoot",
+      "description": "Schedule a photography, modeling, or 4K video shoot",
+      "url": "/#booking",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Model Registration",
+      "short_name": "Models 18+",
+      "description": "Submit your 18+ modeling talent profile",
+      "url": "/#models",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Studio Gallery",
+      "short_name": "Gallery",
+      "description": "Explore photography & 4K film portfolio",
+      "url": "/#gallery",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

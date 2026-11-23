@@ -213,6 +213,78 @@ export const STUDIO_SERVICES = [
     ]
   },
   {
+    id: "pkg_wedding_collection",
+    category: "photography",
+    imageUrl: "/images/gallery-bridal.jpg",
+    titleEn: "Complete Wedding Photography & Cinema",
+    titleHi: "संपूर्ण वेडिंग फोटोग्राफी व सिनेमा",
+    startingPriceInr: 45000,
+    priceFormatted: "₹45,000",
+    durationEn: "1 to 3 Days Full Wedding Coverage",
+    durationHi: "1 से 3 दिन संपूर्ण वेडिंग कवरेज",
+    tagEn: "WEDDING TIERS",
+    tagHi: "वेडिंग पैकेज",
+    summaryEn: "End-to-end wedding photography, candid storytelling, drone aerials & 4K cinema films across Basic, Premium, and Luxury wedding tiers.",
+    summaryHi: "बेसिक, प्रीमियम और लक्ज़री वेडिंग पैकेज में संपूर्ण वेडिंग फोटोग्राफी, कैंडिड स्टोरीटेलिंग, ड्रोन और 4K सिनेमा फिल्म।",
+    recommendedServiceType: "Wedding Photography & Cinema",
+    isWeddingCollection: true,
+    isPopular: true,
+    tiers: [
+      {
+        id: "wedding_basic",
+        tierNameEn: "Basic Wedding Package",
+        tierNameHi: "बेसिक वेडिंग पैकेज",
+        priceInr: 45000,
+        priceFormatted: "₹45,000",
+        durationEn: "1-Day Wedding Ceremony",
+        turnaroundEn: "7 Days Delivery",
+        deliverablesEn: [
+          "Full wedding day Traditional Photography + HD Videography",
+          "1 Candid Photographer for key rituals & family portraits",
+          "150 color-graded high-resolution wedding photographs",
+          "30-sheet premium printed matte wedding photo album",
+          "Private cloud gallery link for family sharing"
+        ]
+      },
+      {
+        id: "wedding_premium",
+        tierNameEn: "Premium Wedding Package",
+        tierNameHi: "प्रीमियम वेडिंग पैकेज",
+        priceInr: 85000,
+        priceFormatted: "₹85,000",
+        durationEn: "2-Day Events (Haldi, Mehndi & Wedding)",
+        turnaroundEn: "5 Days Priority",
+        isRecommended: true,
+        deliverablesEn: [
+          "2-day coverage across Haldi, Mehndi, Sangeet & Wedding ceremony",
+          "Candid + Traditional Photography & 4K Cinematic Videography",
+          "Drone aerial coverage for Baraat & venue establishing shots",
+          "50-sheet luxury Karizma hardbound wedding album + couple box",
+          "3-minute 4K cinematic wedding highlight film + 2 Instagram reels",
+          "350 retouched high-resolution stills + digital cloud backup"
+        ]
+      },
+      {
+        id: "wedding_luxury",
+        tierNameEn: "Luxury Wedding Package",
+        tierNameHi: "लक्ज़री वेडिंग पैकेज",
+        priceInr: 145000,
+        priceFormatted: "₹1,45,000",
+        durationEn: "3-Day Royal Destination Coverage",
+        turnaroundEn: "48 Hours Sneak Peek",
+        deliverablesEn: [
+          "3-day complete royal destination coverage with 6-member cinema crew",
+          "Complimentary Pre-Wedding editorial portrait & teaser film shoot",
+          "Dual 4K cinema cameras, gimbal rig, drone aerials & LED stage lighting",
+          "Same-Day Edit (SDE) highlight film screened live at Reception",
+          "2 Handcrafted Italian leather luxury albums + 2 mini parent albums",
+          "Full 4K master wedding feature film + 5 vertical social cutdowns",
+          "600+ editorial retouched photographs + USB crystal keepsake box"
+        ]
+      }
+    ]
+  },
+  {
     id: "pkg_photo_commercial",
     category: "photography",
     imageUrl: "/images/gallery-commercial.jpg",

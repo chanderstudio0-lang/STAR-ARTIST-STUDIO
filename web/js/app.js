@@ -27,6 +27,10 @@ import {
   unmountModelGrowthChart
 } from "./admin-model-growth.js";
 import {
+  mountModelExperienceChart,
+  unmountModelExperienceChart
+} from "./admin-model-experience.js";
+import {
   exportBookingsToCsv,
   applyAdminCsvButtonState,
   runAdminBookingsCsvExport,
@@ -126,6 +130,19 @@ import {
   renderModelDashboardHtml
 } from "./model-portal.js";
 import {
+  WEDDING_PACKAGE_ID,
+  WEDDING_BOOKING_ADDONS,
+  formatInrCurrency,
+  getServiceTierBookingValue,
+  mergeWeddingTierConfigs,
+  findWeddingTierByBookingValue,
+  calculateWeddingBookingTotal,
+  buildWeddingBookingNotesWithPricing,
+  updateBookingWeddingTotalDom,
+  renderBookingWeddingSummaryHtml,
+  renderAdminWeddingPackagesSectionHtml
+} from "./wedding-packages.js";
+import {
   subscribeAuthState,
   signInWithGooglePopup,
   signInWithEmailPassword,
@@ -166,6 +183,9 @@ import {
   adminPublishAnnouncement,
   adminRequestTestEmail,
   adminSubscribeTestEmailStatus,
+  fetchWeddingPackageConfigs,
+  adminSaveWeddingPackageConfig,
+  adminResetWeddingPackageConfig,
   initFirebaseClient,
   shouldShowManualFirebaseSetup,
   saveLocalDevFirebaseConfig,
@@ -189,6 +209,7 @@ const state = {
   galleryFilter: "All",
   adminTab: "bookings",
   adminGrowthChartType: "area",
+  adminModelExperienceScope: "all",
   adminModelFilter: "pending",
   adminModelSearch: "",
   adminModelDrafts: {},
@@ -225,6 +246,9 @@ const state = {
   modelRegPortfolioPhotos: [],
   editingModelId: null,
   editModelDraftPhotos: [],
+  weddingPackageConfigs: [],
+  savingWeddingTierId: null,
+  selectedWeddingAddonIds: [],
   reviews: [],
   expandedCatalogReviews: {},
   expandedTierGuides: {},
@@ -322,9 +346,14 @@ function applyTranslations() {
     }
   }
 
+  renderBookingWeddingSummary();
+
   if (hasVerifiedAdminSession() && state.route === "admin") {
     renderAdminBookingTracker();
     renderAdminModelGrowthChart();
+    if (state.adminTab === "models") {
+      renderAdminConsole();
+    }
   }
 }
 
@@ -336,6 +365,9 @@ function applyTheme() {
   }
   if (hasVerifiedAdminSession() && state.route === "admin") {
     renderAdminModelGrowthChart();
+    if (state.adminTab === "models") {
+      renderAdminModelExperienceChart();
+    }
   }
 }
 
@@ -493,7 +525,7 @@ function renderServiceCards(containerId, services) {
           ${tier.deliverablesEn.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}
         </ul>
         ${feedbackHtml}
-        <button type="button" class="btn-gold" style="margin-top:auto;" data-book-service="${escapeHtml(`${pkg.recommendedServiceType} - ${tier.tierNameEn}`)}">
+        <button type="button" class="btn-gold" style="margin-top:auto;" data-book-service="${escapeHtml(getServiceTierBookingValue(pkg, tier))}">
           ${escapeHtml(t("bookTierBtn"))}
         </button>
       </article>`;
@@ -503,9 +535,14 @@ function renderServiceCards(containerId, services) {
   initLazyBlurImages(container);
 }
 
+function getEffectiveStudioServices() {
+  return mergeWeddingTierConfigs(STUDIO_SERVICES, state.weddingPackageConfigs);
+}
+
 function renderCatalog() {
+  const effectiveServices = getEffectiveStudioServices();
   const q = state.catalogSearch.trim().toLowerCase();
-  const catCounts = countCatalogByCategory(STUDIO_SERVICES, q);
+  const catCounts = countCatalogByCategory(effectiveServices, q);
   document.querySelectorAll("[data-cat-count]").forEach((badge) => {
     const key = badge.getAttribute("data-cat-count");
     if (key && Object.prototype.hasOwnProperty.call(catCounts, key)) {
@@ -514,12 +551,13 @@ function renderCatalog() {
     }
   });
 
-  const filtered = STUDIO_SERVICES.filter((pkg) => {
+  const filtered = effectiveServices.filter((pkg) => {
     const catOk = state.catalogCategory === "all" || pkg.category === state.catalogCategory;
-    const text = `${pkg.titleEn} ${pkg.titleHi} ${pkg.summaryEn} ${pkg.tagEn} ${pkg.recommendedServiceType}`.toLowerCase();
+    const tierNames = (pkg.tiers || []).map((tr) => `${tr.tierNameEn || ""} ${tr.tierNameHi || ""}`).join(" ");
+    const text = `${pkg.titleEn} ${pkg.titleHi} ${pkg.summaryEn} ${pkg.tagEn} ${pkg.recommendedServiceType} ${tierNames}`.toLowerCase();
     return catOk && (!q || text.includes(q));
   });
-  renderServiceCards("homeFeaturedServicesGrid", STUDIO_SERVICES.filter((p) => p.isPopular).slice(0, 3));
+  renderServiceCards("homeFeaturedServicesGrid", effectiveServices.filter((p) => p.isPopular).slice(0, 3));
   renderServiceCards("catalogGrid", filtered);
 }
 
@@ -1035,6 +1073,32 @@ function renderAdminModelGrowthChart() {
   });
 }
 
+function renderAdminModelExperienceChart() {
+  const chartHost = document.getElementById("adminModelExperienceChartMount");
+  if (!hasVerifiedAdminSession()) {
+    unmountModelExperienceChart(chartHost);
+    return;
+  }
+
+  document.querySelectorAll("[data-exp-chart-scope]").forEach((btn) => {
+    const isActive = btn.getAttribute("data-exp-chart-scope") === state.adminModelExperienceScope;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  if (!chartHost) return;
+
+  mountModelExperienceChart(chartHost, {
+    models: state.adminData.models,
+    summaryEl: document.getElementById("adminModelExperienceSummary"),
+    statusEl: document.getElementById("adminModelExperienceStatus"),
+    scope: state.adminModelExperienceScope,
+    theme: state.theme,
+    t,
+    escapeHtml
+  });
+}
+
 let adminBookingsUnsubscribe = null;
 
 const adminBookingTracker = createRealtimeBookingTracker({
@@ -1131,6 +1195,7 @@ async function loadAdminConsole() {
     stopAdminRealtimeTracker();
     state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     if (state.route === "admin") {
       navigateTo("home", { silentBlock: true });
@@ -1140,7 +1205,14 @@ async function loadAdminConsole() {
   syncAdminUiVisibility(document, { isAdmin: true, adminEmail: state.user?.email || "" });
 
   try {
-    state.adminData = await adminFetchDashboardData();
+    const [dashData, weddingConfigs] = await Promise.all([
+      adminFetchDashboardData(),
+      fetchWeddingPackageConfigs()
+    ]);
+    state.adminData = dashData;
+    state.weddingPackageConfigs = weddingConfigs;
+    renderCatalog();
+    populateBookingServicesDropdown();
     renderAdminConsole();
     await ensureAdminRealtimeTracker();
     await adminBookingTracker.evaluateNow();
@@ -1153,6 +1225,7 @@ function renderAdminConsole() {
   if (!hasVerifiedAdminSession()) {
     stopAdminRealtimeTracker();
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     return;
   }
@@ -1176,7 +1249,8 @@ function renderAdminConsole() {
     models: state.adminData.models.length,
     companies: companyRequests.length,
     gallery: state.adminData.gallery.length,
-    announcements: state.adminData.announcements.length
+    announcements: state.adminData.announcements.length,
+    "wedding-packages": 3
   };
   document.querySelectorAll("[data-admin-count]").forEach((badge) => {
     const key = badge.getAttribute("data-admin-count");
@@ -1188,6 +1262,9 @@ function renderAdminConsole() {
 
   const body = document.getElementById("adminTabBody");
   if (!body) return;
+
+  // Always unmount any active React PieChart root before replacing #adminTabBody HTML
+  unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
 
   if (state.adminTab === "bookings") {
     const toolbarHtml = renderAdminBookingsToolbarHtml({
@@ -1227,9 +1304,11 @@ function renderAdminConsole() {
       filter: state.adminModelFilter,
       searchQuery: state.adminModelSearch,
       drafts: state.adminModelDrafts,
+      experienceScope: state.adminModelExperienceScope,
       lang: state.lang,
       t
     });
+    renderAdminModelExperienceChart();
   } else if (state.adminTab === "companies") {
     body.innerHTML = renderAdminCompanyRequestsSectionHtml({
       requests: companyRequests,
@@ -1257,6 +1336,13 @@ function renderAdminConsole() {
       </div>`
       )
       .join("");
+  } else if (state.adminTab === "wedding-packages") {
+    body.innerHTML = renderAdminWeddingPackagesSectionHtml({
+      services: getEffectiveStudioServices(),
+      savingTierId: state.savingWeddingTierId,
+      t,
+      escapeHtml
+    });
   } else if (state.adminTab === "email-preview") {
     body.innerHTML = renderAdminEmailPreviewSectionHtml({
       previewState: state.adminEmailPreview,
@@ -1312,9 +1398,10 @@ function refreshEmailPreviewLiveStage() {
 async function refreshCloudData() {
   if (!state.firebaseReady) return;
   try {
-    const [cloudGalleryRes, publicModelsRes] = await Promise.allSettled([
+    const [cloudGalleryRes, publicModelsRes, weddingConfigsRes] = await Promise.allSettled([
       fetchApprovedGallery(),
-      fetchPublicApprovedModels()
+      fetchPublicApprovedModels(),
+      fetchWeddingPackageConfigs()
     ]);
     if (cloudGalleryRes.status === "fulfilled") {
       const cloudGallery = cloudGalleryRes.value;
@@ -1328,6 +1415,11 @@ async function refreshCloudData() {
     if (publicModelsRes.status === "fulfilled") {
       state.publicModels = mergePublicModels(publicModelsRes.value);
       renderPublicModels();
+    }
+    if (weddingConfigsRes.status === "fulfilled") {
+      state.weddingPackageConfigs = weddingConfigsRes.value;
+      renderCatalog();
+      populateBookingServicesDropdown();
     }
 
     if (state.user) {
@@ -1487,6 +1579,7 @@ function updateFirebaseUiStatus() {
   }
   if (!isAdminNow) {
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
   }
   syncAdminUiVisibility(document, {
     isAdmin: isAdminNow,
@@ -1496,16 +1589,66 @@ function updateFirebaseUiStatus() {
   applyTranslations();
 }
 
+function renderBookingWeddingSummary() {
+  const select = document.getElementById("bookingService");
+  const box = document.getElementById("bookingWeddingSummary");
+  if (!select || !box) return;
+  const matchedTier = findWeddingTierByBookingValue(getEffectiveStudioServices(), select.value);
+  if (!matchedTier) {
+    state.selectedWeddingAddonIds = [];
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+  box.innerHTML = renderBookingWeddingSummaryHtml(matchedTier, {
+    selectedAddonIds: state.selectedWeddingAddonIds,
+    addons: WEDDING_BOOKING_ADDONS,
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+  box.classList.remove("hidden");
+}
+
 function populateBookingServicesDropdown() {
   const select = document.getElementById("bookingService");
   if (!select) return;
-  const options = [];
-  STUDIO_SERVICES.forEach((pkg) => {
+  const prevValue = select.value;
+  const effectiveServices = getEffectiveStudioServices();
+  const weddingOptions = [];
+  const studioOptions = [];
+
+  effectiveServices.forEach((pkg) => {
     pkg.tiers.forEach((tier) => {
-      options.push(`${pkg.recommendedServiceType} - ${tier.tierNameEn}`.slice(0, 100));
+      const val = getServiceTierBookingValue(pkg, tier);
+      if (pkg.id === WEDDING_PACKAGE_ID || pkg.isWeddingCollection) {
+        weddingOptions.push({
+          value: val,
+          label: `${tier.tierNameEn} (${tier.priceFormatted})`
+        });
+      } else {
+        studioOptions.push({
+          value: val,
+          label: val
+        });
+      }
     });
   });
-  select.innerHTML = options.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("");
+
+  const weddingGroupHtml = weddingOptions.length
+    ? `<optgroup label="Wedding Packages">${weddingOptions
+        .map((opt) => `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</option>`)
+        .join("")}</optgroup>`
+    : "";
+  const studioGroupHtml = `<optgroup label="Studio Photography, Modeling &amp; Cinema">${studioOptions
+    .map((opt) => `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</option>`)
+    .join("")}</optgroup>`;
+
+  select.innerHTML = `${weddingGroupHtml}${studioGroupHtml}`;
+  if (prevValue && Array.from(select.options).some((o) => o.value === prevValue)) {
+    select.value = prevValue;
+  }
+  renderBookingWeddingSummary();
 
   const dateEl = document.getElementById("bookingDate");
   if (dateEl && !dateEl.value) {
@@ -1676,7 +1819,10 @@ function wireEvents() {
     if (bookBtn) {
       const svc = bookBtn.getAttribute("data-book-service");
       const select = document.getElementById("bookingService");
-      if (select && svc) select.value = svc;
+      if (select && svc) {
+        select.value = svc;
+        renderBookingWeddingSummary();
+      }
       navigateTo("booking");
       return;
     }
@@ -1901,6 +2047,18 @@ function wireEvents() {
       const nextType = growthChartTypeBtn.getAttribute("data-growth-chart-type") === "bar" ? "bar" : "area";
       state.adminGrowthChartType = nextType;
       renderAdminModelGrowthChart();
+      return;
+    }
+
+    const expChartScopeBtn = e.target.closest("[data-exp-chart-scope]");
+    if (expChartScopeBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const nextScope = expChartScopeBtn.getAttribute("data-exp-chart-scope") === "approved" ? "approved" : "all";
+      state.adminModelExperienceScope = nextScope;
+      renderAdminModelExperienceChart();
       return;
     }
 
@@ -3266,14 +3424,31 @@ function wireEvents() {
 
   document.getElementById("bookingForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const selectedServiceType = document.getElementById("bookingService").value;
+    const matchedWeddingTier = findWeddingTierByBookingValue(
+      getEffectiveStudioServices(),
+      selectedServiceType
+    );
+    const weddingPricing = matchedWeddingTier
+      ? calculateWeddingBookingTotal(
+          matchedWeddingTier,
+          state.selectedWeddingAddonIds,
+          WEDDING_BOOKING_ADDONS
+        )
+      : null;
+    const rawNotes = document.getElementById("bookingNotes").value;
+    const finalNotes = weddingPricing
+      ? buildWeddingBookingNotesWithPricing(rawNotes, weddingPricing)
+      : rawNotes;
+
     const payload = {
       clientName: document.getElementById("bookingName").value,
       contactNumber: document.getElementById("bookingPhone").value,
-      serviceType: document.getElementById("bookingService").value,
+      serviceType: selectedServiceType,
       preferredDate: document.getElementById("bookingDate").value,
       preferredTime: document.getElementById("bookingTime").value,
       location: document.getElementById("bookingLocation").value,
-      notes: document.getElementById("bookingNotes").value
+      notes: finalNotes
     };
 
     const validationError = validateOfflineBookingPayload(payload);
@@ -3294,6 +3469,7 @@ function wireEvents() {
       await enqueueOfflineBooking(record);
       await registerBookingBackgroundSync();
       await refreshOfflineBookingQueue();
+      state.selectedWeddingAddonIds = [];
       e.target.reset();
       populateBookingServicesDropdown();
       showToast(t("offlineBookingSavedToast"));
@@ -3310,6 +3486,7 @@ function wireEvents() {
 
     try {
       await createShootBooking(payload);
+      state.selectedWeddingAddonIds = [];
       e.target.reset();
       populateBookingServicesDropdown();
       showToast("Shoot booking submitted!");
@@ -3904,7 +4081,103 @@ function wireEvents() {
     showToast(t("newsletterThankYouHeading"));
   });
 
+  document.getElementById("bookingService")?.addEventListener("change", () => {
+    renderBookingWeddingSummary();
+  });
+
+  document.getElementById("bookingWeddingSummary")?.addEventListener("change", (e) => {
+    const addonCheckbox = e.target.closest("input[data-wedding-addon-id]");
+    if (!addonCheckbox) return;
+    const summaryEl = document.getElementById("bookingWeddingSummary");
+    const selectEl = document.getElementById("bookingService");
+    if (!summaryEl || !selectEl) return;
+    const checkedIds = Array.from(
+      summaryEl.querySelectorAll("input[data-wedding-addon-id]:checked")
+    ).map((el) => el.getAttribute("data-wedding-addon-id") || el.value);
+    state.selectedWeddingAddonIds = checkedIds;
+    const matchedTier = findWeddingTierByBookingValue(getEffectiveStudioServices(), selectEl.value);
+    if (matchedTier) {
+      updateBookingWeddingTotalDom(summaryEl, matchedTier, state.selectedWeddingAddonIds, {
+        addons: WEDDING_BOOKING_ADDONS,
+        t
+      });
+    }
+  });
+
+  document.addEventListener("input", (e) => {
+    const priceInput = e.target.closest("[data-admin-wedding-price-input]");
+    if (!priceInput) return;
+    const tierId = priceInput.getAttribute("data-admin-wedding-price-input");
+    const previewEl = document.querySelector(`[data-admin-wedding-price-preview="${tierId}"]`);
+    if (previewEl) {
+      const parsed = Number.parseInt(String(priceInput.value || "").replace(/[^\d]/g, ""), 10);
+      previewEl.textContent = Number.isInteger(parsed) && parsed > 0 ? formatInrCurrency(parsed) : "₹0";
+    }
+  });
+
+  document.addEventListener("click", async (e) => {
+    const resetBtn = e.target.closest("[data-admin-wedding-reset]");
+    if (!resetBtn) return;
+    if (!hasVerifiedAdminSession()) {
+      showToast(t("adminAccessDeniedToast"));
+      return;
+    }
+    const tierId = resetBtn.getAttribute("data-admin-wedding-reset");
+    if (!tierId) return;
+    state.savingWeddingTierId = tierId;
+    renderAdminConsole();
+    try {
+      await adminResetWeddingPackageConfig(tierId);
+      state.weddingPackageConfigs = state.weddingPackageConfigs.filter(
+        (cfg) => String(cfg.tierId || cfg.id) !== tierId
+      );
+      renderCatalog();
+      populateBookingServicesDropdown();
+      showToast(t("adminWeddingResetToast"));
+    } catch (err) {
+      showToast(err.message || "Unable to reset wedding package.");
+    } finally {
+      state.savingWeddingTierId = null;
+      renderAdminConsole();
+    }
+  });
+
   document.addEventListener("submit", async (e) => {
+    const weddingForm = e.target.closest("[data-admin-wedding-form]");
+    if (weddingForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const tierId = weddingForm.getAttribute("data-admin-wedding-form");
+      if (!tierId) return;
+      const fd = new FormData(weddingForm);
+      state.savingWeddingTierId = tierId;
+      renderAdminConsole();
+      try {
+        const saved = await adminSaveWeddingPackageConfig(tierId, {
+          priceInr: fd.get("priceInr"),
+          durationEn: fd.get("durationEn"),
+          turnaroundEn: fd.get("turnaroundEn"),
+          includedServices: fd.get("includedServices")
+        });
+        state.weddingPackageConfigs = [
+          ...state.weddingPackageConfigs.filter((cfg) => String(cfg.tierId || cfg.id) !== tierId),
+          saved
+        ];
+        renderCatalog();
+        populateBookingServicesDropdown();
+        showToast(t("adminWeddingSavedToast").replace("{name}", saved.tierNameEn || "Wedding Package"));
+      } catch (err) {
+        showToast(err.message || "Unable to save wedding package configuration.");
+      } finally {
+        state.savingWeddingTierId = null;
+        renderAdminConsole();
+      }
+      return;
+    }
+
     if (e.target.id === "adminAnnouncementForm") {
       e.preventDefault();
       if (!hasVerifiedAdminSession()) {

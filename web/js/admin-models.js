@@ -1,3 +1,5 @@
+import { renderModelExperienceOverviewCardHtml } from "./admin-model-experience.js";
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -116,12 +118,14 @@ export function renderAdminModelsSectionHtml({
   filter = "pending",
   searchQuery = "",
   drafts = {},
+  experienceScope = "all",
   lang = "en",
   t = (k) => k
 }) {
   const counts = summarizeModelApplications(models);
   const visible = filterModelApplications(models, filter, searchQuery);
   const isHindi = lang === "hi";
+  const activeExpScope = experienceScope === "approved" ? "approved" : "all";
 
   const filterPills = [
     { key: "pending", label: `${t("adminFilterPending")} (${counts.pending})` },
@@ -348,6 +352,47 @@ export function renderAdminModelsSectionHtml({
         <span class="badge status-approved">${counts.roster} Official Roster</span>
       </div>
     </div>
+    ${renderModelExperienceOverviewCardHtml(models, { t, escapeHtml })}
+    <section id="adminModelExperienceCard" class="studio-card model-experience-card" aria-label="${escapeHtml(t("adminExpChartTitle"))}">
+      <div class="model-experience-header">
+        <div>
+          <span class="badge status-confirmed">${escapeHtml(t("adminExpBadge"))}</span>
+          <h3 class="model-experience-title">${escapeHtml(t("adminExpChartTitle"))}</h3>
+          <p class="model-experience-subtitle">${escapeHtml(t("adminExpChartSubtitle"))}</p>
+        </div>
+        <div class="model-experience-controls" role="group" aria-label="${escapeHtml(t("adminExpScopeGroupLabel"))}">
+          <button
+            type="button"
+            class="chip-btn ${activeExpScope === "all" ? "active" : ""}"
+            data-exp-chart-scope="all"
+            aria-pressed="${activeExpScope === "all" ? "true" : "false"}"
+          >${escapeHtml(t("adminExpScopeAll"))} (${counts.total})</button>
+          <button
+            type="button"
+            class="chip-btn ${activeExpScope === "approved" ? "active" : ""}"
+            data-exp-chart-scope="approved"
+            aria-pressed="${activeExpScope === "approved" ? "true" : "false"}"
+          >${escapeHtml(t("adminExpScopeApproved"))} (${counts.roster})</button>
+        </div>
+      </div>
+      <div class="model-experience-layout">
+        <div class="model-experience-chart-col">
+          <div id="adminModelExperienceChartMount" class="model-experience-chart-host" aria-live="polite"></div>
+          <div class="model-experience-legend">
+            <span class="model-experience-legend-item">
+              <span class="model-experience-dot is-fresher"></span>
+              <span>${escapeHtml(t("adminExpFresherLabel"))}</span>
+            </span>
+            <span class="model-experience-legend-item">
+              <span class="model-experience-dot is-experienced"></span>
+              <span>${escapeHtml(t("adminExpExperiencedLabel"))}</span>
+            </span>
+          </div>
+        </div>
+        <div id="adminModelExperienceSummary" class="model-experience-summary"></div>
+      </div>
+      <div id="adminModelExperienceStatus" class="model-experience-status" aria-live="polite"></div>
+    </section>
     <div class="filter-bar" style="margin-bottom:4px;">
       ${filterPills}
       <input

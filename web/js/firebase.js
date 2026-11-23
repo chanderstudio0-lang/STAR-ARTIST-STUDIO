@@ -7,6 +7,7 @@ import {
   buildModelNotificationPayload,
   validateModelSelfRegistration
 } from "./model-portal.js";
+import { validateWeddingTierConfig, WEDDING_TIER_IDS } from "./wedding-packages.js";
 
 const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
 const LOCAL_DEV_SESSION_CONFIG_KEY = "star_artist_local_dev_firebase_config_v1";
@@ -1296,3 +1297,60 @@ export async function adminSubscribeTestEmailStatus(testId, { onUpdate, onError 
     }
   );
 }
+
+// --- CONFIGURABLE WEDDING PACKAGE TIERS (Public read, Admin-only write on Spark Free Plan) ---
+
+export async function fetchWeddingPackageConfigs() {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDocs(fsMod.collection(db, "servicePackages"));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((doc) => WEDDING_TIER_IDS.includes(String(doc.tierId || doc.id || "").trim()));
+  } catch {
+    return [];
+  }
+}
+
+export async function adminSaveWeddingPackageConfig(tierId, payload) {
+  const ctx = await initFirebaseClient();
+  const user = requireAuthorizedAdmin(ctx);
+  const check = validateWeddingTierConfig(tierId, payload);
+  if (!check.valid) {
+    throw new Error(check.errors[0] || "Invalid wedding package configuration.");
+  }
+  const c = check.cleaned;
+  const { fsMod, db } = ctx;
+  const docData = {
+    tierId: c.tierId,
+    tierNameEn: c.tierNameEn,
+    tierNameHi: c.tierNameHi,
+    priceInr: c.priceInr,
+    durationEn: c.durationEn,
+    turnaroundEn: c.turnaroundEn,
+    includedServices: c.includedServices,
+    updatedByEmail: String(user.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  await fsMod.setDoc(fsMod.doc(db, "servicePackages", c.tierId), docData);
+  return { id: c.tierId, ...c };
+}
+
+export async function adminResetWeddingPackageConfig(tierId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const cleanId = String(tierId || "").trim();
+  if (!WEDDING_TIER_IDS.includes(cleanId)) {
+    throw new Error("Invalid wedding package tier.");
+  }
+  const { fsMod, db } = ctx;
+  try {
+    await fsMod.deleteDoc(fsMod.doc(db, "servicePackages", cleanId));
+  } catch {
+    // Default tier already active if no override doc exists
+  }
+  return cleanId;
+}
+

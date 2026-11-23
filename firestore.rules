@@ -255,6 +255,23 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
+    function isValidServicePackageConfig(data, packageId) {
+      return packageId in ['wedding_basic', 'wedding_premium', 'wedding_luxury'] &&
+             data.keys().hasOnly([
+               'tierId', 'tierNameEn', 'tierNameHi', 'priceInr', 'durationEn',
+               'turnaroundEn', 'includedServices', 'updatedByEmail', 'updatedAt'
+             ]) &&
+             data.tierId == packageId &&
+             data.tierNameEn is string && data.tierNameEn.size() >= 2 && data.tierNameEn.size() <= 100 &&
+             (!('tierNameHi' in data) || (data.tierNameHi is string && data.tierNameHi.size() <= 100)) &&
+             data.priceInr is int && data.priceInr >= 1000 && data.priceInr <= 10000000 &&
+             data.durationEn is string && data.durationEn.size() >= 2 && data.durationEn.size() <= 100 &&
+             data.turnaroundEn is string && data.turnaroundEn.size() >= 2 && data.turnaroundEn.size() <= 100 &&
+             data.includedServices is list && data.includedServices.size() >= 1 && data.includedServices.size() <= 15 &&
+             (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.lower() == 'chanderstudio0@gmail.com')) &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
     // Default deny all unknown collections
     match /{document=**} {
       allow read, write: if false;
@@ -459,6 +476,13 @@ service cloud.firestore {
       allow get, list: if isAdmin();
       allow create: if isAdmin() && isValidId(testId) && isValidAdminEmailTest(incoming());
       allow update, delete: if isAdmin();
+    }
+
+    // Publicly readable, strictly Admin-configurable Wedding Package tiers (price & included services)
+    match /servicePackages/{packageId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() && isValidServicePackageConfig(incoming(), packageId);
+      allow delete: if isAdmin();
     }
   }
 }

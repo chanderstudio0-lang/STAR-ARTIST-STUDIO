@@ -59,7 +59,7 @@ test("web/js/data.js preserves official Studio details, named Firestore DB, and 
     dataMod.FIREBASE_PROJECT_DEFAULTS.databaseId,
     "ai-studio-android-stararti-4ffde0d6-02fd-4194-8e31-3359a6b9588b"
   );
-  assert.equal(dataMod.STUDIO_SERVICES.length, 8);
+  assert.equal(dataMod.STUDIO_SERVICES.length, 9);
 });
 
 test("web/js/i18n.js has matching English and Hindi keys", async () => {
@@ -109,7 +109,8 @@ test("No hardcoded API keys inside web source files", () => {
     path.join(webDir, "js/newsletter.js"),
     path.join(webDir, "js/offline-sync.js"),
     path.join(webDir, "js/testimonials.js"),
-    path.join(webDir, "js/tier-info.js")
+    path.join(webDir, "js/tier-info.js"),
+    path.join(webDir, "js/wedding-packages.js")
   ];
   for (const file of filesToScan) {
     const content = fs.readFileSync(file, "utf8");
@@ -3092,7 +3093,7 @@ test("Production Firebase Hosting (.web.app / .firebaseapp.com) auto-loads /__/f
 
   // 7. Service Worker v32+ uses network-first for JS/CSS/HTML/config and app.js forces SW updateViaCache: none + controllerchange reload
   const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
-  assert.match(swJs, /CACHE_VERSION = "star-artist-pwa-v3[1-9]"/, "sw.js must use v31+ cache version");
+  assert.match(swJs, /CACHE_VERSION = "star-artist-pwa-v(3[1-9]|[4-9]\d|\d{3,})"/, "sw.js must use v31+ cache version");
   assert.ok(swJs.includes("isFreshCodeAsset"), "sw.js must serve code & config network-first with cache fallback");
 
   const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
@@ -3890,6 +3891,772 @@ test("Model Self-Registration, Model Dashboard editing & approval notifications,
   const sw = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
   assert.ok(sw.includes('"/js/model-portal.js"'), "sw.js must pre-cache /js/model-portal.js");
 });
+
+test("Service catalog, booking system, and Admin Dashboard support configurable Basic, Premium, and Luxury Wedding Packages", async () => {
+  const weddingMod = await import(pathToFileURL(path.join(webDir, "js/wedding-packages.js")).href);
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+  const tierInfoMod = await import(pathToFileURL(path.join(webDir, "js/tier-info.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Verify all 3 wedding tiers exist in STUDIO_SERVICES and TIER_META
+  const weddingPkg = dataMod.STUDIO_SERVICES.find((p) => p.id === weddingMod.WEDDING_PACKAGE_ID);
+  assert.ok(weddingPkg, "STUDIO_SERVICES must include pkg_wedding_collection");
+  assert.equal(weddingPkg.isWeddingCollection, true);
+  assert.equal(weddingPkg.category, "photography");
+  assert.deepEqual(
+    weddingPkg.tiers.map((t) => t.id),
+    ["wedding_basic", "wedding_premium", "wedding_luxury"]
+  );
+  assert.deepEqual(
+    weddingPkg.tiers.map((t) => t.tierNameEn),
+    ["Basic Wedding Package", "Premium Wedding Package", "Luxury Wedding Package"]
+  );
+  for (const tierId of weddingMod.WEDDING_TIER_IDS) {
+    const enMeta = tierInfoMod.getTierInfoMeta(tierId, "en");
+    const hiMeta = tierInfoMod.getTierInfoMeta(tierId, "hi");
+    assert.notEqual(enMeta.badge, "STUDIO TIER", `getTierInfoMeta(${tierId}, en) must return dedicated wedding badge`);
+    assert.ok(enMeta.summary.length > 10, `getTierInfoMeta(${tierId}, en) must include EN summary`);
+    assert.ok(hiMeta.summary.length > 10, `getTierInfoMeta(${tierId}, hi) must include HI summary`);
+  }
+
+  // 2. Canonical booking values & currency formatting
+  assert.equal(weddingMod.formatInrCurrency(45000), "₹45,000");
+  assert.equal(weddingMod.formatInrCurrency(145000), "₹1,45,000");
+  assert.equal(weddingMod.formatInrCurrency(1250000), "₹12,50,000");
+  assert.equal(
+    weddingMod.getServiceTierBookingValue(weddingPkg, weddingPkg.tiers[0]),
+    "Basic Wedding Package"
+  );
+  assert.equal(
+    weddingMod.getServiceTierBookingValue(weddingPkg, weddingPkg.tiers[1]),
+    "Premium Wedding Package"
+  );
+  assert.equal(
+    weddingMod.getServiceTierBookingValue(weddingPkg, weddingPkg.tiers[2]),
+    "Luxury Wedding Package"
+  );
+  const bridalPkg = dataMod.STUDIO_SERVICES.find((p) => p.id === "pkg_photo_bridal");
+  assert.equal(
+    weddingMod.getServiceTierBookingValue(bridalPkg, bridalPkg.tiers[0]),
+    `${bridalPkg.recommendedServiceType} - ${bridalPkg.tiers[0].tierNameEn}`
+  );
+
+  // 3. Admin config validation (price bounds, included services normalization, invalid tier rejection)
+  const invalidTier = weddingMod.validateWeddingTierConfig("unknown_tier", {
+    priceInr: 50000,
+    durationEn: "1 Day",
+    turnaroundEn: "7 Days",
+    includedServices: "Coverage"
+  });
+  assert.equal(invalidTier.valid, false);
+
+  const invalidPayload = weddingMod.validateWeddingTierConfig("wedding_basic", {
+    priceInr: 500,
+    durationEn: "",
+    turnaroundEn: "",
+    includedServices: "   \n  "
+  });
+  assert.equal(invalidPayload.valid, false);
+  assert.ok(invalidPayload.errors.length >= 4);
+
+  const validUpdate = weddingMod.validateWeddingTierConfig("wedding_premium", {
+    priceInr: "92,500",
+    durationEn: "2-Day Grand Events + Sangeet",
+    turnaroundEn: "4 Days Express",
+    includedServices: "• Candid + Traditional Photography\n- 4K Cinema Highlight Film\n✓ Drone Baraat Coverage\n\n"
+  });
+  assert.equal(validUpdate.valid, true);
+  assert.equal(validUpdate.cleaned.priceInr, 92500);
+  assert.equal(validUpdate.cleaned.priceFormatted, "₹92,500");
+  assert.deepEqual(validUpdate.cleaned.includedServices, [
+    "Candid + Traditional Photography",
+    "4K Cinema Highlight Film",
+    "Drone Baraat Coverage"
+  ]);
+
+  // 4. Merging Firestore Admin overrides updates live catalog without mutating default STUDIO_SERVICES
+  const mergedServices = weddingMod.mergeWeddingTierConfigs(dataMod.STUDIO_SERVICES, [
+    {
+      tierId: "wedding_basic",
+      priceInr: 39000,
+      durationEn: "1-Day Ceremony (Custom)",
+      turnaroundEn: "5 Days",
+      includedServices: ["Custom Full Day Coverage", "200 Graded Photos"]
+    },
+    {
+      tierId: "wedding_luxury",
+      priceInr: 175000,
+      durationEn: "4-Day Destination Palace",
+      turnaroundEn: "24 Hours Sneak Peek",
+      includedServices: ["Pre-Wedding Film", "Same-Day Edit", "2 Italian Albums"]
+    }
+  ]);
+  const mergedWedding = mergedServices.find((p) => p.id === weddingMod.WEDDING_PACKAGE_ID);
+  assert.equal(mergedWedding.startingPriceInr, 39000);
+  assert.equal(mergedWedding.priceFormatted, "₹39,000");
+  assert.equal(mergedWedding.tiers[0].priceInr, 39000);
+  assert.equal(mergedWedding.tiers[0].isCustomized, true);
+  assert.deepEqual(mergedWedding.tiers[0].deliverablesEn, ["Custom Full Day Coverage", "200 Graded Photos"]);
+  assert.equal(mergedWedding.tiers[1].isCustomized, false);
+  assert.equal(mergedWedding.tiers[2].priceFormatted, "₹1,75,000");
+  // Ensure defaults remain unmutated
+  assert.equal(weddingPkg.startingPriceInr, 45000);
+  assert.equal(weddingPkg.tiers[0].priceInr, 45000);
+
+  // 5. Booking summary card & Admin Dashboard configurator rendering (with XSS escaping)
+  const foundLuxury = weddingMod.findWeddingTierByBookingValue(mergedServices, "Luxury Wedding Package");
+  assert.ok(foundLuxury);
+  assert.equal(foundLuxury.priceInr, 175000);
+
+  const summaryHtml = weddingMod.renderBookingWeddingSummaryHtml(
+    { ...foundLuxury, deliverablesEn: ["<b>Same-Day Edit</b>", "2 Italian Albums"] },
+    { lang: "en", t: tEn }
+  );
+  assert.ok(summaryHtml.includes("Luxury Wedding Package"));
+  assert.ok(summaryHtml.includes("₹1,75,000"));
+  assert.equal(summaryHtml.includes("<b>Same-Day Edit</b>"), false, "Booking summary must escape HTML");
+  assert.ok(summaryHtml.includes("&lt;b&gt;Same-Day Edit&lt;/b&gt;"));
+
+  const adminHtml = weddingMod.renderAdminWeddingPackagesSectionHtml({
+    services: mergedServices,
+    savingTierId: "wedding_basic",
+    t: tEn
+  });
+  for (const token of [
+    'data-admin-wedding-form="wedding_basic"',
+    'data-admin-wedding-form="wedding_premium"',
+    'data-admin-wedding-form="wedding_luxury"',
+    'data-admin-wedding-price-input="wedding_premium"',
+    'data-admin-wedding-save="wedding_luxury"',
+    'data-admin-wedding-reset="wedding_basic"',
+    "Basic Wedding Package",
+    "Premium Wedding Package",
+    "Luxury Wedding Package",
+    "₹39,000",
+    "₹85,000",
+    "₹1,75,000"
+  ]) {
+    assert.ok(adminHtml.includes(token), `Admin Wedding Packages HTML missing token: ${token}`);
+  }
+
+  // 6. Verify HTML, app.js, firebase.js, styles.css, sw.js, and Admin-only Firestore rules wiring
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="bookingWeddingSummary"'), "index.html must include #bookingWeddingSummary");
+  assert.ok(html.includes('data-admin-tab="wedding-packages"'), "index.html must include Wedding Packages admin tab");
+  assert.ok(html.includes('data-admin-count="wedding-packages"'), "index.html must include Wedding Packages count badge");
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    "getEffectiveStudioServices",
+    "renderBookingWeddingSummary",
+    "renderAdminWeddingPackagesSectionHtml",
+    "fetchWeddingPackageConfigs",
+    "adminSaveWeddingPackageConfig",
+    "adminResetWeddingPackageConfig",
+    "data-admin-wedding-form",
+    "data-admin-wedding-reset"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing wedding package wiring: ${token}`);
+  }
+
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  for (const token of [
+    'collection(db, "servicePackages")',
+    'doc(db, "servicePackages", c.tierId)',
+    'doc(db, "servicePackages", cleanId)',
+    "fetchWeddingPackageConfigs",
+    "adminSaveWeddingPackageConfig",
+    "adminResetWeddingPackageConfig"
+  ]) {
+    assert.ok(firebaseJs.includes(token), `firebase.js missing wedding package Firestore token: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".booking-wedding-summary-card",
+    ".booking-wedding-price",
+    ".admin-wedding-tiers-grid",
+    ".admin-wedding-tier-card",
+    ".admin-wedding-live-price"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing wedding package rule: ${selector}`);
+  }
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('"/js/wedding-packages.js"'), "sw.js must pre-cache /js/wedding-packages.js");
+
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  for (const token of [
+    "function isValidServicePackageConfig(data, packageId)",
+    "packageId in ['wedding_basic', 'wedding_premium', 'wedding_luxury']",
+    "match /servicePackages/{packageId}",
+    "allow create, update: if isAdmin() && isValidServicePackageConfig(incoming(), packageId);",
+    "allow delete: if isAdmin();"
+  ]) {
+    assert.ok(rules.includes(token), `firestore.rules missing servicePackages rule: ${token}`);
+  }
+});
+
+test("Wedding booking form dynamically calculates total price with user-selected add-ons (Drone Shoot, Cinematic Video, etc.)", async () => {
+  const weddingMod = await import(pathToFileURL(path.join(webDir, "js/wedding-packages.js")).href);
+  const dataMod = await import(pathToFileURL(path.join(webDir, "js/data.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Curated add-ons list includes Drone Shoot & Cinematic Video with valid INR prices
+  const drone = weddingMod.getWeddingAddonById("drone_shoot");
+  const cinematic = weddingMod.getWeddingAddonById("cinematic_video");
+  assert.ok(drone && drone.nameEn === "Drone Shoot" && drone.priceInr === 12000);
+  assert.ok(cinematic && cinematic.nameEn === "Cinematic Video" && cinematic.priceInr === 18000);
+  assert.ok(weddingMod.WEDDING_BOOKING_ADDONS.length >= 6);
+
+  // 2. Dynamic total calculation across base tiers, deduplication, invalid IDs, and custom Admin prices
+  const weddingPkg = dataMod.STUDIO_SERVICES.find((p) => p.id === weddingMod.WEDDING_PACKAGE_ID);
+  const basicTier = weddingPkg.tiers[0]; // ₹45,000
+  const premiumTier = weddingPkg.tiers[1]; // ₹85,000
+
+  const baseOnly = weddingMod.calculateWeddingBookingTotal(basicTier, []);
+  assert.equal(baseOnly.basePriceInr, 45000);
+  assert.equal(baseOnly.addonsTotalInr, 0);
+  assert.equal(baseOnly.addonsCount, 0);
+  assert.equal(baseOnly.totalPriceInr, 45000);
+  assert.equal(baseOnly.totalPriceFormatted, "₹45,000");
+
+  const withAddons = weddingMod.calculateWeddingBookingTotal(basicTier, [
+    "drone_shoot",
+    "cinematic_video",
+    "drone_shoot", // duplicate must be ignored
+    "non_existent_addon" // invalid ID must be ignored
+  ]);
+  assert.equal(withAddons.basePriceInr, 45000);
+  assert.equal(withAddons.addonsCount, 2);
+  assert.equal(withAddons.addonsTotalInr, 30000);
+  assert.equal(withAddons.addonsTotalFormatted, "₹30,000");
+  assert.equal(withAddons.totalPriceInr, 75000);
+  assert.equal(withAddons.totalPriceFormatted, "₹75,000");
+
+  // Works dynamically with Admin-configured custom wedding package prices
+  const customPremium = { ...premiumTier, priceInr: 92500, priceFormatted: "₹92,500" };
+  const customTotal = weddingMod.calculateWeddingBookingTotal(customPremium, [
+    "drone_shoot",
+    "same_day_edit",
+    "extra_luxury_album"
+  ]);
+  assert.equal(customTotal.totalPriceInr, 92500 + 12000 + 10000 + 8500);
+  assert.equal(customTotal.totalPriceFormatted, "₹1,23,000");
+
+  // 3. Rendered wedding booking summary HTML includes interactive checkboxes and live total breakdown
+  const summaryHtml = weddingMod.renderBookingWeddingSummaryHtml(basicTier, {
+    selectedAddonIds: ["drone_shoot", "cinematic_video"],
+    lang: "en",
+    t: tEn
+  });
+  for (const token of [
+    'data-wedding-addon-id="drone_shoot"',
+    'data-wedding-addon-id="cinematic_video"',
+    "Drone Shoot",
+    "Cinematic Video",
+    'id="bookingWeddingTotalBox"',
+    'id="bookingWeddingGrandTotal"',
+    'data-wedding-grand-total="75000"',
+    "₹75,000",
+    "+₹30,000",
+    "(2 selected)"
+  ]) {
+    assert.ok(summaryHtml.includes(token), `Wedding booking summary HTML missing token: ${token}`);
+  }
+
+  // 4. Live in-place DOM total updater recalculates values & highlights selected add-on cards
+  const baseEl = { textContent: "" };
+  const addonsTotalEl = { textContent: "" };
+  const addonsCountEl = { textContent: "" };
+  const grandAttrs = {};
+  const grandTotalEl = {
+    textContent: "",
+    setAttribute: (k, v) => {
+      grandAttrs[k] = v;
+    }
+  };
+  const makeAddonCard = (id) => {
+    const classes = new Set();
+    return {
+      getAttribute: (k) => (k === "data-wedding-addon-card" ? id : null),
+      classList: {
+        toggle: (cls, force) => {
+          if (force) classes.add(cls);
+          else classes.delete(cls);
+        },
+        has: (cls) => classes.has(cls)
+      }
+    };
+  };
+  const droneCard = makeAddonCard("drone_shoot");
+  const cinematicCard = makeAddonCard("cinematic_video");
+  const fakeContainer = {
+    querySelector: (sel) => {
+      if (sel === "[data-wedding-base-price]") return baseEl;
+      if (sel === "[data-wedding-addons-total]") return addonsTotalEl;
+      if (sel === "[data-wedding-addons-count]") return addonsCountEl;
+      if (sel === "[data-wedding-grand-total]") return grandTotalEl;
+      return null;
+    },
+    querySelectorAll: (sel) => (sel === "[data-wedding-addon-card]" ? [droneCard, cinematicCard] : [])
+  };
+
+  const domResult = weddingMod.updateBookingWeddingTotalDom(fakeContainer, basicTier, ["drone_shoot"], {
+    t: tEn
+  });
+  assert.equal(domResult.totalPriceInr, 57000);
+  assert.equal(baseEl.textContent, "₹45,000");
+  assert.equal(addonsTotalEl.textContent, "+₹12,000");
+  assert.equal(addonsCountEl.textContent, "(1 selected)");
+  assert.equal(grandTotalEl.textContent, "₹57,000");
+  assert.equal(grandAttrs["data-wedding-grand-total"], "57000");
+  assert.equal(droneCard.classList.has("is-selected"), true);
+  assert.equal(cinematicCard.classList.has("is-selected"), false);
+
+  // Unchecking all add-ons restores exact base package price
+  const resetResult = weddingMod.updateBookingWeddingTotalDom(fakeContainer, basicTier, [], { t: tEn });
+  assert.equal(resetResult.totalPriceInr, 45000);
+  assert.equal(addonsTotalEl.textContent, "₹0");
+  assert.equal(addonsCountEl.textContent, "(None selected)");
+  assert.equal(grandTotalEl.textContent, "₹45,000");
+  assert.equal(droneCard.classList.has("is-selected"), false);
+
+  // 5. Booking notes pricing summary builder respects Firestore's 1000-char limit & prevents duplication
+  const noteWithQuote = weddingMod.buildWeddingBookingNotesWithPricing("Venue in Sirsa", withAddons);
+  assert.ok(noteWithQuote.includes("Venue in Sirsa"));
+  assert.ok(noteWithQuote.includes("[Wedding Quote]"));
+  assert.ok(noteWithQuote.includes("Drone Shoot (+₹12,000)"));
+  assert.ok(noteWithQuote.includes("Cinematic Video (+₹18,000)"));
+  assert.ok(noteWithQuote.includes("Estimated Total: ₹75,000"));
+  assert.ok(noteWithQuote.length <= 1000);
+
+  const longNoteWithQuote = weddingMod.buildWeddingBookingNotesWithPricing("X".repeat(1200), withAddons);
+  assert.ok(longNoteWithQuote.length <= 1000, "Formatted wedding booking notes must never exceed 1000 chars");
+  assert.ok(longNoteWithQuote.includes("Estimated Total: ₹75,000"));
+
+  // 6. Verify app.js & styles.css wiring
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    "WEDDING_BOOKING_ADDONS",
+    "selectedWeddingAddonIds",
+    "calculateWeddingBookingTotal",
+    "updateBookingWeddingTotalDom",
+    "buildWeddingBookingNotesWithPricing",
+    'input[data-wedding-addon-id]'
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing wedding add-on calculator wiring: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".booking-wedding-addons-grid",
+    ".booking-wedding-addon-item",
+    ".booking-wedding-addon-item.is-selected",
+    ".booking-wedding-total-box",
+    ".booking-wedding-grand-total"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing wedding add-on calculator rule: ${selector}`);
+  }
+});
+
+test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 across favicon, PWA manifests, Apple Touch, Service Worker, and Android app", () => {
+  const readPngDimensions = (filePath) => {
+    const buf = fs.readFileSync(filePath);
+    assert.equal(buf.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", `Invalid PNG header: ${filePath}`);
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), bytes: buf.length };
+  };
+
+  // 1. Verify favicon.ico exists with valid ICO header (00 00 01 00) and multi-size frames
+  const icoPath = path.join(webDir, "favicon.ico");
+  assert.ok(fs.existsSync(icoPath), "web/favicon.ico must exist");
+  const icoBuf = fs.readFileSync(icoPath);
+  assert.equal(icoBuf.readUInt16LE(0), 0, "ICO reserved header must be 0");
+  assert.equal(icoBuf.readUInt16LE(2), 1, "ICO type must be 1 (icon)");
+  assert.ok(icoBuf.readUInt16LE(4) >= 3, "favicon.ico should bundle 16x16, 32x32, and 48x48 frames");
+
+  // 2. Verify all square 1:1 PNG web/PWA/Apple Touch icons have exact dimensions
+  const expectedWebIcons = [
+    ["icons/favicon-16x16.png", 16],
+    ["icons/favicon-32x32.png", 32],
+    ["icons/favicon-48x48.png", 48],
+    ["icons/apple-touch-icon.png", 180],
+    ["icons/icon-192.png", 192],
+    ["icons/icon-maskable-192.png", 192],
+    ["icons/icon-512.png", 512],
+    ["icons/icon-maskable-512.png", 512]
+  ];
+  for (const [relPath, expectedSize] of expectedWebIcons) {
+    const dims = readPngDimensions(path.join(webDir, relPath));
+    assert.equal(dims.width, expectedSize, `${relPath} width must be ${expectedSize}`);
+    assert.equal(dims.height, expectedSize, `${relPath} height must be ${expectedSize}`);
+  }
+
+  // 3. Verify manifest.webmanifest and manifest.json stay synced with Black & Gold #0C0C0C theme
+  const webmanifest = JSON.parse(fs.readFileSync(path.join(webDir, "manifest.webmanifest"), "utf8"));
+  const manifestJson = JSON.parse(fs.readFileSync(path.join(webDir, "manifest.json"), "utf8"));
+  assert.deepEqual(manifestJson, webmanifest, "manifest.json and manifest.webmanifest must stay in sync");
+  assert.equal(webmanifest.background_color, "#0C0C0C");
+  assert.equal(webmanifest.theme_color, "#0C0C0C");
+  assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-192.png" && i.purpose === "any"));
+  assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-maskable-192.png" && i.purpose === "maskable"));
+  assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-512.png" && i.purpose === "any"));
+  assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-maskable-512.png" && i.purpose === "maskable"));
+
+  // 4. Verify index.html favicon, browser tab, Apple Touch, and PWA icon references
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'href="/favicon.ico"',
+    'rel="shortcut icon"',
+    'href="/icons/favicon-16x16.png"',
+    'href="/icons/favicon-32x32.png"',
+    'href="/icons/favicon-48x48.png"',
+    'href="/icons/icon-192.png"',
+    'href="/icons/icon-512.png"',
+    'href="/icons/apple-touch-icon.png"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing icon reference: ${token}`);
+  }
+
+  // 5. Verify Service Worker cache version updated and new icon paths precached & refreshed
+  const swText = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.match(swText, /const CACHE_VERSION = "star-artist-pwa-v(4[1-9]|[5-9]\d|\d{3,})"/, "sw.js must bump CACHE_VERSION to v41+");
+  for (const asset of [
+    '"/manifest.json"',
+    '"/favicon.ico"',
+    '"/icons/favicon-16x16.png"',
+    '"/icons/favicon-32x32.png"',
+    '"/icons/favicon-48x48.png"',
+    '"/icons/icon-maskable-192.png"'
+  ]) {
+    assert.ok(swText.includes(asset), `sw.js missing icon/manifest cache entry: ${asset}`);
+  }
+  assert.ok(swText.includes('url.pathname.startsWith("/icons/")'), "sw.js must refresh /icons/ assets cleanly");
+
+  // 6. Verify Android native adaptive icon & 5-density launcher PNGs
+  const resDir = path.join(rootDir, "app/src/main/res");
+  const bgXml = fs.readFileSync(path.join(resDir, "drawable/ic_launcher_background.xml"), "utf8");
+  const fgXml = fs.readFileSync(path.join(resDir, "drawable/ic_launcher_foreground.xml"), "utf8");
+  assert.ok(bgXml.includes("#0C0C0C"), "Android ic_launcher_background.xml must match #0C0C0C black");
+  assert.ok(fgXml.includes("@drawable/star_artist_logo_brand"), "Android ic_launcher_foreground.xml must use star_artist_logo_brand");
+  const brandDims = readPngDimensions(path.join(resDir, "drawable/star_artist_logo_brand.png"));
+  assert.equal(brandDims.width, 512);
+  assert.equal(brandDims.height, 512);
+
+  for (const [density, size] of [
+    ["mdpi", 48],
+    ["hdpi", 72],
+    ["xhdpi", 96],
+    ["xxhdpi", 144],
+    ["xxxhdpi", 192]
+  ]) {
+    const dir = path.join(resDir, `mipmap-${density}`);
+    const sq = readPngDimensions(path.join(dir, "ic_launcher.png"));
+    const rd = readPngDimensions(path.join(dir, "ic_launcher_round.png"));
+    assert.equal(sq.width, size);
+    assert.equal(sq.height, size);
+    assert.equal(rd.width, size);
+    assert.equal(rd.height, size);
+    assert.equal(fs.existsSync(path.join(dir, "ic_launcher.webp")), false);
+    assert.equal(fs.existsSync(path.join(dir, "ic_launcher_round.webp")), false);
+  }
+});
+
+test("Admin Dashboard Models tab displays Recharts PieChart for Model Experience Level distribution (Fresher vs. Experienced) with offline fallback", async () => {
+  const expMod = await import(pathToFileURL(path.join(webDir, "js/admin-model-experience.js")).href);
+  const adminModelsMod = await import(pathToFileURL(path.join(webDir, "js/admin-models.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Classification accuracy for Fresher vs. Experienced strings
+  assert.equal(expMod.classifyModelExperienceTier("Fresher"), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier("fresher"), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier("Beginner"), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier("0 Years"), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier(""), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier(null), "fresher");
+  assert.equal(expMod.classifyModelExperienceTier("1-2 Years"), "experienced");
+  assert.equal(expMod.classifyModelExperienceTier("3-5 Years"), "experienced");
+  assert.equal(expMod.classifyModelExperienceTier("5+ Years"), "experienced");
+  assert.equal(expMod.classifyModelExperienceTier("Experienced Runway Model"), "experienced");
+
+  // 2. Distribution aggregation for both "all" and "approved" (Official Roster) scopes
+  const sampleModels = [
+    { id: "m1", fullName: "Aarav", status: "approved", experienceLevel: "Fresher" },
+    { id: "m2", fullName: "Diya", status: "approved", experienceLevel: "1-2 Years" },
+    { id: "m3", fullName: "Kabir", status: "approved", experienceLevel: "3-5 Years" },
+    { id: "m4", fullName: "Riya", status: "approved", experienceLevel: "5+ Years" },
+    { id: "m5", fullName: "Simran", status: "pending", experienceLevel: "Fresher" },
+    { id: "m6", fullName: "Vikram", status: "approved", isDisabled: true, experienceLevel: "5+ Years" }
+  ];
+
+  const allDist = expMod.buildModelExperienceDistribution(sampleModels, { scope: "all", t: tEn });
+  assert.equal(allDist.total, 6);
+  assert.equal(allDist.fresherCount, 2);
+  assert.equal(allDist.experiencedCount, 4);
+  assert.equal(allDist.fresherPercent, 33.3);
+  assert.equal(allDist.experiencedPercent, 66.7);
+  assert.equal(allDist.fresherPercent + allDist.experiencedPercent, 100);
+  assert.equal(allDist.breakdown["1-2 Years"], 1);
+  assert.equal(allDist.breakdown["3-5 Years"], 1);
+  assert.equal(allDist.breakdown["5+ Years"], 2);
+  assert.equal(allDist.slices.length, 2);
+  assert.deepEqual(
+    allDist.slices.map((s) => ({ key: s.key, value: s.value })),
+    [
+      { key: "fresher", value: 2 },
+      { key: "experienced", value: 4 }
+    ]
+  );
+
+  const rosterDist = expMod.buildModelExperienceDistribution(sampleModels, { scope: "approved", t: tEn });
+  assert.equal(rosterDist.total, 4, "Approved roster scope must exclude pending and disabled models");
+  assert.equal(rosterDist.fresherCount, 1);
+  assert.equal(rosterDist.experiencedCount, 3);
+  assert.equal(rosterDist.fresherPercent, 25);
+  assert.equal(rosterDist.experiencedPercent, 75);
+
+  const emptyDist = expMod.buildModelExperienceDistribution([], { scope: "all", t: tEn });
+  assert.equal(emptyDist.total, 0);
+  assert.equal(emptyDist.fresherPercent, 0);
+  assert.equal(emptyDist.experiencedPercent, 0);
+
+  // 3. Recharts PieChart mounting, root reuse on update, and clean unmount with mocked runtime
+  let createRootCalls = 0;
+  let unmountCalls = 0;
+  const renderedTrees = [];
+  const fakeReact = {
+    createElement(type, props, ...children) {
+      return { type, props: props || {}, children };
+    }
+  };
+  const fakeRecharts = {
+    ResponsiveContainer: "ResponsiveContainer",
+    PieChart: "PieChart",
+    Pie: "Pie",
+    Cell: "Cell",
+    Tooltip: "Tooltip",
+    Legend: "Legend"
+  };
+  const mockLoaders = {
+    react: async () => fakeReact,
+    reactDomClient: async () => ({
+      createRoot() {
+        createRootCalls += 1;
+        return {
+          render(tree) {
+            renderedTrees.push(tree);
+          },
+          unmount() {
+            unmountCalls += 1;
+          }
+        };
+      }
+    }),
+    recharts: async () => fakeRecharts
+  };
+
+  const chartHost = { innerHTML: "" };
+  const summaryHost = { innerHTML: "" };
+  const statusHost = { textContent: "" };
+
+  const mountRes = await expMod.mountModelExperienceChart(chartHost, {
+    models: sampleModels,
+    summaryEl: summaryHost,
+    statusEl: statusHost,
+    scope: "all",
+    theme: "dark",
+    t: tEn,
+    loaders: mockLoaders
+  });
+  assert.equal(mountRes.engine, "recharts");
+  assert.equal(createRootCalls, 1);
+  assert.equal(renderedTrees.length, 1);
+  assert.equal(renderedTrees[0].type, "ResponsiveContainer");
+  const pieChartNode = renderedTrees[0].children[0];
+  assert.equal(pieChartNode.type, "PieChart");
+  const pieNode = pieChartNode.children.find((c) => c.type === "Pie");
+  assert.ok(pieNode, "PieChart must render a Recharts Pie component");
+  assert.equal(pieNode.props.dataKey, "value");
+  assert.equal(pieNode.props.nameKey, "name");
+  assert.equal(pieNode.children.length, 2, "Pie must render 2 Cell slices (Fresher & Experienced)");
+  assert.equal(pieNode.children[0].type, "Cell");
+  assert.equal(pieNode.children[1].type, "Cell");
+  assert.ok(pieChartNode.children.some((c) => c.type === "Tooltip"), "PieChart must include interactive Tooltip");
+  assert.ok(summaryHost.innerHTML.includes("33.3%"));
+  assert.ok(summaryHost.innerHTML.includes("66.7%"));
+  assert.ok(summaryHost.innerHTML.includes("1-2 Years"));
+  assert.ok(statusHost.textContent.includes("Recharts"));
+
+  // Re-mounting on the same host with scope="approved" reuses existing React root
+  const updateRes = await expMod.mountModelExperienceChart(chartHost, {
+    models: sampleModels,
+    summaryEl: summaryHost,
+    statusEl: statusHost,
+    scope: "approved",
+    theme: "light",
+    t: tEn,
+    loaders: mockLoaders
+  });
+  assert.equal(updateRes.engine, "recharts");
+  assert.equal(createRootCalls, 1, "Existing React root should be reused when toggling scope or theme");
+  assert.equal(renderedTrees.length, 2);
+  assert.ok(summaryHost.innerHTML.includes("25%"));
+  assert.ok(summaryHost.innerHTML.includes("75%"));
+
+  // Clean unmount clears host & calls root.unmount()
+  expMod.unmountModelExperienceChart(chartHost);
+  assert.equal(unmountCalls, 1);
+  assert.equal(chartHost.innerHTML, "");
+
+  // 4. Offline / failed CDN load falls back cleanly to accessible SVG pie chart (including 0-model and 100%-single-slice edge cases)
+  const failingLoaders = {
+    react: async () => { throw new Error("Offline"); },
+    reactDomClient: async () => { throw new Error("Offline"); },
+    recharts: async () => { throw new Error("Offline"); }
+  };
+  const fallbackHost = { innerHTML: "" };
+  const fallbackStatus = { textContent: "" };
+  const fallbackRes = await expMod.mountModelExperienceChart(fallbackHost, {
+    models: sampleModels,
+    statusEl: fallbackStatus,
+    scope: "all",
+    theme: "dark",
+    t: tEn,
+    loaders: failingLoaders
+  });
+  assert.equal(fallbackRes.engine, "svg-fallback");
+  assert.ok(fallbackHost.innerHTML.includes("<svg"));
+  assert.ok(fallbackHost.innerHTML.includes("model-experience-fallback-svg"));
+  assert.ok(fallbackHost.innerHTML.includes("<path"));
+  assert.equal(fallbackHost.innerHTML.includes("NaN"), false);
+
+  const singleSliceSvg = expMod.renderModelExperienceFallbackSvg(
+    expMod.buildModelExperienceDistribution([{ status: "approved", experienceLevel: "Fresher" }], { t: tEn }),
+    { theme: "dark" }
+  );
+  assert.ok(singleSliceSvg.includes("<circle"), "100% single-slice fallback SVG must draw a full circle");
+  assert.equal(singleSliceSvg.includes("NaN"), false);
+
+  const emptySvg = expMod.renderModelExperienceFallbackSvg(emptyDist, { theme: "light" });
+  assert.ok(emptySvg.includes("<circle"), "Empty fallback SVG must draw a clean placeholder ring");
+  assert.equal(emptySvg.includes("NaN"), false);
+
+  // 5. Verify Admin Models tab HTML, app.js lifecycle wiring, styles.css, and sw.js precaching
+  const adminModelsHtml = adminModelsMod.renderAdminModelsSectionHtml({
+    models: sampleModels,
+    filter: "all",
+    experienceScope: "approved",
+    t: tEn
+  });
+  for (const token of [
+    'id="adminModelExperienceCard"',
+    'id="adminModelExperienceChartMount"',
+    'id="adminModelExperienceSummary"',
+    'id="adminModelExperienceStatus"',
+    'data-exp-chart-scope="all"',
+    'data-exp-chart-scope="approved"'
+  ]) {
+    assert.ok(adminModelsHtml.includes(token), `renderAdminModelsSectionHtml missing experience chart element: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    'from "./admin-model-experience.js"',
+    "function renderAdminModelExperienceChart()",
+    "unmountModelExperienceChart(",
+    "[data-exp-chart-scope]",
+    "experienceScope: state.adminModelExperienceScope"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing experience chart integration token: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".model-experience-card",
+    ".model-experience-layout",
+    ".model-experience-chart-host",
+    ".model-experience-fallback-svg",
+    ".model-experience-dot.is-fresher",
+    ".model-experience-dot.is-experienced"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing experience chart rule: ${selector}`);
+  }
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('"/js/admin-model-experience.js"'), "sw.js must pre-cache /js/admin-model-experience.js");
+});
+
+test("Admin Dashboard Models tab renders summary card above Model Experience pie chart showing Total Approved, Fresher, and Experienced counts", async () => {
+  const expMod = await import(pathToFileURL(path.join(webDir, "js/admin-model-experience.js")).href);
+  const adminModelsMod = await import(pathToFileURL(path.join(webDir, "js/admin-models.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+  const tHi = (k) => i18nMod.TRANSLATIONS.hi[k] || k;
+
+  const sampleModels = [
+    { id: "m1", fullName: "Aarav", status: "approved", experienceLevel: "Fresher" },
+    { id: "m2", fullName: "Diya", status: "approved", experienceLevel: "1-2 Years" },
+    { id: "m3", fullName: "Kabir", status: "approved", experienceLevel: "3-5 Years" },
+    { id: "m4", fullName: "Riya", status: "pending", experienceLevel: "Fresher" },
+    { id: "m5", fullName: "Neha", status: "rejected", experienceLevel: "5+ Years" },
+    { id: "m6", fullName: "Vikram", status: "approved", isDisabled: true, experienceLevel: "5+ Years" }
+  ];
+
+  // 1. Direct overview summary card counts: 3 active approved (excludes disabled m6), 2 Fresher total, 4 Experienced total
+  const overviewHtml = expMod.renderModelExperienceOverviewCardHtml(sampleModels, { t: tEn });
+  assert.ok(overviewHtml.includes('id="adminModelExperienceOverviewCard"'));
+  assert.ok(overviewHtml.includes("Total Approved Models"));
+  assert.ok(overviewHtml.includes("Fresher Models"));
+  assert.ok(overviewHtml.includes("Experienced Models"));
+  assert.ok(overviewHtml.includes('data-exp-overview-count="approved">3<'), "Total approved count must exclude disabled profiles");
+  assert.ok(overviewHtml.includes('data-exp-overview-count="fresher">2<'), "Fresher models count must match 2");
+  assert.ok(overviewHtml.includes('data-exp-overview-count="experienced">4<'), "Experienced models count must match 4");
+  assert.ok(overviewHtml.includes("1 approved in roster"), "Fresher tile must show approved sub-count");
+  assert.ok(overviewHtml.includes("2 approved in roster"), "Experienced tile must show approved sub-count");
+
+  // 2. Empty state renders clean zeros
+  const emptyOverviewHtml = expMod.renderModelExperienceOverviewCardHtml([], { t: tEn });
+  assert.ok(emptyOverviewHtml.includes('data-exp-overview-count="approved">0<'));
+  assert.ok(emptyOverviewHtml.includes('data-exp-overview-count="fresher">0<'));
+  assert.ok(emptyOverviewHtml.includes('data-exp-overview-count="experienced">0<'));
+
+  // 3. Hindi localization works cleanly
+  const hiOverviewHtml = expMod.renderModelExperienceOverviewCardHtml(sampleModels, { t: tHi });
+  assert.ok(hiOverviewHtml.includes("कुल स्वीकृत मॉडल्स"));
+  assert.ok(hiOverviewHtml.includes("फ्रेशर मॉडल्स"));
+  assert.ok(hiOverviewHtml.includes("अनुभवी मॉडल्स"));
+
+  // 4. Summary card renders ABOVE #adminModelExperienceCard (Model Experience pie chart) inside Admin Models tab
+  const modelsTabHtml = adminModelsMod.renderAdminModelsSectionHtml({
+    models: sampleModels,
+    filter: "all",
+    experienceScope: "all",
+    t: tEn
+  });
+  const overviewIdx = modelsTabHtml.indexOf('id="adminModelExperienceOverviewCard"');
+  const pieCardIdx = modelsTabHtml.indexOf('id="adminModelExperienceCard"');
+  assert.ok(overviewIdx !== -1, "Models tab must include #adminModelExperienceOverviewCard");
+  assert.ok(pieCardIdx !== -1, "Models tab must include #adminModelExperienceCard");
+  assert.ok(overviewIdx < pieCardIdx, "Summary card must appear strictly above the Model Experience pie chart");
+
+  // 5. CSS rules present for responsive summary card
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const selector of [
+    ".model-experience-overview-card",
+    ".model-experience-overview-grid",
+    ".model-experience-overview-tile",
+    ".model-experience-overview-value",
+    ".model-experience-dot.is-approved"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing overview summary card rule: ${selector}`);
+  }
+});
+
+
+
 
 
 
