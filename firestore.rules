@@ -48,15 +48,39 @@ service cloud.firestore {
              (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
+    function isValidPortfolioPhotoItem(item) {
+      return item is string && item.size() > 0 && item.size() <= 150000;
+    }
+
+    function isValidPortfolioPhotosList(photos) {
+      return photos is list &&
+             photos.size() <= 4 &&
+             (photos.size() < 1 || isValidPortfolioPhotoItem(photos[0])) &&
+             (photos.size() < 2 || isValidPortfolioPhotoItem(photos[1])) &&
+             (photos.size() < 3 || isValidPortfolioPhotoItem(photos[2])) &&
+             (photos.size() < 4 || isValidPortfolioPhotoItem(photos[3]));
+    }
+
     function isValidModel(data) {
       return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
              data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             (!('dateOfBirth' in data) || (data.dateOfBirth is string && data.dateOfBirth.size() <= 20)) &&
              data.age is int && data.age >= 18 && data.age <= 100 &&
              (!('gender' in data) || (data.gender is string && data.gender.size() <= 50)) &&
              data.city is string && data.city.size() > 0 && data.city.size() <= 100 &&
+             (!('state' in data) || (data.state is string && data.state.size() <= 60)) &&
+             (!('heightCm' in data) || (data.heightCm is int && data.heightCm >= 120 && data.heightCm <= 230)) &&
+             (!('languages' in data) || (data.languages is string && data.languages.size() <= 300)) &&
+             (!('experienceLevel' in data) || (data.experienceLevel is string && data.experienceLevel.size() <= 40)) &&
+             (!('bio' in data) || (data.bio is string && data.bio.size() <= 500)) &&
+             (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 128)) &&
              data.phoneNumber is string && data.phoneNumber.size() >= 8 && data.phoneNumber.size() <= 20 &&
              (!('skills' in data) || (data.skills is string && data.skills.size() <= 1000)) &&
              (!('portfolioUrls' in data) || (data.portfolioUrls is string && data.portfolioUrls.size() <= 2000)) &&
+             (!('portfolioPhotos' in data) || isValidPortfolioPhotosList(data.portfolioPhotos)) &&
+             (!('introVideoUrl' in data) || (data.introVideoUrl is string && data.introVideoUrl.size() <= 2000)) &&
+             (!('photoConsent' in data) || data.photoConsent is bool) &&
+             (!('isDisabled' in data) || data.isDisabled is bool) &&
              data.consentGiven == true &&
              data.status in ['pending', 'approved', 'rejected'] &&
              (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
@@ -137,28 +161,43 @@ service cloud.firestore {
              data.bookingId is string && data.bookingId.size() > 0 && data.bookingId.size() <= 128 &&
              data.title is string && data.title.size() >= 2 && data.title.size() <= 160 &&
              data.message is string && data.message.size() >= 3 && data.message.size() <= 2000 &&
-             data.status in ['Pending', 'Confirmed', 'Completed', 'Cancelled', 'Rescheduled'] &&
-             (!('serviceType' in data) || (data.serviceType is string && data.serviceType.size() <= 120)) &&
-             (!('targetFcmToken' in data) || (data.targetFcmToken is string && data.targetFcmToken.size() <= 512)) &&
-             data.isRead is bool &&
-             (!('channelType' in data) || (data.channelType is string && data.channelType.size() <= 60)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+              data.status in ['Pending', 'Confirmed', 'Completed', 'Cancelled', 'Rescheduled', 'Approved', 'Rejected', 'Disabled'] &&
+              (!('serviceType' in data) || (data.serviceType is string && data.serviceType.size() <= 120)) &&
+              (!('targetFcmToken' in data) || (data.targetFcmToken is string && data.targetFcmToken.size() <= 512)) &&
+              data.isRead is bool &&
+              (!('channelType' in data) || (data.channelType is string && data.channelType.size() <= 60)) &&
+              data.createdAt is timestamp && data.createdAt <= request.time &&
+              (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
     function isValidPublicModel(data) {
       return data.keys().hasOnly([
-               'modelId', 'fullName', 'gender', 'city', 'skills',
-               'portfolioUrl', 'avatarUrl', 'category', 'isOfficialRoster',
+               'modelId', 'fullName', 'gender', 'age', 'city', 'state', 'heightCm',
+               'languages', 'experienceLevel', 'skills', 'bio', 'portfolioUrl',
+               'portfolioPhotos', 'introVideoUrl', 'portfolioAvailable',
+               'photoConsent', 'avatarUrl', 'category', 'isOfficialRoster',
                'createdAt', 'updatedAt'
              ]) &&
              data.modelId is string && data.modelId.size() > 0 && data.modelId.size() <= 128 &&
              data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
              (!('gender' in data) || (data.gender is string && data.gender.size() <= 50)) &&
+             (!('age' in data) || (data.age is int && data.age >= 18 && data.age <= 100)) &&
              data.city is string && data.city.size() > 0 && data.city.size() <= 100 &&
+             (!('state' in data) || (data.state is string && data.state.size() <= 60)) &&
+             (!('heightCm' in data) || (data.heightCm is int && data.heightCm >= 120 && data.heightCm <= 230)) &&
+             (!('languages' in data) || (data.languages is string && data.languages.size() <= 300)) &&
+             (!('experienceLevel' in data) || (data.experienceLevel is string && data.experienceLevel.size() <= 40)) &&
              (!('skills' in data) || (data.skills is string && data.skills.size() <= 1000)) &&
+             (!('bio' in data) || (data.bio is string && data.bio.size() <= 500)) &&
              (!('portfolioUrl' in data) || (data.portfolioUrl is string && data.portfolioUrl.size() <= 2000)) &&
-             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500000)) &&
+             (!('portfolioPhotos' in data) || isValidPortfolioPhotosList(data.portfolioPhotos)) &&
+             (!('introVideoUrl' in data) || (data.introVideoUrl is string && data.introVideoUrl.size() <= 2000)) &&
+             (!('portfolioAvailable' in data) || data.portfolioAvailable is bool) &&
+             (!('photoConsent' in data) || data.photoConsent is bool) &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 150000)) &&
+             ((!('portfolioPhotos' in data) || data.portfolioPhotos.size() == 0) || (!('avatarUrl' in data) || data.avatarUrl == '')) &&
+             ((('photoConsent' in data) && data.photoConsent == true) ||
+               ((!('portfolioPhotos' in data) || data.portfolioPhotos.size() == 0) && (!('avatarUrl' in data) || data.avatarUrl == ''))) &&
              (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
              data.isOfficialRoster == true &&
              (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
@@ -168,7 +207,7 @@ service cloud.firestore {
     function isValidCompany(data) {
       return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
              data.companyName is string && data.companyName.size() >= 2 && data.companyName.size() <= 120 &&
-             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Wedding Planner', 'Other'])) &&
+             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Verified Content Creator', 'Wedding Planner', 'Other'])) &&
              data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 100 &&
              data.mobileNumber is string && data.mobileNumber.size() >= 8 && data.mobileNumber.size() <= 20 &&
              data.email is string && data.email.size() >= 5 && data.email.size() <= 128 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$') &&
@@ -180,7 +219,7 @@ service cloud.firestore {
     function isValidCompanyBooking(data) {
       return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
              data.companyName is string && data.companyName.size() >= 2 && data.companyName.size() <= 120 &&
-             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Wedding Planner', 'Other'])) &&
+             (!('organizationType' in data) || (data.organizationType in ['Company', 'Event Organizer', 'Brand / Agency', 'Production House', 'Verified Content Creator', 'Wedding Planner', 'Other'])) &&
              data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 100 &&
              data.mobileNumber is string && data.mobileNumber.size() >= 8 && data.mobileNumber.size() <= 20 &&
              data.email is string && data.email.size() >= 5 && data.email.size() <= 128 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$') &&
@@ -274,6 +313,7 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        incoming().userId == request.auth.uid &&
                        incoming().status == 'pending' &&
+                       (!('isDisabled' in incoming()) || incoming().isDisabled == false) &&
                        isValidModel(incoming());
       allow update: if isSignedIn() && (
                        isAdmin() ||
@@ -281,7 +321,13 @@ service cloud.firestore {
                         incoming().userId == existing().userId &&
                         incoming().createdAt == existing().createdAt &&
                         incoming().status == existing().status &&
-                        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'city', 'phoneNumber', 'skills', 'portfolioUrls', 'updatedAt']))
+                        (!('isDisabled' in incoming()) || ('isDisabled' in existing() && incoming().isDisabled == existing().isDisabled) || incoming().isDisabled == false) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly([
+                          'fullName', 'gender', 'dateOfBirth', 'age', 'city', 'state',
+                          'heightCm', 'skills', 'languages', 'experienceLevel', 'bio',
+                          'portfolioUrls', 'portfolioPhotos', 'introVideoUrl',
+                          'contactEmail', 'phoneNumber', 'photoConsent', 'updatedAt'
+                        ]))
                      ) && isValidModel(incoming());
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }

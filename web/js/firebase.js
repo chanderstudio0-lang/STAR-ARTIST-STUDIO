@@ -2,6 +2,11 @@ import { FIREBASE_PROJECT_DEFAULTS, STUDIO_CONTACT } from "./data.js";
 import { buildStorageObjectPath, computeUploadProgress } from "./image-upload.js";
 import { isAuthorizedAdminUser } from "./admin-guard.js";
 import { sanitizePublicModelProfile } from "./company-booking.js";
+import {
+  sanitizePortfolioPhotoList,
+  buildModelNotificationPayload,
+  validateModelSelfRegistration
+} from "./model-portal.js";
 
 const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
 const LOCAL_DEV_SESSION_CONFIG_KEY = "star_artist_local_dev_firebase_config_v1";
@@ -499,31 +504,106 @@ export async function submitModelRegistration(payload) {
   const user = ctx.auth.currentUser;
   if (!user) throw new Error("Please sign in first to apply as an 18+ model.");
 
-  const ageNum = Number.parseInt(payload.age, 10);
-  if (!Number.isInteger(ageNum) || ageNum < 18 || ageNum > 100) {
-    throw new Error("Applicant must be strictly 18 years of age or older.");
-  }
-  if (!payload.consentGiven) {
-    throw new Error("18+ consent verification is mandatory.");
+  const check = validateModelSelfRegistration(payload, { isEdit: false });
+  if (!check.valid) {
+    throw new Error(check.errors[0] || "Please check all required registration fields.");
   }
 
+  const c = check.cleaned;
   const { fsMod, db } = ctx;
-  const ref = await fsMod.addDoc(fsMod.collection(db, "models"), {
+  const docPayload = {
     userId: user.uid,
-    fullName: payload.fullName.trim(),
-    age: ageNum,
-    gender: payload.gender || "Female",
-    city: payload.city.trim(),
-    phoneNumber: payload.phoneNumber.trim(),
-    skills: payload.skills.trim(),
-    portfolioUrls: payload.portfolioUrls.trim(),
+    fullName: c.fullName,
+    age: c.age,
+    gender: c.gender,
+    city: c.city,
+    phoneNumber: c.phoneNumber,
+    skills: c.skills,
+    portfolioUrls: c.portfolioUrls,
+    photoConsent: c.photoConsent,
+    isDisabled: false,
     consentGiven: true,
     status: "pending",
     adminNotes: "",
     createdAt: fsMod.serverTimestamp(),
     updatedAt: fsMod.serverTimestamp()
-  });
+  };
+
+  if (c.dateOfBirth) docPayload.dateOfBirth = c.dateOfBirth;
+  if (c.state) docPayload.state = c.state;
+  if (Number.isInteger(c.heightCm)) docPayload.heightCm = c.heightCm;
+  if (c.languages) docPayload.languages = c.languages;
+  if (c.experienceLevel) docPayload.experienceLevel = c.experienceLevel;
+  if (c.bio) docPayload.bio = c.bio;
+  if (c.contactEmail) docPayload.contactEmail = c.contactEmail;
+  if (c.introVideoUrl) docPayload.introVideoUrl = c.introVideoUrl;
+  if (c.portfolioPhotos.length > 0) docPayload.portfolioPhotos = c.portfolioPhotos;
+
+  const ref = await fsMod.addDoc(fsMod.collection(db, "models"), docPayload);
   return ref.id;
+}
+
+export async function updateMyModelProfile(modelId, payload) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
+  const user = ctx.auth.currentUser;
+  if (!user) throw new Error("Please sign in first to edit your model profile.");
+
+  const check = validateModelSelfRegistration(payload, { isEdit: true });
+  if (!check.valid) {
+    throw new Error(check.errors[0] || "Please check your profile details.");
+  }
+
+  const c = check.cleaned;
+  const { fsMod, db } = ctx;
+  const updatePayload = {
+    fullName: c.fullName,
+    gender: c.gender,
+    dateOfBirth: c.dateOfBirth,
+    age: c.age,
+    city: c.city,
+    state: c.state,
+    skills: c.skills,
+    languages: c.languages,
+    experienceLevel: c.experienceLevel,
+    bio: c.bio,
+    portfolioUrls: c.portfolioUrls,
+    portfolioPhotos: sanitizePortfolioPhotoList(c.portfolioPhotos),
+    introVideoUrl: c.introVideoUrl,
+    contactEmail: c.contactEmail,
+    phoneNumber: c.phoneNumber,
+    photoConsent: c.photoConsent,
+    updatedAt: fsMod.serverTimestamp()
+  };
+  if (Number.isInteger(c.heightCm)) {
+    updatePayload.heightCm = c.heightCm;
+  }
+
+  await fsMod.updateDoc(fsMod.doc(db, "models", modelId), updatePayload);
+}
+
+export async function fetchMyNotifications(uid) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready || !uid) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDocs(fsMod.collection(db, "users", uid, "notifications"));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function markMyNotificationRead(uid, notificationId) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready || !uid || !notificationId) return;
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "users", uid, "notifications", notificationId), {
+    isRead: true,
+    updatedAt: fsMod.serverTimestamp()
+  });
 }
 
 export async function submitGalleryUpload(payload, autoApprove = false) {
@@ -975,46 +1055,138 @@ export async function adminDeleteBooking(bookingId) {
   await fsMod.deleteDoc(fsMod.doc(db, "bookings", bookingId));
 }
 
-export async function adminUpdateModelStatus(modelId, status, adminNotes = "", modelData = null) {
-  const ctx = await initFirebaseClient();
-  requireAuthorizedAdmin(ctx);
-  const { fsMod, db } = ctx;
-  await fsMod.updateDoc(fsMod.doc(db, "models", modelId), {
+async function writeModelStatusNotification(ctx, { modelId, modelData, status, adminNotes, isDisabled }) {
+  const notif = buildModelNotificationPayload({
+    modelId,
+    userId: modelData?.userId,
+    fullName: modelData?.fullName,
     status,
-    adminNotes: adminNotes.trim(),
-    updatedAt: fsMod.serverTimestamp()
+    adminNotes,
+    isDisabled
   });
+  if (!notif) return;
+  try {
+    const { fsMod, db } = ctx;
+    const notifId = `model_${modelId}_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+    await fsMod.setDoc(fsMod.doc(db, "users", notif.userId, "notifications", notifId), {
+      ...notif,
+      createdAt: fsMod.serverTimestamp(),
+      updatedAt: fsMod.serverTimestamp()
+    });
+  } catch (err) {
+    console.warn("Model notification dispatch skipped:", err?.message || err);
+  }
+}
 
-  // Sync privacy-safe public portfolio card (strictly excluding phoneNumber/email/userId/adminNotes)
+async function syncPublicModelCatalogDoc(ctx, modelId, { status, isDisabled = false, modelData = null } = {}) {
+  const { fsMod, db } = ctx;
   const publicRef = fsMod.doc(db, "publicModels", modelId);
-  if (status === "approved" && modelData) {
+  if (status === "approved" && !isDisabled && modelData) {
     const clean = sanitizePublicModelProfile({
       ...modelData,
       id: modelId,
-      modelId
+      modelId,
+      status: "approved",
+      isOfficialRoster: true,
+      isDisabled: false
     });
     if (clean) {
-      await fsMod.setDoc(publicRef, {
+      const publicDoc = {
         modelId: clean.modelId,
         fullName: clean.fullName,
         gender: clean.gender,
         city: clean.city,
+        state: clean.state,
+        languages: clean.languages,
+        experienceLevel: clean.experienceLevel,
         skills: clean.skills,
+        bio: clean.bio,
         portfolioUrl: clean.portfolioUrl,
-        avatarUrl: clean.avatarUrl,
+        portfolioPhotos: clean.photoConsent ? clean.portfolioPhotos : [],
+        introVideoUrl: clean.introVideoUrl,
+        portfolioAvailable: Boolean(clean.hasPortfolio),
+        photoConsent: Boolean(clean.photoConsent),
+        avatarUrl: clean.photoConsent && clean.portfolioPhotos.length === 0 ? clean.avatarUrl : "",
         category: clean.category,
         isOfficialRoster: true,
         createdAt: fsMod.serverTimestamp(),
         updatedAt: fsMod.serverTimestamp()
-      });
+      };
+      if (Number.isInteger(clean.age) && clean.age >= 18 && clean.age <= 100) {
+        publicDoc.age = clean.age;
+      }
+      if (Number.isInteger(clean.heightCm) && clean.heightCm >= 120 && clean.heightCm <= 230) {
+        publicDoc.heightCm = clean.heightCm;
+      }
+      await fsMod.setDoc(publicRef, publicDoc);
     }
-  } else if (status !== "approved") {
+  } else {
     try {
       await fsMod.deleteDoc(publicRef);
     } catch {
       // Public showcase card may not exist yet
     }
   }
+}
+
+export async function adminUpdateModelStatus(modelId, status, adminNotes = "", modelData = null) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const nextDisabled = status === "approved" ? false : Boolean(modelData?.isDisabled);
+  await fsMod.updateDoc(fsMod.doc(db, "models", modelId), {
+    status,
+    isDisabled: nextDisabled,
+    adminNotes: String(adminNotes || "").trim(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+
+  // Sync privacy-safe public portfolio card (strictly excluding phoneNumber/email/dateOfBirth/userId/adminNotes)
+  await syncPublicModelCatalogDoc(ctx, modelId, { status, isDisabled: nextDisabled, modelData });
+  await writeModelStatusNotification(ctx, {
+    modelId,
+    modelData,
+    status,
+    adminNotes,
+    isDisabled: nextDisabled
+  });
+}
+
+export async function adminSetModelDisabled(modelId, isDisabled, adminNotes = "", modelData = null) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const disabledFlag = Boolean(isDisabled);
+  const currentStatus = String(modelData?.status || "pending").toLowerCase();
+  await fsMod.updateDoc(fsMod.doc(db, "models", modelId), {
+    isDisabled: disabledFlag,
+    adminNotes: String(adminNotes || "").trim(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  await syncPublicModelCatalogDoc(ctx, modelId, {
+    status: currentStatus,
+    isDisabled: disabledFlag,
+    modelData
+  });
+  await writeModelStatusNotification(ctx, {
+    modelId,
+    modelData,
+    status: currentStatus,
+    adminNotes,
+    isDisabled: disabledFlag
+  });
+}
+
+export async function adminDeleteModelProfile(modelId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  try {
+    await fsMod.deleteDoc(fsMod.doc(db, "publicModels", modelId));
+  } catch {
+    // Public catalog entry may not exist
+  }
+  await fsMod.deleteDoc(fsMod.doc(db, "models", modelId));
 }
 
 export async function adminUpdateCompanyBookingStatus(requestId, status, adminNotes = "") {

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v35";
+const CACHE_VERSION = "star-artist-pwa-v37";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -32,6 +32,8 @@ const APP_SHELL_URLS = [
   "/js/i18n.js",
   "/js/image-upload.js",
   "/js/lazy-images.js",
+  "/js/model-discovery.js",
+  "/js/model-portal.js",
   "/js/newsletter.js",
   "/js/offline-sync.js",
   "/js/testimonials.js",

@@ -53,7 +53,10 @@ export function filterModelApplications(models = [], filter = "pending", searchQ
     const hay = [
       m?.fullName,
       m?.city,
+      m?.state,
       m?.phoneNumber,
+      m?.contactEmail,
+      m?.languages,
       m?.skills,
       m?.portfolioUrls,
       m?.adminNotes
@@ -152,29 +155,43 @@ export function renderAdminModelsSectionHtml({
     ? visible
         .map((m) => {
           const st = normalizeModelStatus(m.status);
+          const isDisabled = m.isDisabled === true;
           const draft = drafts[m.id] || {};
           const checked = draft.checked !== undefined ? Boolean(draft.checked) : st === "approved";
           const noteValue = draft.notes !== undefined ? draft.notes : m.adminNotes || "";
           const ageOk = Number(m.age) >= 18;
           const portfolioHref = safeHttpUrl(m.portfolioUrls);
-          const statusCls =
-            st === "approved"
-              ? "status-approved"
-              : st === "rejected"
-              ? "status-rejected"
-              : "status-pending";
-          const cardCls =
-            st === "approved" ? "is-roster" : st === "rejected" ? "is-rejected" : "";
-          const badgeLabel =
-            st === "approved"
-              ? t("rosterBadge")
-              : st === "rejected"
-              ? isHindi
-                ? "अस्वीकृत"
-                : "REJECTED"
-              : isHindi
-              ? "सत्यापन लंबित"
-              : "PENDING REVIEW";
+          const introVideoHref = safeHttpUrl(m.introVideoUrl);
+          const photos = Array.isArray(m.portfolioPhotos)
+            ? m.portfolioPhotos.filter((src) => typeof src === "string" && (src.startsWith("data:image/") || safeHttpUrl(src) || src.startsWith("/images/"))).slice(0, 4)
+            : [];
+          const statusCls = isDisabled
+            ? "status-rejected"
+            : st === "approved"
+            ? "status-approved"
+            : st === "rejected"
+            ? "status-rejected"
+            : "status-pending";
+          const cardCls = isDisabled
+            ? "is-rejected"
+            : st === "approved"
+            ? "is-roster"
+            : st === "rejected"
+            ? "is-rejected"
+            : "";
+          const badgeLabel = isDisabled
+            ? isHindi
+              ? "प्रोफ़ाइल निष्क्रिय"
+              : "DISABLED"
+            : st === "approved"
+            ? t("rosterBadge")
+            : st === "rejected"
+            ? isHindi
+              ? "अस्वीकृत"
+              : "REJECTED"
+            : isHindi
+            ? "सत्यापन लंबित"
+            : "PENDING REVIEW";
 
           return `
         <article class="studio-card admin-model-card ${cardCls}" data-adm-model-card="${escapeHtml(m.id)}">
@@ -182,7 +199,8 @@ export function renderAdminModelsSectionHtml({
             <div>
               <strong style="font-size:1.02rem;color:var(--gold-light);">${escapeHtml(m.fullName)}</strong>
               <div style="font-size:0.84rem;color:var(--text-secondary);">
-                ${escapeHtml(m.gender || "Model")} • ${escapeHtml(m.city || "")} • ${escapeHtml(m.phoneNumber || "")}
+                ${escapeHtml(m.gender || "Model")} • ${escapeHtml(m.city || "")}${m.state && !String(m.city || "").toLowerCase().includes(String(m.state).toLowerCase()) ? `, ${escapeHtml(m.state)}` : ""} • ${escapeHtml(m.phoneNumber || "")}
+                ${m.contactEmail ? ` • ${escapeHtml(m.contactEmail)}` : ""}
               </div>
             </div>
             <span class="badge ${statusCls}">${escapeHtml(badgeLabel)}</span>
@@ -190,16 +208,44 @@ export function renderAdminModelsSectionHtml({
 
           <div class="admin-model-compliance-row">
             <span class="badge ${ageOk ? "status-confirmed" : "status-rejected"}">
-              ${ageOk ? `18+ Eligible (${escapeHtml(m.age)} yrs)` : `Under 18 (${escapeHtml(m.age)})`}
+              ${ageOk ? `18+ Eligible (${escapeHtml(m.age)} yrs${m.dateOfBirth ? ` • DOB: ${escapeHtml(m.dateOfBirth)}` : ""})` : `Under 18 (${escapeHtml(m.age)})`}
             </span>
             <span class="badge ${m.consentGiven ? "status-confirmed" : "status-rejected"}">
               ${m.consentGiven ? (isHindi ? "सहमति हस्ताक्षरित ✓" : "Written Consent ✓") : "Missing Consent"}
             </span>
+            <span class="badge ${m.photoConsent !== false ? "status-confirmed" : "status-pending"}">
+              ${m.photoConsent !== false ? "Photo Consent ✓" : "Photo Private"}
+            </span>
+            ${m.heightCm ? `<span class="badge">${escapeHtml(m.heightCm)} cm</span>` : ""}
+            ${m.experienceLevel ? `<span class="badge">${escapeHtml(m.experienceLevel)}</span>` : ""}
           </div>
+
+          ${
+            photos.length
+              ? `<div class="admin-model-photo-strip">
+                  ${photos
+                    .map(
+                      (src, idx) =>
+                        `<img src="${escapeHtml(src)}" alt="${escapeHtml(m.fullName)} photo ${idx + 1}" class="admin-model-thumb" loading="lazy" />`
+                    )
+                    .join("")}
+                </div>`
+              : ""
+          }
 
           ${
             m.skills
               ? `<div style="font-size:0.84rem;color:var(--text-primary);"><strong>Skills:</strong> ${escapeHtml(m.skills)}</div>`
+              : ""
+          }
+          ${
+            m.languages
+              ? `<div style="font-size:0.84rem;color:var(--text-primary);"><strong>Languages:</strong> ${escapeHtml(m.languages)}</div>`
+              : ""
+          }
+          ${
+            m.bio
+              ? `<div style="font-size:0.84rem;color:var(--text-secondary);"><strong>Introduction:</strong> ${escapeHtml(m.bio)}</div>`
               : ""
           }
           ${
@@ -214,6 +260,14 @@ export function renderAdminModelsSectionHtml({
                 </div>`
               : ""
           }
+          ${
+            introVideoHref
+              ? `<div style="font-size:0.84rem;color:var(--text-secondary);overflow-wrap:anywhere;">
+                  <strong>Intro Video:</strong>
+                  <a href="${escapeHtml(introVideoHref)}" target="_blank" rel="noopener noreferrer" style="color:var(--gold);text-decoration:underline;">${escapeHtml(introVideoHref)}</a>
+                </div>`
+              : ""
+          }
 
           ${
             st !== "approved"
@@ -222,7 +276,7 @@ export function renderAdminModelsSectionHtml({
               <input type="checkbox" data-adm-model-check="${escapeHtml(m.id)}" ${checked ? "checked" : ""} />
               <span>${escapeHtml(t("adminVerifyChecklistLabel"))}</span>
             </label>`
-              : `<div class="roster-verified-banner">★ ${escapeHtml(t("rosterBadge"))}</div>`
+              : `<div class="roster-verified-banner">★ ${escapeHtml(isDisabled ? t("modelStatusDisabled") : t("rosterBadge"))}</div>`
           }
 
           <div class="field">
@@ -253,7 +307,7 @@ export function renderAdminModelsSectionHtml({
               style="min-height:44px;padding:8px 14px;flex:1;"
               data-adm-mdl-id="${escapeHtml(m.id)}"
               data-adm-mdl-st="approved"
-            >${st === "approved" ? "Official Roster ✓" : escapeHtml(t("adminVerifyRosterBtn"))}</button>
+            >${st === "approved" && !isDisabled ? "Official Roster ✓" : escapeHtml(t("adminVerifyRosterBtn"))}</button>
             <button
               type="button"
               class="btn-danger"
@@ -266,6 +320,18 @@ export function renderAdminModelsSectionHtml({
                 ? `<button type="button" class="chip-btn" data-adm-mdl-id="${escapeHtml(m.id)}" data-adm-mdl-st="pending">${escapeHtml(t("adminMovePendingBtn"))}</button>`
                 : ""
             }
+            <button
+              type="button"
+              class="btn-outline btn-sm"
+              data-adm-mdl-disable="${escapeHtml(m.id)}"
+              data-adm-mdl-disabled-next="${isDisabled ? "false" : "true"}"
+            >${escapeHtml(isDisabled ? t("adminEnableModelBtn") : t("adminDisableModelBtn"))}</button>
+            <button
+              type="button"
+              class="btn-danger btn-sm"
+              data-adm-mdl-delete="${escapeHtml(m.id)}"
+              data-adm-mdl-delete-name="${escapeHtml(m.fullName)}"
+            >${escapeHtml(t("adminDeleteModelBtn"))}</button>
           </div>
         </article>`;
         })

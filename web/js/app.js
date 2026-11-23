@@ -110,6 +110,22 @@ import {
   renderAdminCompanyRequestsSectionHtml
 } from "./company-booking.js";
 import {
+  DEFAULT_MODEL_DISCOVERY_FILTERS,
+  getAvailableStatesFromModels,
+  getAvailableCitiesFromModels,
+  countActiveDiscoveryFilters,
+  renderModelProfileModalHtml
+} from "./model-discovery.js";
+import {
+  MAX_PORTFOLIO_PHOTOS,
+  calculateAgeFromDob,
+  encodePortfolioPhotoFile,
+  sanitizePortfolioPhotoList,
+  validateModelSelfRegistration,
+  renderPortfolioPhotoStripHtml,
+  renderModelDashboardHtml
+} from "./model-portal.js";
+import {
   subscribeAuthState,
   signInWithGooglePopup,
   signInWithEmailPassword,
@@ -121,7 +137,10 @@ import {
   getBookingSyncContext,
   cancelMyBooking,
   fetchMyModels,
+  fetchMyNotifications,
+  markMyNotificationRead,
   submitModelRegistration,
+  updateMyModelProfile,
   submitGalleryUpload,
   uploadGalleryImageToStorage,
   fetchServiceReviews,
@@ -138,6 +157,8 @@ import {
   adminSubscribeBookingsRealtime,
   adminDeleteBooking,
   adminUpdateModelStatus,
+  adminSetModelDisabled,
+  adminDeleteModelProfile,
   adminUpdateCompanyBookingStatus,
   adminDeleteCompanyBooking,
   adminUpdateGalleryStatus,
@@ -191,8 +212,8 @@ const state = {
     }
   },
   publicModels: mergePublicModels([]),
-  publicModelGenderFilter: "all",
-  publicModelSearch: "",
+  publicModelFilters: { ...DEFAULT_MODEL_DISCOVERY_FILTERS, skills: [] },
+  activeProfileModelId: null,
   myCompanyProfile: null,
   myCompanyBookings: [],
   selectedRequestedModels: [],
@@ -200,6 +221,10 @@ const state = {
   myBookings: [],
   queuedOfflineBookings: [],
   myModels: [],
+  myNotifications: [],
+  modelRegPortfolioPhotos: [],
+  editingModelId: null,
+  editModelDraftPhotos: [],
   reviews: [],
   expandedCatalogReviews: {},
   expandedTierGuides: {},
@@ -257,6 +282,19 @@ function applyTranslations() {
 
   const publicModelSearchInput = document.getElementById("publicModelsSearchInput");
   if (publicModelSearchInput) publicModelSearchInput.placeholder = t("companySearchPlaceholder");
+
+  const castingCityInput = document.getElementById("castingCityInput");
+  if (castingCityInput) castingCityInput.placeholder = t("castingCityPlaceholder");
+
+  const castingMinAgeInput = document.getElementById("castingMinAge");
+  if (castingMinAgeInput) castingMinAgeInput.placeholder = t("castingMinAgePlaceholder");
+
+  const castingMaxAgeInput = document.getElementById("castingMaxAge");
+  if (castingMaxAgeInput) castingMaxAgeInput.placeholder = t("castingMaxAgePlaceholder");
+
+  if (state.activeProfileModelId) {
+    renderActiveModelProfileModal();
+  }
 
   const newsletterInput = document.getElementById("newsletterEmail");
   if (newsletterInput) newsletterInput.placeholder = t("newsletterEmailPlaceholder");
@@ -704,50 +742,62 @@ function renderMyBookings() {
     .join("");
 }
 
+function renderModelRegPortfolioPreview() {
+  const el = document.getElementById("modelRegPortfolioPreview");
+  if (!el) return;
+  el.innerHTML = renderPortfolioPhotoStripHtml(state.modelRegPortfolioPhotos, {
+    editable: true,
+    scope: "reg",
+    t,
+    escapeHtml
+  });
+}
+
 function renderMyModels() {
   const el = document.getElementById("myModelsList");
   if (!el) return;
-  if (!state.user) {
-    el.innerHTML = `<p style="color:var(--text-secondary);margin:0;">${escapeHtml(t("authRequiredNotice"))}</p>`;
-    return;
+  const emailInput = document.getElementById("modelContactEmail");
+  if (emailInput && !emailInput.value && state.user?.email) {
+    emailInput.value = state.user.email;
   }
-  if (!state.myModels.length) {
-    el.innerHTML = `<p style="color:var(--text-secondary);margin:0;">No 18+ model applications submitted yet.</p>`;
-    return;
+  el.innerHTML = renderModelDashboardHtml({
+    user: state.user,
+    models: state.myModels,
+    notifications: state.myNotifications,
+    editingModelId: state.editingModelId,
+    editDraftPhotos: state.editModelDraftPhotos,
+    t,
+    escapeHtml
+  });
+  renderModelRegPortfolioPreview();
+}
+
+function syncCastingLocationControls() {
+  const stateSelect = document.getElementById("castingStateSelect");
+  if (stateSelect) {
+    const states = getAvailableStatesFromModels(state.publicModels);
+    const currentVal = state.publicModelFilters.state || "all";
+    stateSelect.innerHTML = [
+      `<option value="all">${escapeHtml(t("castingAllStates"))}</option>`,
+      ...states.map((st) => `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`)
+    ].join("");
+    stateSelect.value = states.includes(currentVal) ? currentVal : "all";
   }
-  el.innerHTML = state.myModels
-    .map((m) => {
-      const normalized = String(m.status || "pending").toLowerCase();
-      const statusCls = `status-${normalized}`;
-      const statusLabel =
-        normalized === "approved"
-          ? t("rosterBadge")
-          : normalized === "rejected"
-          ? "Rejected"
-          : "Pending Review";
-      const adminNoteHtml = m.adminNotes
-        ? `<div class="booking-card-notes"><strong>Studio Admin Note:</strong> ${escapeHtml(m.adminNotes)}</div>`
-        : "";
-      return `
-      <div class="studio-card" style="padding:14px;gap:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-          <strong>${escapeHtml(m.fullName)} (${escapeHtml(m.age)} yrs)</strong>
-          <span class="badge ${statusCls}">${escapeHtml(statusLabel)}</span>
-        </div>
-        <div style="font-size:0.86rem;color:var(--text-secondary);">${escapeHtml(m.city)} • ${escapeHtml(m.skills || "")}</div>
-        ${adminNoteHtml}
-      </div>`;
-    })
-    .join("");
+
+  const cityDatalist = document.getElementById("castingCityDatalist");
+  if (cityDatalist) {
+    const cities = getAvailableCitiesFromModels(state.publicModels, state.publicModelFilters.state);
+    cityDatalist.innerHTML = cities.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+  }
 }
 
 function renderPublicModels() {
   const grid = document.getElementById("publicModelsGrid");
   if (!grid) return;
-  const visible = filterPublicModels(state.publicModels, {
-    gender: state.publicModelGenderFilter,
-    search: state.publicModelSearch
-  });
+
+  syncCastingLocationControls();
+
+  const visible = filterPublicModels(state.publicModels, state.publicModelFilters);
   const selectedIds = state.selectedRequestedModels.map((m) => m.id);
   grid.innerHTML = renderPublicModelPortfolioCardsHtml({
     models: visible,
@@ -755,9 +805,157 @@ function renderPublicModels() {
     t,
     escapeHtml
   });
+
+  const countEl = document.getElementById("castingResultsCount");
+  if (countEl) {
+    countEl.textContent = t("castingResultsLabel")
+      .replace("{count}", String(visible.length))
+      .replace("{total}", String(state.publicModels.length));
+  }
+
+  const resetBtn = document.getElementById("castingResetFiltersBtn");
+  if (resetBtn) {
+    const activeCount = countActiveDiscoveryFilters(state.publicModelFilters);
+    resetBtn.textContent = activeCount > 0 ? `${t("castingResetFiltersBtn")} (${activeCount})` : t("castingResetFiltersBtn");
+    resetBtn.disabled = activeCount === 0;
+  }
+
   document.querySelectorAll("[data-public-model-gender]").forEach((btn) => {
-    btn.classList.toggle("active", btn.getAttribute("data-public-model-gender") === state.publicModelGenderFilter);
+    const isActive = (btn.getAttribute("data-public-model-gender") || "all") === state.publicModelFilters.gender;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
+
+  const activeSkills = new Set(state.publicModelFilters.skills || []);
+  document.querySelectorAll("[data-casting-skill]").forEach((btn) => {
+    const skill = btn.getAttribute("data-casting-skill") || "";
+    const isActive = activeSkills.has(skill);
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function renderActiveModelProfileModal() {
+  const body = document.getElementById("modelProfileModalBody");
+  if (!body || !state.activeProfileModelId) return;
+  const model = state.publicModels.find((m) => m.id === state.activeProfileModelId);
+  if (!model) {
+    closeModelProfileModal();
+    return;
+  }
+  const isSelected = state.selectedRequestedModels.some((m) => m.id === model.id);
+  body.innerHTML = renderModelProfileModalHtml(model, {
+    isSelected,
+    t,
+    escapeHtml
+  });
+}
+
+function openModelProfileModal(modelId) {
+  const modal = document.getElementById("modelProfileModal");
+  if (!modal) return;
+  const model = state.publicModels.find((m) => m.id === modelId);
+  if (!model) return;
+  state.activeProfileModelId = model.id;
+  renderActiveModelProfileModal();
+  modal.classList.remove("hidden");
+}
+
+function closeModelProfileModal() {
+  state.activeProfileModelId = null;
+  document.getElementById("modelProfileModal")?.classList.add("hidden");
+}
+
+function resetModelDiscoveryFilters() {
+  state.publicModelFilters = { ...DEFAULT_MODEL_DISCOVERY_FILTERS, skills: [] };
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  };
+  setVal("publicModelsSearchInput", "");
+  setVal("castingStateSelect", "all");
+  setVal("castingCityInput", "");
+  setVal("castingMinAge", "");
+  setVal("castingMaxAge", "");
+  setVal("castingMinHeightSelect", "");
+  setVal("castingMaxHeightSelect", "");
+  setVal("castingExperienceSelect", "all");
+  const portfolioCb = document.getElementById("castingPortfolioOnlyCheckbox");
+  if (portfolioCb) portfolioCb.checked = false;
+  renderPublicModels();
+}
+
+function startCastingInquiryForModel(modelId, fullName) {
+  const model = state.publicModels.find((m) => m.id === modelId);
+  const resolvedName = fullName || model?.fullName || "Roster Model";
+  if (!state.selectedRequestedModels.some((m) => m.id === modelId)) {
+    if (state.selectedRequestedModels.length >= 20) {
+      showToast("You can attach up to 20 specific models per request.");
+      return;
+    }
+    state.selectedRequestedModels.push({ id: modelId, fullName: resolvedName });
+  }
+  if (model && state.selectedRequestedModels.length === 1) {
+    const reqSel = document.getElementById("compBookRequirement");
+    if (reqSel) {
+      const g = String(model.gender || "").toLowerCase();
+      if (g === "female") reqSel.value = "Female Models";
+      else if (g === "male") reqSel.value = "Male Models";
+    }
+  }
+  closeModelProfileModal();
+  renderPublicModels();
+  renderSelectedRequestedModels();
+  showToast(t("castingInquiryAddedToast").replace("{name}", resolvedName));
+  document.getElementById("companyBookingForm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function startAuditionRequestForModel(modelId, fullName) {
+  const model = state.publicModels.find((m) => m.id === modelId);
+  const resolvedName = fullName || model?.fullName || "Roster Model";
+  if (!state.selectedRequestedModels.some((m) => m.id === modelId)) {
+    if (state.selectedRequestedModels.length < 20) {
+      state.selectedRequestedModels.push({ id: modelId, fullName: resolvedName });
+    }
+  }
+  if (model && state.selectedRequestedModels.length === 1) {
+    const reqSel = document.getElementById("compBookRequirement");
+    if (reqSel) {
+      const g = String(model.gender || "").toLowerCase();
+      if (g === "female") reqSel.value = "Female Models";
+      else if (g === "male") reqSel.value = "Male Models";
+    }
+  }
+  const detailsEl = document.getElementById("compBookDetails");
+  if (detailsEl) {
+    const auditionHeader = `[AUDITION REQUEST] Requesting audition & look-test for approved model: ${resolvedName}${model?.city ? ` (${model.city})` : ""}. Please share audition slot availability.`;
+    if (!detailsEl.value.includes("[AUDITION REQUEST]") || !detailsEl.value.includes(resolvedName)) {
+      detailsEl.value = detailsEl.value.trim() ? `${auditionHeader}\n${detailsEl.value.trim()}` : auditionHeader;
+    }
+  }
+  closeModelProfileModal();
+  renderPublicModels();
+  renderSelectedRequestedModels();
+  showToast(t("castingAuditionPrefillToast").replace("{name}", resolvedName));
+  document.getElementById("companyBookingForm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("compBookEventDate")?.focus();
+}
+
+function startShootBookingForModel(modelId, fullName) {
+  const model = state.publicModels.find((m) => m.id === modelId);
+  const resolvedName = fullName || model?.fullName || "Roster Model";
+  closeModelProfileModal();
+  setRoute("booking");
+  const notesEl = document.getElementById("bookingNotes");
+  if (notesEl) {
+    const locationStr = model ? [model.cityName || model.city, model.state].filter(Boolean).join(", ") : "";
+    const briefLine = `Casting Shoot Booking Request — Approved Model: ${resolvedName}${locationStr ? ` (${locationStr})` : ""}${model?.category ? ` • ${model.category}` : ""}`;
+    if (!notesEl.value.includes(resolvedName)) {
+      notesEl.value = notesEl.value.trim() ? `${briefLine}\n${notesEl.value.trim()}` : briefLine;
+    }
+  }
+  showToast(t("castingShootPrefillToast").replace("{name}", resolvedName));
+  document.getElementById("bookingDate")?.focus();
 }
 
 function renderSelectedRequestedModels() {
@@ -1133,15 +1331,17 @@ async function refreshCloudData() {
     }
 
     if (state.user) {
-      const [bookingsRes, modelsRes, reviewsRes, companyProfileRes, companyBookingsRes] = await Promise.allSettled([
+      const [bookingsRes, modelsRes, notifsRes, reviewsRes, companyProfileRes, companyBookingsRes] = await Promise.allSettled([
         fetchMyBookings(state.user.uid),
         fetchMyModels(state.user.uid),
+        fetchMyNotifications(state.user.uid),
         fetchServiceReviews(),
         fetchMyCompanyProfile(state.user.uid),
         fetchMyCompanyBookings(state.user.uid)
       ]);
       if (bookingsRes.status === "fulfilled") state.myBookings = bookingsRes.value;
       if (modelsRes.status === "fulfilled") state.myModels = modelsRes.value;
+      if (notifsRes.status === "fulfilled") state.myNotifications = notifsRes.value;
       if (reviewsRes.status === "fulfilled") state.reviews = reviewsRes.value;
       if (companyProfileRes.status === "fulfilled") {
         state.myCompanyProfile = companyProfileRes.value;
@@ -1160,9 +1360,14 @@ async function refreshCloudData() {
       }
     } else {
       state.reviews = [];
+      state.myModels = [];
+      state.myNotifications = [];
+      state.editingModelId = null;
+      state.editModelDraftPhotos = [];
       state.myCompanyProfile = null;
       state.myCompanyBookings = [];
       prefillCompanyFormsFromProfile(null);
+      renderMyModels();
       renderMyCompanyBookings();
       renderCatalog();
       renderTestimonialCarousel();
@@ -1989,10 +2194,128 @@ function wireEvents() {
       } catch (updateErr) {
         showToast(updateErr.message || "Unable to update model verification status.");
       }
+    } else if (e.target.closest("[data-adm-mdl-disable]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const btn = e.target.closest("[data-adm-mdl-disable]");
+      const modelId = btn.getAttribute("data-adm-mdl-disable");
+      const nextDisabled = btn.getAttribute("data-adm-mdl-disabled-next") === "true";
+      const targetModel = state.adminData.models.find((m) => m.id === modelId);
+      const card = btn.closest("[data-adm-model-card]");
+      const notesInput = card?.querySelector(`[data-adm-model-notes="${modelId}"]`);
+      const adminNotes = notesInput ? notesInput.value : targetModel?.adminNotes || "";
+      try {
+        await adminSetModelDisabled(modelId, nextDisabled, adminNotes, targetModel);
+        showToast(nextDisabled ? "Model profile disabled and removed from public catalog." : "Model profile re-enabled.");
+        await loadAdminConsole();
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err.message || "Unable to update profile visibility.");
+      }
+    } else if (e.target.closest("[data-adm-mdl-delete]")) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const btn = e.target.closest("[data-adm-mdl-delete]");
+      const modelId = btn.getAttribute("data-adm-mdl-delete");
+      const modelName = btn.getAttribute("data-adm-mdl-delete-name") || "this profile";
+      if (!window.confirm(`Permanently remove ${modelName} from both Admin and public catalog?`)) return;
+      try {
+        await adminDeleteModelProfile(modelId);
+        showToast("Model profile permanently removed.");
+        await loadAdminConsole();
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err.message || "Unable to delete model profile.");
+      }
+    } else if (e.target.closest("[data-open-auth-modal='true']")) {
+      openAuthModal({ adminNotice: false });
+    } else if (e.target.closest("[data-start-edit-model]")) {
+      const btn = e.target.closest("[data-start-edit-model]");
+      const modelId = btn.getAttribute("data-start-edit-model");
+      const target = state.myModels.find((m) => m.id === modelId);
+      if (target) {
+        state.editingModelId = modelId;
+        state.editModelDraftPhotos = sanitizePortfolioPhotoList(target.portfolioPhotos || []);
+        renderMyModels();
+      }
+    } else if (e.target.closest("[data-cancel-edit-model]")) {
+      state.editingModelId = null;
+      state.editModelDraftPhotos = [];
+      renderMyModels();
+    } else if (e.target.closest("[data-remove-portfolio-photo]")) {
+      const btn = e.target.closest("[data-remove-portfolio-photo]");
+      const idx = Number.parseInt(btn.getAttribute("data-remove-portfolio-photo") || "-1", 10);
+      const scope = btn.getAttribute("data-photo-scope") || "reg";
+      if (idx >= 0) {
+        if (scope === "edit") {
+          state.editModelDraftPhotos.splice(idx, 1);
+          renderMyModels();
+        } else {
+          state.modelRegPortfolioPhotos.splice(idx, 1);
+          renderModelRegPortfolioPreview();
+        }
+      }
+    } else if (e.target.closest("[data-mark-model-notif-read]")) {
+      const btn = e.target.closest("[data-mark-model-notif-read]");
+      const notifId = btn.getAttribute("data-mark-model-notif-read");
+      if (state.user && notifId) {
+        try {
+          await markMyNotificationRead(state.user.uid, notifId);
+          state.myNotifications = state.myNotifications.map((n) =>
+            n.id === notifId ? { ...n, isRead: true } : n
+          );
+          renderMyModels();
+        } catch (err) {
+          showToast(err.message || "Unable to update notification.");
+        }
+      }
+    } else if (e.target.closest("[data-profile-photo-src]")) {
+      const btn = e.target.closest("[data-profile-photo-src]");
+      const nextSrc = btn.getAttribute("data-profile-photo-src");
+      const mainImg = document.getElementById("modelProfileMainImg");
+      if (mainImg && nextSrc) {
+        mainImg.src = nextSrc;
+        btn.closest(".model-profile-thumbs")?.querySelectorAll("[data-profile-photo-src]").forEach((el) => {
+          el.classList.toggle("active", el === btn);
+        });
+      }
+    } else if (e.target.closest("[data-audition-request-model-id]")) {
+      const btn = e.target.closest("[data-audition-request-model-id]");
+      const modelId = btn.getAttribute("data-audition-request-model-id");
+      const fullName = btn.getAttribute("data-audition-request-model-name") || "Roster Model";
+      if (modelId) startAuditionRequestForModel(modelId, fullName);
     } else if (e.target.closest("[data-public-model-gender]")) {
       const btn = e.target.closest("[data-public-model-gender]");
-      state.publicModelGenderFilter = btn.getAttribute("data-public-model-gender") || "all";
+      state.publicModelFilters.gender = btn.getAttribute("data-public-model-gender") || "all";
       renderPublicModels();
+    } else if (e.target.closest("[data-casting-skill]")) {
+      const btn = e.target.closest("[data-casting-skill]");
+      const skill = btn.getAttribute("data-casting-skill") || "";
+      if (!skill) return;
+      const list = Array.isArray(state.publicModelFilters.skills) ? [...state.publicModelFilters.skills] : [];
+      const idx = list.indexOf(skill);
+      if (idx >= 0) list.splice(idx, 1);
+      else list.push(skill);
+      state.publicModelFilters.skills = list;
+      renderPublicModels();
+    } else if (e.target.closest("[data-view-model-profile]")) {
+      const btn = e.target.closest("[data-view-model-profile]");
+      const modelId = btn.getAttribute("data-view-model-profile");
+      if (modelId) openModelProfileModal(modelId);
+    } else if (e.target.closest("[data-shoot-booking-model-id]")) {
+      const btn = e.target.closest("[data-shoot-booking-model-id]");
+      const modelId = btn.getAttribute("data-shoot-booking-model-id");
+      const fullName = btn.getAttribute("data-shoot-booking-model-name") || "Roster Model";
+      if (modelId) startShootBookingForModel(modelId, fullName);
+    } else if (e.target.closest("#modelProfileModal [data-casting-inquiry-model-id]")) {
+      const btn = e.target.closest("[data-casting-inquiry-model-id]");
+      const modelId = btn.getAttribute("data-casting-inquiry-model-id");
+      const fullName = btn.getAttribute("data-casting-inquiry-model-name") || "Roster Model";
+      if (modelId) startCastingInquiryForModel(modelId, fullName);
     } else if (e.target.closest("[data-toggle-req-model-id]")) {
       const btn = e.target.closest("[data-toggle-req-model-id]");
       const modelId = btn.getAttribute("data-toggle-req-model-id");
@@ -2006,6 +2329,7 @@ function wireEvents() {
           return;
         }
         state.selectedRequestedModels.push({ id: modelId, fullName });
+        showToast(t("castingInquiryAddedToast").replace("{name}", fullName));
       }
       renderPublicModels();
       renderSelectedRequestedModels();
@@ -2015,6 +2339,25 @@ function wireEvents() {
       state.selectedRequestedModels = state.selectedRequestedModels.filter((m) => m.id !== modelId);
       renderPublicModels();
       renderSelectedRequestedModels();
+    } else if (e.target.closest("[data-model-skill-quick]")) {
+      const btn = e.target.closest("[data-model-skill-quick]");
+      const skill = btn.getAttribute("data-model-skill-quick") || "";
+      const input = document.getElementById("modelSkills");
+      if (input && skill) {
+        const existing = input.value
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const lowerIdx = existing.findIndex((s) => s.toLowerCase() === skill.toLowerCase());
+        if (lowerIdx >= 0) {
+          existing.splice(lowerIdx, 1);
+          btn.classList.remove("active");
+        } else {
+          existing.push(skill);
+          btn.classList.add("active");
+        }
+        input.value = existing.join(", ");
+      }
     } else if (e.target.closest("[data-cancel-company-req]")) {
       const btn = e.target.closest("[data-cancel-company-req]");
       const reqId = btn.getAttribute("data-cancel-company-req");
@@ -2172,8 +2515,62 @@ function wireEvents() {
   });
 
   document.getElementById("publicModelsSearchInput")?.addEventListener("input", (e) => {
-    state.publicModelSearch = e.target.value || "";
+    state.publicModelFilters.search = e.target.value || "";
     renderPublicModels();
+  });
+
+  document.getElementById("castingStateSelect")?.addEventListener("change", (e) => {
+    state.publicModelFilters.state = e.target.value || "all";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingCityInput")?.addEventListener("input", (e) => {
+    state.publicModelFilters.city = e.target.value || "";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingMinAge")?.addEventListener("input", (e) => {
+    state.publicModelFilters.minAge = e.target.value || "";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingMaxAge")?.addEventListener("input", (e) => {
+    state.publicModelFilters.maxAge = e.target.value || "";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingMinHeightSelect")?.addEventListener("change", (e) => {
+    state.publicModelFilters.minHeightCm = e.target.value || "";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingMaxHeightSelect")?.addEventListener("change", (e) => {
+    state.publicModelFilters.maxHeightCm = e.target.value || "";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingExperienceSelect")?.addEventListener("change", (e) => {
+    state.publicModelFilters.experience = e.target.value || "all";
+    renderPublicModels();
+  });
+
+  document.getElementById("castingPortfolioOnlyCheckbox")?.addEventListener("change", (e) => {
+    state.publicModelFilters.portfolioOnly = Boolean(e.target.checked);
+    renderPublicModels();
+  });
+
+  document.getElementById("castingResetFiltersBtn")?.addEventListener("click", () => {
+    resetModelDiscoveryFilters();
+  });
+
+  document.getElementById("closeModelProfileBtn")?.addEventListener("click", () => {
+    closeModelProfileModal();
+  });
+
+  document.getElementById("modelProfileModal")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) {
+      closeModelProfileModal();
+    }
   });
 
   document.getElementById("langToggleBtn")?.addEventListener("click", () => {
@@ -2711,6 +3108,14 @@ function wireEvents() {
   }
 
   window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.activeProfileModelId) {
+      const profileModal = document.getElementById("modelProfileModal");
+      if (profileModal && !profileModal.classList.contains("hidden")) {
+        e.preventDefault();
+        closeModelProfileModal();
+        return;
+      }
+    }
     const modal = document.getElementById("lightboxModal");
     if (!state.activeLightboxItem || !modal || modal.classList.contains("hidden")) return;
     const tag = String(e.target?.tagName || "").toUpperCase();
@@ -2926,21 +3331,145 @@ function wireEvents() {
     }
   });
 
+  document.getElementById("modelDob")?.addEventListener("change", (e) => {
+    const computedAge = calculateAgeFromDob(e.target.value);
+    const ageEl = document.getElementById("modelAge");
+    if (ageEl && Number.isInteger(computedAge)) {
+      ageEl.value = String(computedAge);
+    }
+  });
+
+  document.getElementById("modelPortfolioPhotosInput")?.addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const remaining = MAX_PORTFOLIO_PHOTOS - state.modelRegPortfolioPhotos.length;
+    if (remaining <= 0) {
+      showToast(`Maximum ${MAX_PORTFOLIO_PHOTOS} portfolio photos allowed.`);
+      e.target.value = "";
+      return;
+    }
+    const batch = files.slice(0, remaining);
+    let added = 0;
+    for (const file of batch) {
+      try {
+        const encoded = await encodePortfolioPhotoFile(file);
+        state.modelRegPortfolioPhotos.push(encoded.dataUrl);
+        added += 1;
+      } catch (err) {
+        showToast(err.message || "Unable to optimize selected photo.");
+      }
+    }
+    e.target.value = "";
+    renderModelRegPortfolioPreview();
+    if (added > 0) {
+      showToast(`${added} portfolio photo(s) optimized for free cloud sync!`);
+    }
+  });
+
+  document.addEventListener("change", async (e) => {
+    const input = e.target.closest("[data-edit-portfolio-photos-input]");
+    if (!input) return;
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const remaining = MAX_PORTFOLIO_PHOTOS - state.editModelDraftPhotos.length;
+    if (remaining <= 0) {
+      showToast(`Maximum ${MAX_PORTFOLIO_PHOTOS} portfolio photos allowed.`);
+      input.value = "";
+      return;
+    }
+    let added = 0;
+    for (const file of files.slice(0, remaining)) {
+      try {
+        const encoded = await encodePortfolioPhotoFile(file);
+        state.editModelDraftPhotos.push(encoded.dataUrl);
+        added += 1;
+      } catch (err) {
+        showToast(err.message || "Unable to optimize photo.");
+      }
+    }
+    input.value = "";
+    renderMyModels();
+    if (added > 0) showToast(`${added} portfolio photo(s) ready to save!`);
+  });
+
+  document.addEventListener("submit", async (e) => {
+    const form = e.target.closest("[data-model-edit-form]");
+    if (!form) return;
+    e.preventDefault();
+    const modelId = form.getAttribute("data-model-edit-form");
+    if (!modelId || !state.user) return;
+    const fd = new FormData(form);
+    const payload = {
+      fullName: fd.get("fullName"),
+      gender: fd.get("gender"),
+      dateOfBirth: fd.get("dateOfBirth"),
+      age: fd.get("age"),
+      city: fd.get("city"),
+      state: fd.get("state"),
+      heightCm: fd.get("heightCm"),
+      experienceLevel: fd.get("experienceLevel"),
+      skills: fd.get("skills"),
+      languages: fd.get("languages"),
+      contactEmail: fd.get("contactEmail"),
+      phoneNumber: fd.get("phoneNumber"),
+      bio: fd.get("bio"),
+      portfolioUrls: fd.get("portfolioUrls"),
+      introVideoUrl: fd.get("introVideoUrl"),
+      portfolioPhotos: [...state.editModelDraftPhotos],
+      photoConsent: form.querySelector('input[name="photoConsent"]')?.checked !== false
+    };
+    const check = validateModelSelfRegistration(payload, { isEdit: true, lang: state.lang });
+    if (!check.valid) {
+      showToast(check.errors[0]);
+      return;
+    }
+    try {
+      await updateMyModelProfile(modelId, check.cleaned);
+      state.editingModelId = null;
+      state.editModelDraftPhotos = [];
+      showToast(t("modelProfileUpdatedToast"));
+      await refreshCloudData();
+    } catch (err) {
+      showToast(err.message || "Unable to update model profile.");
+    }
+  });
+
   document.getElementById("modelForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const payload = {
+      fullName: document.getElementById("modelName").value,
+      gender: document.getElementById("modelGender").value,
+      dateOfBirth: document.getElementById("modelDob")?.value || "",
+      age: document.getElementById("modelAge").value,
+      city: document.getElementById("modelCity").value,
+      state: document.getElementById("modelState")?.value || "",
+      heightCm: document.getElementById("modelHeightCm")?.value || "",
+      experienceLevel: document.getElementById("modelExperience")?.value || "1-2 Years",
+      languages: document.getElementById("modelLanguages")?.value || "",
+      skills: document.getElementById("modelSkills").value,
+      contactEmail: document.getElementById("modelContactEmail")?.value || "",
+      phoneNumber: document.getElementById("modelPhone").value,
+      bio: document.getElementById("modelBio")?.value || "",
+      portfolioUrls: document.getElementById("modelPortfolio").value,
+      introVideoUrl: document.getElementById("modelIntroVideoUrl")?.value || "",
+      portfolioPhotos: [...state.modelRegPortfolioPhotos],
+      photoConsent: document.getElementById("modelPhotoConsent")?.checked !== false,
+      consentGiven: document.getElementById("modelConsent").checked
+    };
+    const check = validateModelSelfRegistration(payload, { isEdit: false, lang: state.lang });
+    if (!check.valid) {
+      showToast(check.errors[0]);
+      return;
+    }
     try {
-      await submitModelRegistration({
-        fullName: document.getElementById("modelName").value,
-        age: document.getElementById("modelAge").value,
-        gender: document.getElementById("modelGender").value,
-        city: document.getElementById("modelCity").value,
-        phoneNumber: document.getElementById("modelPhone").value,
-        skills: document.getElementById("modelSkills").value,
-        portfolioUrls: document.getElementById("modelPortfolio").value,
-        consentGiven: document.getElementById("modelConsent").checked
-      });
+      await submitModelRegistration(check.cleaned);
       e.target.reset();
-      showToast("18+ Model registration submitted!");
+      state.modelRegPortfolioPhotos = [];
+      renderModelRegPortfolioPreview();
+      const photoConsentEl = document.getElementById("modelPhotoConsent");
+      if (photoConsentEl) photoConsentEl.checked = true;
+      document.querySelectorAll("[data-model-skill-quick]").forEach((btn) => btn.classList.remove("active"));
+      showToast("18+ Model registration submitted! Track status in your Model Dashboard.");
       await refreshCloudData();
     } catch (err) {
       showToast(err.message);

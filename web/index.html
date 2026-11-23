@@ -449,14 +449,10 @@
         <p data-i18n="modelsSubheading">Join our curated regional &amp; national roster. Strict 18+ age verification and written consent enforced.</p>
       </div>
       <div class="split-grid">
-        <form id="modelForm" class="studio-card form-grid two-col">
+        <form id="modelForm" class="studio-card form-grid two-col" novalidate>
           <div class="field">
             <label for="modelName" data-i18n="fullNameLabel">Artist Full Name</label>
             <input id="modelName" class="input" required minlength="2" maxlength="100" />
-          </div>
-          <div class="field">
-            <label for="modelAge" data-i18n="ageLabel">Age (Minimum 18 Years)</label>
-            <input id="modelAge" class="input" type="number" min="18" max="100" required />
           </div>
           <div class="field">
             <label for="modelGender" data-i18n="genderLabel">Gender</label>
@@ -467,20 +463,93 @@
             </select>
           </div>
           <div class="field">
+            <label for="modelDob" data-i18n="modelDobLabel">Date of Birth (Private)</label>
+            <input id="modelDob" class="input" type="date" />
+          </div>
+          <div class="field">
+            <label for="modelAge" data-i18n="ageLabel">Age (Minimum 18 Years)</label>
+            <input id="modelAge" class="input" type="number" min="18" max="100" required />
+          </div>
+          <div class="field">
             <label for="modelCity" data-i18n="cityLabel">City / State</label>
             <input id="modelCity" class="input" required maxlength="100" placeholder="Sirsa, Haryana" />
           </div>
           <div class="field">
-            <label for="modelPhone" data-i18n="phoneLabel">Contact Number (8–20 digits)</label>
-            <input id="modelPhone" class="input" type="tel" required minlength="8" maxlength="20" />
+            <label for="modelState" data-i18n="modelStateLabel">State (Optional)</label>
+            <select id="modelState" class="input">
+              <option value="">Auto-detect from City / Select State</option>
+              <option value="Haryana">Haryana</option>
+              <option value="Punjab">Punjab</option>
+              <option value="Chandigarh">Chandigarh</option>
+              <option value="Delhi">Delhi</option>
+              <option value="Rajasthan">Rajasthan</option>
+              <option value="Maharashtra">Maharashtra</option>
+              <option value="Uttar Pradesh">Uttar Pradesh</option>
+              <option value="Himachal Pradesh">Himachal Pradesh</option>
+              <option value="Karnataka">Karnataka</option>
+              <option value="Gujarat">Gujarat</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="modelHeightCm" data-i18n="modelHeightLabel">Height in cm (Optional)</label>
+            <input id="modelHeightCm" class="input" type="number" min="120" max="230" placeholder="e.g., 172" />
+          </div>
+          <div class="field">
+            <label for="modelExperience" data-i18n="modelExperienceLabel">Experience Level</label>
+            <select id="modelExperience" class="input">
+              <option value="Fresher">Fresher</option>
+              <option value="1-2 Years" selected>1-2 Years</option>
+              <option value="3-5 Years">3-5 Years</option>
+              <option value="5+ Years">5+ Years</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="modelLanguages" data-i18n="modelLanguagesLabel">Languages</label>
+            <input id="modelLanguages" class="input" maxlength="300" placeholder="Hindi, English, Punjabi" />
           </div>
           <div class="field">
             <label for="modelSkills" data-i18n="skillsLabel">Skills (Runway, Print, Commercial, Acting)</label>
-            <input id="modelSkills" class="input" maxlength="1000" placeholder="Runway, Music Video, Bridal" />
+            <input id="modelSkills" class="input" maxlength="1000" placeholder="Acting, Dancing, Modeling, Singing" />
+            <div class="model-skill-quick-row" role="group" aria-label="Quick skill tags">
+              <button type="button" class="chip-btn btn-xs" data-model-skill-quick="Acting">+ Acting</button>
+              <button type="button" class="chip-btn btn-xs" data-model-skill-quick="Dancing">+ Dancing</button>
+              <button type="button" class="chip-btn btn-xs" data-model-skill-quick="Modeling">+ Modeling</button>
+              <button type="button" class="chip-btn btn-xs" data-model-skill-quick="Singing">+ Singing</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="modelContactEmail" data-i18n="modelEmailPrivateLabel">Contact Email (Private)</label>
+            <input id="modelContactEmail" class="input" type="email" maxlength="128" placeholder="artist@example.com" />
+          </div>
+          <div class="field">
+            <label for="modelPhone" data-i18n="modelPhonePrivateLabel">Mobile Number (Private • 8–20 digits)</label>
+            <input id="modelPhone" class="input" type="tel" required minlength="8" maxlength="20" placeholder="+91 98128..." />
           </div>
           <div class="field full">
+            <label for="modelBio" data-i18n="modelBioLabel">Professional Introduction</label>
+            <textarea id="modelBio" class="input" rows="3" maxlength="500" placeholder="Introduce your modeling, acting, dance, or music video experience..."></textarea>
+          </div>
+          <div class="field full">
+            <label for="modelPortfolioPhotosInput" data-i18n="modelPortfolioPhotosLabel">Portfolio Photos (Up to 4 Photos • Spark Free Auto-Compressed)</label>
+            <input id="modelPortfolioPhotosInput" class="input" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+            <span style="font-size: 0.78rem; color: var(--text-muted);" data-i18n="modelPortfolioPhotosHint">JPG, PNG, WebP • Auto-compressed on-device for 100% Free Cloud Sync</span>
+            <div id="modelRegPortfolioPreview" class="model-photo-strip"></div>
+          </div>
+          <div class="field">
             <label for="modelPortfolio" data-i18n="portfolioUrlLabel">Portfolio / Instagram URL</label>
             <input id="modelPortfolio" class="input" type="url" maxlength="2000" placeholder="https://instagram.com/..." />
+          </div>
+          <div class="field">
+            <label for="modelIntroVideoUrl" data-i18n="modelIntroVideoLabel">Introduction Video Link (Optional • YouTube / Reel / Drive)</label>
+            <input id="modelIntroVideoUrl" class="input" type="url" maxlength="2000" placeholder="https://youtu.be/... or https://instagram.com/reel/..." />
+          </div>
+          <div class="field full">
+            <label class="checkbox-row">
+              <input id="modelPhotoConsent" type="checkbox" checked />
+              <span data-i18n="modelPhotoConsentLabel">
+                I also consent to display my approved studio photo in the public Casting &amp; Model Discovery catalog (my phone number and email remain strictly private).
+              </span>
+            </label>
           </div>
           <div class="field full">
             <label class="checkbox-row">
@@ -495,9 +564,12 @@
           </div>
         </form>
 
-        <div class="studio-card">
-          <h3 style="margin: 0; color: var(--gold);" data-i18n="myModelsHeading">My Model Applications</h3>
-          <div id="myModelsList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+        <div class="studio-card model-dashboard-panel">
+          <div>
+            <h3 style="margin: 0; color: var(--gold);" data-i18n="modelDashboardHeading">Model Dashboard &amp; Application Status</h3>
+            <p style="margin: 4px 0 0; font-size: 0.85rem; color: var(--text-secondary);" data-i18n="modelDashboardSubheading">Sign in securely to view your submitted application, edit details &amp; portfolio photos, and check Admin approval notifications.</p>
+          </div>
+          <div id="myModelsList" style="display: flex; flex-direction: column; gap: 14px;"></div>
         </div>
       </div>
     </section>
@@ -531,6 +603,7 @@
               <option value="Event Organizer">Event Organizer</option>
               <option value="Brand / Agency">Brand / Agency</option>
               <option value="Production House">Production House</option>
+              <option value="Verified Content Creator">Verified Content Creator</option>
               <option value="Wedding Planner">Wedding Planner</option>
               <option value="Other">Other</option>
             </select>
@@ -568,11 +641,105 @@
         <span style="font-size: 0.84rem; color: var(--text-secondary);" data-i18n="companyPrivacyBannerDesc">Public portfolios display only approved talent details and skills. Model phone numbers and personal contacts are never exposed — all coordination is securely managed by Star Artist Studio Admin.</span>
       </div>
 
-      <div id="publicModelsFilterBar" class="filter-bar">
-        <input id="publicModelsSearchInput" type="search" class="input" style="max-width: 320px;" placeholder="Search model name, city, skills..." />
-        <button type="button" class="chip-btn active" data-public-model-gender="all" data-i18n="filterAll">All</button>
-        <button type="button" class="chip-btn" data-public-model-gender="female" data-i18n="companyFilterFemale">Female Models</button>
-        <button type="button" class="chip-btn" data-public-model-gender="male" data-i18n="companyFilterMale">Male Models</button>
+      <div id="castingDiscoveryPanel" class="studio-card casting-discovery-panel" style="margin-bottom: 18px;">
+        <div class="casting-discovery-header">
+          <div>
+            <span class="eyebrow" data-i18n="castingDiscoveryBadge">PRODUCTION HOUSES • VERIFIED CONTENT CREATORS • BRANDS</span>
+            <h4 class="casting-discovery-title" data-i18n="castingDiscoveryTitle">Advanced Casting &amp; Model Discovery Filters</h4>
+          </div>
+          <div class="casting-discovery-header-actions">
+            <span id="castingResultsCount" class="badge" aria-live="polite">0 Models</span>
+            <button id="castingResetFiltersBtn" type="button" class="btn-outline btn-sm" data-i18n="castingResetFiltersBtn">Reset Filters</button>
+          </div>
+        </div>
+
+        <div id="publicModelsFilterBar" class="casting-top-search-row">
+          <input id="publicModelsSearchInput" type="search" class="input casting-search-input" placeholder="Search model name, city, skills..." />
+          <div class="casting-gender-chips" role="group" aria-label="Filter by gender">
+            <button type="button" class="chip-btn active" data-public-model-gender="all" aria-pressed="true" data-i18n="filterAll">All</button>
+            <button type="button" class="chip-btn" data-public-model-gender="female" aria-pressed="false" data-i18n="companyFilterFemale">Female Models</button>
+            <button type="button" class="chip-btn" data-public-model-gender="male" aria-pressed="false" data-i18n="companyFilterMale">Male Models</button>
+          </div>
+        </div>
+
+        <div class="casting-filters-grid">
+          <div class="field">
+            <label for="castingStateSelect" data-i18n="castingStateLabel">State</label>
+            <select id="castingStateSelect" class="input">
+              <option value="all" data-i18n="castingAllStates">All States</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="castingCityInput" data-i18n="castingCityLabel">City</label>
+            <input id="castingCityInput" type="search" class="input" list="castingCityDatalist" placeholder="e.g. Sirsa, Chandigarh, Delhi..." />
+            <datalist id="castingCityDatalist"></datalist>
+          </div>
+
+          <div class="field">
+            <label data-i18n="castingAgeRangeLabel">Age Range (18+)</label>
+            <div class="casting-range-row">
+              <input id="castingMinAge" type="number" class="input" min="18" max="60" placeholder="Min (18)" aria-label="Minimum age" />
+              <span class="casting-range-sep">–</span>
+              <input id="castingMaxAge" type="number" class="input" min="18" max="60" placeholder="Max (60)" aria-label="Maximum age" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label data-i18n="castingHeightRangeLabel">Height Range</label>
+            <div class="casting-range-row">
+              <select id="castingMinHeightSelect" class="input" aria-label="Minimum height">
+                <option value="">Min Height</option>
+                <option value="155">155 cm (5'1")</option>
+                <option value="160">160 cm (5'3")</option>
+                <option value="165">165 cm (5'5")</option>
+                <option value="170">170 cm (5'7")</option>
+                <option value="175">175 cm (5'9")</option>
+                <option value="180">180 cm (5'11")</option>
+                <option value="185">185 cm (6'1")</option>
+              </select>
+              <span class="casting-range-sep">–</span>
+              <select id="castingMaxHeightSelect" class="input" aria-label="Maximum height">
+                <option value="">Max Height</option>
+                <option value="165">165 cm (5'5")</option>
+                <option value="170">170 cm (5'7")</option>
+                <option value="175">175 cm (5'9")</option>
+                <option value="180">180 cm (5'11")</option>
+                <option value="185">185 cm (6'1")</option>
+                <option value="190">190 cm (6'3")</option>
+                <option value="200">200 cm (6'7")</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="castingExperienceSelect" data-i18n="castingExperienceLabel">Experience</label>
+            <select id="castingExperienceSelect" class="input">
+              <option value="all" data-i18n="castingAllExperience">Any Experience</option>
+              <option value="Fresher">Fresher</option>
+              <option value="1-2 Years">1-2 Years</option>
+              <option value="3-5 Years">3-5 Years</option>
+              <option value="5+ Years">5+ Years</option>
+            </select>
+          </div>
+
+          <div class="field casting-portfolio-field">
+            <label class="checkbox-row casting-portfolio-toggle">
+              <input id="castingPortfolioOnlyCheckbox" type="checkbox" />
+              <span data-i18n="castingPortfolioOnlyLabel">Portfolio Available Only</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="casting-skills-bar">
+          <span class="casting-skills-bar-label" data-i18n="castingSkillsFilterLabel">Skills</span>
+          <div class="casting-skills-row" role="group" aria-label="Filter by casting skills">
+            <button type="button" class="chip-btn" data-casting-skill="Acting" aria-pressed="false" data-i18n="castingSkillActing">Acting</button>
+            <button type="button" class="chip-btn" data-casting-skill="Dancing" aria-pressed="false" data-i18n="castingSkillDancing">Dancing</button>
+            <button type="button" class="chip-btn" data-casting-skill="Modeling" aria-pressed="false" data-i18n="castingSkillModeling">Modeling</button>
+            <button type="button" class="chip-btn" data-casting-skill="Singing" aria-pressed="false" data-i18n="castingSkillSinging">Singing</button>
+          </div>
+        </div>
       </div>
       <div id="publicModelsGrid" class="cards-grid" style="margin-bottom: 28px;"></div>
 
@@ -594,6 +761,7 @@
               <option value="Event Organizer">Event Organizer</option>
               <option value="Brand / Agency">Brand / Agency</option>
               <option value="Production House">Production House</option>
+              <option value="Verified Content Creator">Verified Content Creator</option>
               <option value="Wedding Planner">Wedding Planner</option>
               <option value="Other">Other</option>
             </select>
@@ -1074,6 +1242,17 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- MODEL CASTING PROFILE MODAL -->
+  <div id="modelProfileModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modelProfileModalTitle">
+    <div class="modal-card model-profile-modal-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+        <h3 id="modelProfileModalTitle" style="margin: 0; color: var(--gold);" data-i18n="castingProfileModalTitle">Verified Model Casting Profile</h3>
+        <button id="closeModelProfileBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="modelProfileModalBody"></div>
     </div>
   </div>
 

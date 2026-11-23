@@ -3497,6 +3497,402 @@ test("Admin Dashboard Email Preview 'Test Email Notification' builds admin-locke
   assert.ok(appJs.includes("adminSubscribeTestEmailStatus"));
 });
 
+test("Casting & Model Discovery Platform supports all 7 filters, enforces Admin-approved & photo-consent privacy, and renders View Profile, Casting Inquiry & Shoot Booking", async () => {
+  const discoveryMod = await import(pathToFileURL(path.join(webDir, "js/model-discovery.js")).href);
+  const companyMod = await import(pathToFileURL(path.join(webDir, "js/company-booking.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const t = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Admin-approved enforcement: pending, rejected, and non-roster models are strictly excluded
+  const unapprovedPending = {
+    id: "m_pending",
+    fullName: "Pending Applicant",
+    gender: "Female",
+    age: 22,
+    city: "Sirsa, Haryana",
+    status: "pending",
+    phoneNumber: "+91 9999900001",
+    skills: "Acting, Modeling"
+  };
+  const unapprovedRejected = {
+    id: "m_rejected",
+    fullName: "Rejected Applicant",
+    gender: "Male",
+    age: 25,
+    city: "Delhi",
+    status: "rejected",
+    isOfficialRoster: false,
+    skills: "Dancing"
+  };
+  assert.equal(companyMod.sanitizePublicModelProfile(unapprovedPending), null, "Pending models must never appear publicly");
+  assert.equal(companyMod.sanitizePublicModelProfile(unapprovedRejected), null, "Rejected models must never appear publicly");
+
+  // 2. Approved model WITH photoConsent: false hides photo and strips private fields
+  const noPhotoConsentModel = {
+    id: "m_private_photo",
+    fullName: "Neha Verma",
+    gender: "Female",
+    age: 24,
+    city: "Jaipur, Rajasthan",
+    state: "Rajasthan",
+    heightCm: 168,
+    experienceLevel: "3-5 Years",
+    skills: "Acting, Singing, Classical Vocals",
+    portfolioUrl: "https://example.com/neha-portfolio",
+    avatarUrl: "/images/model-portrait.jpg",
+    photoConsent: false,
+    status: "approved",
+    isOfficialRoster: true,
+    phoneNumber: "+91 9876543210",
+    email: "neha.secret@example.com",
+    address: "Secret Lane 99",
+    userId: "uid_neha_private",
+    adminNotes: "Internal Admin Review Only"
+  };
+  const cleanNoPhoto = companyMod.sanitizePublicModelProfile(noPhotoConsentModel);
+  assert.ok(cleanNoPhoto);
+  assert.equal(cleanNoPhoto.photoConsent, false);
+  assert.equal(cleanNoPhoto.avatarUrl, "", "avatarUrl must be cleared when photoConsent is false");
+  assert.equal(cleanNoPhoto.state, "Rajasthan");
+  assert.equal(cleanNoPhoto.cityName, "Jaipur");
+  assert.equal(cleanNoPhoto.age, 24);
+  assert.equal(cleanNoPhoto.heightCm, 168);
+  assert.equal(cleanNoPhoto.hasPortfolio, true);
+  assert.equal("phoneNumber" in cleanNoPhoto, false);
+  assert.equal("email" in cleanNoPhoto, false);
+  assert.equal("address" in cleanNoPhoto, false);
+  assert.equal("userId" in cleanNoPhoto, false);
+  assert.equal("adminNotes" in cleanNoPhoto, false);
+
+  const merged = companyMod.mergePublicModels([unapprovedPending, unapprovedRejected, noPhotoConsentModel]);
+  assert.equal(merged.some((m) => m.id === "m_pending"), false);
+  assert.equal(merged.some((m) => m.id === "m_rejected"), false);
+  assert.equal(merged.some((m) => m.id === "m_private_photo"), true);
+
+  // 3. Test all 7 advanced filters individually and combined
+  // Filter 1: Gender (Male / Female)
+  const males = companyMod.filterPublicModels(merged, { gender: "male" });
+  const females = companyMod.filterPublicModels(merged, { gender: "female" });
+  assert.ok(males.length >= 2 && males.every((m) => m.gender === "Male"));
+  assert.ok(females.length >= 3 && females.every((m) => m.gender === "Female"));
+
+  // Filter 2: Age range
+  const ageFiltered = companyMod.filterPublicModels(merged, { minAge: 24, maxAge: 27 });
+  assert.ok(ageFiltered.length >= 2 && ageFiltered.every((m) => m.age >= 24 && m.age <= 27));
+
+  // Filter 3: City and State
+  const rajasthanModels = companyMod.filterPublicModels(merged, { state: "Rajasthan", city: "Jaipur" });
+  assert.equal(rajasthanModels.length, 1);
+  assert.equal(rajasthanModels[0].fullName, "Neha Verma");
+
+  const haryanaModels = companyMod.filterPublicModels(merged, { state: "Haryana" });
+  assert.ok(haryanaModels.length >= 2 && haryanaModels.every((m) => m.state === "Haryana"));
+
+  // Filter 4: Height range
+  const tallModels = companyMod.filterPublicModels(merged, { minHeightCm: 180, maxHeightCm: 190 });
+  assert.ok(tallModels.length >= 2 && tallModels.every((m) => m.heightCm >= 180 && m.heightCm <= 190));
+
+  // Filter 5: Skills (Acting, Dancing, Modeling, Singing)
+  assert.deepEqual(discoveryMod.CASTING_SKILL_OPTIONS, ["Acting", "Dancing", "Modeling", "Singing"]);
+  const actingAndSinging = companyMod.filterPublicModels(merged, { skills: ["Acting", "Singing"] });
+  assert.ok(actingAndSinging.some((m) => m.id === "m_private_photo"));
+  const dancingModels = companyMod.filterPublicModels(merged, { skills: ["Dancing"] });
+  assert.ok(dancingModels.length >= 2);
+  const modelingModels = companyMod.filterPublicModels(merged, { skills: ["Modeling"] });
+  assert.ok(modelingModels.length >= 3);
+
+  // Filter 6: Experience
+  const experiencedModels = companyMod.filterPublicModels(merged, { experience: "5+ Years" });
+  assert.ok(experiencedModels.length >= 1 && experiencedModels.every((m) => m.experienceLevel === "5+ Years"));
+  const fresherModels = companyMod.filterPublicModels(merged, { experience: "Fresher" });
+  assert.ok(fresherModels.length >= 1 && fresherModels.every((m) => m.experienceLevel === "Fresher"));
+
+  // Filter 7: Portfolio availability
+  const portfolioModels = companyMod.filterPublicModels(merged, { portfolioOnly: true });
+  assert.ok(portfolioModels.length >= 1 && portfolioModels.length < merged.length);
+  assert.ok(portfolioModels.every((m) => m.hasPortfolio === true));
+
+  // Active filter counter
+  assert.equal(
+    discoveryMod.countActiveDiscoveryFilters({
+      gender: "female",
+      state: "Rajasthan",
+      city: "Jaipur",
+      minAge: "21",
+      maxAge: "28",
+      minHeightCm: "165",
+      skills: ["Acting", "Singing"],
+      experience: "3-5 Years",
+      portfolioOnly: true
+    }),
+    9
+  );
+
+  // 4. Card HTML & View Profile Modal HTML enforce photoConsent, hide private details, and render all 3 buttons
+  const noPhotoCardHtml = companyMod.renderPublicModelPortfolioCardsHtml({
+    models: [cleanNoPhoto],
+    selectedModelIds: [],
+    t
+  });
+  assert.ok(noPhotoCardHtml.includes("model-photo-consent-placeholder"), "Photo hidden placeholder must render when photoConsent is false");
+  assert.equal(noPhotoCardHtml.includes("<img "), false, "No <img> tag should render when photoConsent is false");
+  assert.ok(noPhotoCardHtml.includes("data-view-model-profile="), "View Profile button required on model cards");
+  assert.ok(noPhotoCardHtml.includes("data-casting-inquiry-model-id="), "Casting Inquiry button required on model cards");
+  assert.ok(noPhotoCardHtml.includes("data-shoot-booking-model-id="), "Shoot Booking button required on model cards");
+  assert.equal(noPhotoCardHtml.includes("9876543210"), false);
+  assert.equal(noPhotoCardHtml.includes("neha.secret@example.com"), false);
+  assert.equal(noPhotoCardHtml.includes("Secret Lane 99"), false);
+
+  const profileModalHtml = discoveryMod.renderModelProfileModalHtml(cleanNoPhoto, { isSelected: false, t });
+  assert.ok(profileModalHtml.includes("Neha Verma"));
+  assert.ok(profileModalHtml.includes("168 cm"));
+  assert.ok(profileModalHtml.includes("model-photo-consent-placeholder"));
+  assert.ok(profileModalHtml.includes("data-casting-inquiry-model-id="));
+  assert.ok(profileModalHtml.includes("data-shoot-booking-model-id="));
+  assert.equal(profileModalHtml.includes("9876543210"), false);
+  assert.equal(profileModalHtml.includes("neha.secret@example.com"), false);
+
+  // Consented model DOES render portrait image
+  const consentedModel = merged.find((m) => m.photoConsent === true && m.avatarUrl);
+  assert.ok(consentedModel);
+  const consentedCardHtml = companyMod.renderPublicModelPortfolioCardsHtml({
+    models: [consentedModel],
+    selectedModelIds: [],
+    t
+  });
+  assert.ok(consentedCardHtml.includes("<img "), "Consented model must display photo");
+
+  // 5. Verified Content Creator & Production House organization types supported
+  assert.ok(companyMod.ORGANIZATION_TYPES.includes("Production House"));
+  assert.ok(companyMod.ORGANIZATION_TYPES.includes("Verified Content Creator"));
+
+  // 6. Verify HTML, Firestore Rules, and Service Worker integration
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const id of [
+    'id="castingDiscoveryPanel"',
+    'id="castingStateSelect"',
+    'id="castingCityInput"',
+    'id="castingMinAge"',
+    'id="castingMaxAge"',
+    'id="castingMinHeightSelect"',
+    'id="castingMaxHeightSelect"',
+    'id="castingExperienceSelect"',
+    'id="castingPortfolioOnlyCheckbox"',
+    'id="castingResetFiltersBtn"',
+    'id="modelProfileModal"',
+    'id="modelPhotoConsent"',
+    'value="Verified Content Creator"'
+  ]) {
+    assert.ok(html.includes(id), `index.html missing Casting Discovery control: ${id}`);
+  }
+
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  assert.ok(rules.includes("'photoConsent' in data"));
+  assert.ok(rules.includes("'portfolioAvailable' in data"));
+  assert.ok(rules.includes("'Verified Content Creator'"));
+
+  const sw = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(sw.includes('"/js/model-discovery.js"'), "sw.js must pre-cache /js/model-discovery.js");
+});
+
+test("Model Self-Registration, Model Dashboard editing & approval notifications, Admin Disable/Remove, and Request Audition enforce privacy on Spark Free Plan", async () => {
+  const portalMod = await import(pathToFileURL(path.join(webDir, "js/model-portal.js")).href);
+  const companyMod = await import(pathToFileURL(path.join(webDir, "js/company-booking.js")).href);
+  const discoveryMod = await import(pathToFileURL(path.join(webDir, "js/model-discovery.js")).href);
+  const adminModelsMod = await import(pathToFileURL(path.join(webDir, "js/admin-models.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const t = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Date of Birth calculation & strict 18+ self-registration validation
+  const refDate = new Date("2026-11-23T00:00:00Z");
+  assert.equal(portalMod.calculateAgeFromDob("2002-05-15", refDate), 24);
+  assert.equal(portalMod.calculateAgeFromDob("2012-01-01", refDate), 14);
+  assert.equal(portalMod.calculateAgeFromDob("invalid-date", refDate), null);
+
+  const underageRes = portalMod.validateModelSelfRegistration({
+    fullName: "Minor Test",
+    gender: "Female",
+    dateOfBirth: "2012-01-01",
+    age: "14",
+    city: "Sirsa",
+    phoneNumber: "+91 9812800001",
+    consentGiven: true
+  });
+  assert.equal(underageRes.valid, false, "Applicants under 18 must be rejected");
+
+  const fakePhoto1 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/";
+  const fakePhoto2 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAE/";
+  const fakePhoto3 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAF/";
+  const fakePhoto4 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAG/";
+  const fakePhoto5 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAH/";
+
+  const validReg = portalMod.validateModelSelfRegistration({
+    fullName: "Aanya Gill",
+    gender: "Female",
+    dateOfBirth: "2001-08-12",
+    age: "25",
+    city: "Chandigarh",
+    state: "Chandigarh",
+    heightCm: "172",
+    skills: "Acting, Dancing, Modeling",
+    languages: "Hindi, English, Punjabi",
+    experienceLevel: "3-5 Years",
+    bio: "Editorial fashion model and music video lead artist.",
+    portfolioPhotos: [fakePhoto1, fakePhoto2, fakePhoto3, fakePhoto4, fakePhoto5, "javascript:alert(1)"],
+    introVideoUrl: "https://youtu.be/demoIntro123",
+    portfolioUrls: "https://instagram.com/aanyademo",
+    contactEmail: "Aanya.Private@example.com",
+    phoneNumber: "+91 9812877777",
+    photoConsent: true,
+    consentGiven: true
+  });
+  assert.equal(validReg.valid, true, `Valid registration failed: ${validReg.errors.join("; ")}`);
+  assert.equal(validReg.cleaned.portfolioPhotos.length, 4, "Spark-free photo cap must enforce max 4 photos and strip javascript: URLs");
+  assert.equal(validReg.cleaned.contactEmail, "aanya.private@example.com");
+  assert.equal(validReg.cleaned.languages, "Hindi, English, Punjabi");
+
+  // 2. Public sanitization strips private DOB, contactEmail, and phoneNumber, and blocks disabled profiles
+  const approvedWithPrivate = {
+    id: "mdl_aanya_01",
+    ...validReg.cleaned,
+    status: "approved",
+    isOfficialRoster: true,
+    isDisabled: false
+  };
+  const publicSafe = companyMod.sanitizePublicModelProfile(approvedWithPrivate);
+  assert.ok(publicSafe);
+  assert.equal("dateOfBirth" in publicSafe, false, "DOB must NEVER appear in public catalog");
+  assert.equal("contactEmail" in publicSafe, false, "Contact email must NEVER appear in public catalog");
+  assert.equal("phoneNumber" in publicSafe, false, "Phone number must NEVER appear in public catalog");
+  assert.equal(publicSafe.portfolioPhotos.length, 4, "Consented portfolio photos should appear in public profile");
+  assert.equal(publicSafe.languages, "Hindi, English, Punjabi");
+  assert.equal(publicSafe.introVideoUrl, "https://youtu.be/demoIntro123");
+
+  const disabledProfile = companyMod.sanitizePublicModelProfile({
+    ...approvedWithPrivate,
+    isDisabled: true
+  });
+  assert.equal(disabledProfile, null, "Disabled profiles must be hidden from public catalog");
+
+  // 3. View Profile modal renders multi-photo thumbnails, languages, intro video, and Request Audition button without leaking private fields
+  const modalHtml = discoveryMod.renderModelProfileModalHtml(publicSafe, { isSelected: false, t });
+  assert.ok(modalHtml.includes("data-profile-photo-src="), "Multi-photo thumbnail switcher must render");
+  assert.ok(modalHtml.includes("Hindi, English, Punjabi"));
+  assert.ok(modalHtml.includes("https://youtu.be/demoIntro123"));
+  assert.ok(modalHtml.includes("data-audition-request-model-id="), "Request Audition button must render in profile modal");
+  assert.equal(modalHtml.includes("9812877777"), false);
+  assert.equal(modalHtml.includes("aanya.private@example.com"), false);
+  assert.equal(modalHtml.includes("2001-08-12"), false);
+
+  // 4. Model Dashboard renders sign-in prompt when logged out, and notifications + Edit Profile & Photos when logged in
+  const signedOutDash = portalMod.renderModelDashboardHtml({ user: null, t });
+  assert.ok(signedOutDash.includes('data-open-auth-modal="true"'));
+
+  const approvalNotif = portalMod.buildModelNotificationPayload({
+    modelId: "mdl_aanya_01",
+    userId: "uid_aanya",
+    fullName: "Aanya Gill",
+    status: "approved",
+    adminNotes: "Approved for Official Roster"
+  });
+  assert.equal(approvalNotif.status, "Approved");
+  assert.equal(approvalNotif.channelType, "model_status");
+
+  const loggedInDash = portalMod.renderModelDashboardHtml({
+    user: { uid: "uid_aanya", email: "aanya.private@example.com" },
+    models: [approvedWithPrivate],
+    notifications: [{ id: "notif_1", ...approvalNotif }],
+    editingModelId: "mdl_aanya_01",
+    editDraftPhotos: [fakePhoto1, fakePhoto2],
+    t
+  });
+  assert.ok(loggedInDash.includes("Congratulations! Model Profile Approved"));
+  assert.ok(loggedInDash.includes('data-mark-model-notif-read="notif_1"'));
+  assert.ok(loggedInDash.includes('data-model-edit-form="mdl_aanya_01"'));
+  assert.ok(loggedInDash.includes('data-edit-portfolio-photos-input="mdl_aanya_01"'));
+
+  // 5. Admin Dashboard Model Review displays uploaded photos, DOB, email, and Disable / Remove actions
+  const adminModelsHtml = adminModelsMod.renderAdminModelsSectionHtml({
+    models: [approvedWithPrivate],
+    filter: "approved",
+    t
+  });
+  assert.ok(adminModelsHtml.includes("admin-model-photo-strip"), "Admin must see uploaded portfolio photos");
+  assert.ok(adminModelsHtml.includes("aanya.private@example.com"), "Admin must be able to review contact email");
+  assert.ok(adminModelsHtml.includes("2001-08-12"), "Admin must be able to verify DOB");
+  assert.ok(adminModelsHtml.includes('data-adm-mdl-disable="mdl_aanya_01"'), "Admin must have Disable Profile control");
+  assert.ok(adminModelsHtml.includes('data-adm-mdl-delete="mdl_aanya_01"'), "Admin must have Remove Profile control");
+
+  // 6. Verify HTML inputs, Firestore security rules, and Service Worker pre-caching
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="modelDob"',
+    'id="modelLanguages"',
+    'id="modelContactEmail"',
+    'id="modelPortfolioPhotosInput"',
+    'id="modelIntroVideoUrl"',
+    'id="modelRegPortfolioPreview"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing self-registration field: ${token}`);
+  }
+
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  assert.ok(rules.includes("'dateOfBirth' in data"));
+  assert.ok(rules.includes("'portfolioPhotos' in data"));
+  assert.ok(rules.includes("function isValidPortfolioPhotoItem(item)"));
+  assert.ok(rules.includes("item.size() <= 150000"), "Firestore rules must enforce <= 150,000 bytes per portfolio photo");
+  assert.ok(rules.includes("function isValidPortfolioPhotosList(photos)"));
+  assert.ok(rules.includes("isValidPortfolioPhotosList(data.portfolioPhotos)"));
+  assert.ok(rules.includes("data.photoConsent == true"), "publicModels rule must block photos when photoConsent is false");
+  assert.ok(rules.includes("incoming().status == existing().status"), "Models must never self-approve via Firestore update");
+  assert.ok(rules.includes("'Approved', 'Rejected', 'Disabled'"), "Model approval notifications must be allowed in Firestore rules");
+
+  // 7. Worst-case 4-photo Firestore document size audit (4 x 150,000-byte JPEG Data URLs + max metadata < 1 MiB)
+  const prefix = "data:image/jpeg;base64,";
+  const maxPhoto = (ch) => prefix + ch.repeat(portalMod.MAX_PORTFOLIO_PHOTO_CHARS - prefix.length);
+  const worstCaseModelDoc = {
+    userId: "u".repeat(128),
+    fullName: "A".repeat(100),
+    dateOfBirth: "2000-01-01",
+    age: 26,
+    gender: "Female",
+    city: "C".repeat(100),
+    state: "S".repeat(60),
+    heightCm: 175,
+    languages: "L".repeat(300),
+    experienceLevel: "5+ Years",
+    bio: "B".repeat(500),
+    contactEmail: "model@example.com".padEnd(128, "a"),
+    phoneNumber: "+919812890081",
+    skills: "K".repeat(1000),
+    portfolioUrls: "https://example.com/" + "p".repeat(1980),
+    introVideoUrl: "https://youtu.be/" + "v".repeat(1983),
+    adminNotes: "N".repeat(1000),
+    portfolioPhotos: [maxPhoto("A"), maxPhoto("B"), maxPhoto("C"), maxPhoto("D")],
+    photoConsent: true,
+    isDisabled: false,
+    consentGiven: true,
+    status: "approved"
+  };
+  const worstCaseBytes = portalMod.estimateFirestoreModelDocBytes(worstCaseModelDoc);
+  assert.ok(
+    worstCaseBytes < portalMod.MAX_MODEL_DOC_BYTES && worstCaseBytes < portalMod.FIRESTORE_DOC_LIMIT_BYTES,
+    `Worst-case 4-photo Firestore model doc (${worstCaseBytes} bytes) must stay strictly below 1 MiB (${portalMod.FIRESTORE_DOC_LIMIT_BYTES} bytes)`
+  );
+
+  // Verify firebase.js never duplicates portfolioPhotos[0] into avatarUrl on publicModels writes
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(
+    firebaseJs.includes("avatarUrl: clean.photoConsent && clean.portfolioPhotos.length === 0 ? clean.avatarUrl : \"\""),
+    "publicModels write must not duplicate portfolioPhotos[0] into avatarUrl"
+  );
+
+  const sw = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(sw.includes('"/js/model-portal.js"'), "sw.js must pre-cache /js/model-portal.js");
+});
+
+
+
 
 
 

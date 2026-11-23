@@ -1,8 +1,18 @@
+import {
+  formatHeightDisplay,
+  parseCityAndState,
+  normalizeExperienceLevel,
+  extractModelSkillTags,
+  filterDiscoveryModels
+} from "./model-discovery.js";
+import { sanitizePortfolioPhotoList } from "./model-portal.js";
+
 export const ORGANIZATION_TYPES = [
   "Company",
   "Event Organizer",
   "Brand / Agency",
   "Production House",
+  "Verified Content Creator",
   "Wedding Planner",
   "Other"
 ];
@@ -45,11 +55,18 @@ export const PUBLIC_MODEL_SHOWCASE_SEEDS = [
     modelId: "roster_seed_ananya",
     fullName: "Ananya Verma",
     gender: "Female",
+    age: 23,
     city: "Sirsa, Haryana",
+    state: "Haryana",
+    heightCm: 171,
+    experienceLevel: "3-5 Years",
     category: "Editorial & Runway",
-    skills: "High-Fashion Runway, Bridal Editorial, Luxury Jewellery Campaigns",
-    portfolioUrl: "",
+    skills: "Modeling, Acting, High-Fashion Runway, Bridal Editorial, Luxury Jewellery Campaigns",
+    bio: "Editorial runway model and commercial screen actor experienced in luxury bridal lookbooks and jewellery campaigns across North India.",
+    portfolioUrl: "https://gen-lang-client-0548683163.web.app/#gallery",
+    photoConsent: true,
     avatarUrl: "/images/model-portrait.jpg",
+    status: "approved",
     isOfficialRoster: true
   },
   {
@@ -57,11 +74,18 @@ export const PUBLIC_MODEL_SHOWCASE_SEEDS = [
     modelId: "roster_seed_kabir",
     fullName: "Kabir Gill",
     gender: "Male",
-    city: "Chandigarh / Sirsa",
+    age: 26,
+    city: "Chandigarh",
+    state: "Chandigarh",
+    heightCm: 183,
+    experienceLevel: "3-5 Years",
     category: "Commercial & Music Video",
-    skills: "4K Music Videos, Menswear Lookbooks, Brand Endorsements",
-    portfolioUrl: "",
+    skills: "Acting, Modeling, Dancing, 4K Music Videos, Menswear Lookbooks, Brand Endorsements",
+    bio: "Lead music-video actor, contemporary dancer, and menswear commercial model available for production houses and digital campaigns.",
+    portfolioUrl: "https://gen-lang-client-0548683163.web.app/#gallery",
+    photoConsent: true,
     avatarUrl: "/images/gallery-commercial.jpg",
+    status: "approved",
     isOfficialRoster: true
   },
   {
@@ -69,11 +93,18 @@ export const PUBLIC_MODEL_SHOWCASE_SEEDS = [
     modelId: "roster_seed_mehak",
     fullName: "Mehak Sandhu",
     gender: "Female",
+    age: 21,
     city: "Hisar, Haryana",
+    state: "Haryana",
+    heightCm: 168,
+    experienceLevel: "1-2 Years",
     category: "Bridal & Heritage",
-    skills: "Royal Bridal Couture, Ethnic Catalogs, Fashion Shows",
-    portfolioUrl: "",
+    skills: "Modeling, Dancing, Royal Bridal Couture, Ethnic Catalogs, Fashion Shows",
+    bio: "Bridal couture model and classical/folk stage performer specializing in heritage jewellery shoots and festive fashion weeks.",
+    portfolioUrl: "https://gen-lang-client-0548683163.web.app/#gallery",
+    photoConsent: true,
     avatarUrl: "/images/gallery-bridal.jpg",
+    status: "approved",
     isOfficialRoster: true
   },
   {
@@ -81,11 +112,18 @@ export const PUBLIC_MODEL_SHOWCASE_SEEDS = [
     modelId: "roster_seed_rohan",
     fullName: "Rohan Chaudhary",
     gender: "Male",
+    age: 28,
     city: "Sirsa, Haryana",
+    state: "Haryana",
+    heightCm: 180,
+    experienceLevel: "5+ Years",
     category: "Fashion & Fitness",
-    skills: "Runway Choreography, Apparel Ads, Studio Portraits",
-    portfolioUrl: "",
+    skills: "Modeling, Acting, Singing, Runway Choreography, Apparel Ads, Studio Portraits",
+    bio: "Senior runway model, live acoustic vocalist, and commercial brand face with 5+ years of studio and stage casting experience.",
+    portfolioUrl: "https://gen-lang-client-0548683163.web.app/#gallery",
+    photoConsent: true,
     avatarUrl: "/images/gallery-fashion.jpg",
+    status: "approved",
     isOfficialRoster: true
   },
   {
@@ -93,11 +131,37 @@ export const PUBLIC_MODEL_SHOWCASE_SEEDS = [
     modelId: "roster_seed_simran",
     fullName: "Simran Kaur",
     gender: "Female",
-    city: "Ellenabad, Sirsa",
+    age: 20,
+    city: "Ellenabad, Haryana",
+    state: "Haryana",
+    heightCm: 165,
+    experienceLevel: "Fresher",
     category: "Advertisement & Digital",
-    skills: "TV Commercials, Skincare Brand Promotions, Print Campaigns",
+    skills: "Acting, Singing, Modeling, TV Commercials, Skincare Brand Promotions, Print Campaigns",
+    bio: "Fresh screen talent, vocalist, and creator-friendly commercial model for skincare launches, reels, and studio lookbooks.",
     portfolioUrl: "",
+    photoConsent: true,
     avatarUrl: "/images/gallery-portrait.jpg",
+    status: "approved",
+    isOfficialRoster: true
+  },
+  {
+    id: "roster_seed_dev",
+    modelId: "roster_seed_dev",
+    fullName: "Devansh Malhotra",
+    gender: "Male",
+    age: 24,
+    city: "Ludhiana, Punjab",
+    state: "Punjab",
+    heightCm: 178,
+    experienceLevel: "1-2 Years",
+    category: "Performance & Music Video",
+    skills: "Dancing, Acting, Singing, Punjabi Music Videos, Live Stage Shows",
+    bio: "High-energy bhangra & freestyle dancer, actor, and vocalist available for music video shoots and brand productions.",
+    portfolioUrl: "https://gen-lang-client-0548683163.web.app/#gallery",
+    photoConsent: true,
+    avatarUrl: "/images/studio-hero.jpg",
+    status: "approved",
     isOfficialRoster: true
   }
 ];
@@ -140,29 +204,68 @@ export function safeContactHref(type, value) {
 
 /**
  * Privacy-first sanitizer: strips ALL private contact info (phoneNumber, mobileNumber,
- * email, address, userId, adminNotes) so only approved public portfolio details are exposed.
+ * email, address, userId, adminNotes), rejects non-approved models, and enforces
+ * photo consent so only approved public portfolio details are exposed.
  */
 export function sanitizePublicModelProfile(rawModel) {
   if (!rawModel || typeof rawModel !== "object") return null;
+  if (rawModel.status && String(rawModel.status).trim().toLowerCase() !== "approved") {
+    return null;
+  }
+  if (rawModel.isOfficialRoster === false || rawModel.isDisabled === true) {
+    return null;
+  }
+
   const id = String(rawModel.modelId || rawModel.id || "").trim();
   const fullName = String(rawModel.fullName || "").trim();
   if (!id || !fullName) return null;
 
+  const photoConsent = rawModel.photoConsent !== false && rawModel.consentGiven !== false;
+  const portfolioPhotos = photoConsent ? sanitizePortfolioPhotoList(rawModel.portfolioPhotos || []) : [];
   const rawAvatar = String(rawModel.avatarUrl || "").trim();
-  const avatarUrl =
-    rawAvatar.startsWith("/") || safeHttpUrl(rawAvatar)
-      ? rawAvatar
-      : "/images/model-portrait.jpg";
+  const avatarUrl = !photoConsent
+    ? ""
+    : portfolioPhotos[0]
+      ? portfolioPhotos[0]
+      : rawAvatar.startsWith("/") || rawAvatar.startsWith("data:image/") || safeHttpUrl(rawAvatar)
+        ? rawAvatar
+        : "/images/model-portrait.jpg";
+
+  const rawCity = String(rawModel.city || "Sirsa, Haryana").trim().slice(0, 100);
+  const { cityName, stateName } = parseCityAndState(rawCity, rawModel.state);
+  const parsedAge = Number.parseInt(String(rawModel.age ?? ""), 10);
+  const age = Number.isInteger(parsedAge) && parsedAge >= 18 && parsedAge <= 100 ? parsedAge : null;
+  const parsedHeight = Number.parseInt(String(rawModel.heightCm ?? ""), 10);
+  const heightCm = Number.isInteger(parsedHeight) && parsedHeight >= 120 && parsedHeight <= 230 ? parsedHeight : null;
+  const experienceLevel = normalizeExperienceLevel(rawModel.experienceLevel || rawModel.experience);
+  const portfolioUrl = safeHttpUrl(rawModel.portfolioUrl || rawModel.portfolioUrls || "");
+  const introVideoUrl = safeHttpUrl(rawModel.introVideoUrl || "");
+  const skills = String(rawModel.skills || "").trim().slice(0, 1000);
+  const languages = String(rawModel.languages || "").trim().slice(0, 300);
+  const category = String(rawModel.category || "Official Studio Roster").trim().slice(0, 60);
+  const bio = String(rawModel.bio || "").trim().slice(0, 500);
 
   return {
     id,
     modelId: id,
     fullName: fullName.slice(0, 100),
     gender: String(rawModel.gender || "Model").trim().slice(0, 50),
-    city: String(rawModel.city || "Sirsa, Haryana").trim().slice(0, 100),
-    category: String(rawModel.category || "Official Studio Roster").trim().slice(0, 60),
-    skills: String(rawModel.skills || "").trim().slice(0, 1000),
-    portfolioUrl: safeHttpUrl(rawModel.portfolioUrl || rawModel.portfolioUrls || ""),
+    age,
+    city: rawCity,
+    cityName: cityName.slice(0, 80),
+    state: stateName.slice(0, 60),
+    heightCm,
+    experienceLevel,
+    category,
+    skills,
+    languages,
+    skillTags: extractModelSkillTags(skills, category),
+    bio,
+    portfolioUrl,
+    portfolioPhotos,
+    introVideoUrl,
+    hasPortfolio: Boolean(portfolioUrl || portfolioPhotos.length > 0 || rawModel.portfolioAvailable === true),
+    photoConsent,
     avatarUrl,
     isOfficialRoster: true
   };
@@ -185,18 +288,8 @@ export function mergePublicModels(cloudModels = [], seeds = PUBLIC_MODEL_SHOWCAS
   return merged;
 }
 
-export function filterPublicModels(models = [], { gender = "all", search = "" } = {}) {
-  const gFilter = String(gender || "all").trim().toLowerCase();
-  const q = String(search || "").trim().toLowerCase();
-
-  return (Array.isArray(models) ? models : []).filter((m) => {
-    const modelGender = String(m?.gender || "").trim().toLowerCase();
-    if (gFilter === "male" && modelGender !== "male") return false;
-    if (gFilter === "female" && modelGender !== "female") return false;
-    if (!q) return true;
-    const hay = [m?.fullName, m?.city, m?.skills, m?.category, m?.gender].join(" ").toLowerCase();
-    return hay.includes(q);
-  });
+export function filterPublicModels(models = [], filters = {}) {
+  return filterDiscoveryModels(models, filters);
 }
 
 /**
@@ -362,7 +455,8 @@ export function filterAdminCompanyRequests(requests = [], filter = "all", search
 }
 
 /**
- * Renders privacy-safe Approved Public Model Portfolio cards for Companies & Event Organizers.
+ * Renders privacy-safe Admin-Approved Model Discovery cards with professional specs,
+ * photo-consent enforcement, View Profile, Casting Inquiry, and Shoot Booking actions.
  */
 export function renderPublicModelPortfolioCardsHtml({
   models = [],
@@ -372,7 +466,7 @@ export function renderPublicModelPortfolioCardsHtml({
 } = {}) {
   const selectedSet = new Set(Array.isArray(selectedModelIds) ? selectedModelIds : []);
   if (!models.length) {
-    return `<div class="studio-card"><p style="margin:0;color:var(--text-secondary);">${escapeHtml(t("companyNoPublicModels"))}</p></div>`;
+    return `<div class="studio-card casting-empty-state"><p style="margin:0;color:var(--text-secondary);">${escapeHtml(t("companyNoPublicModels"))}</p></div>`;
   }
 
   return models
@@ -380,34 +474,86 @@ export function renderPublicModelPortfolioCardsHtml({
       const clean = sanitizePublicModelProfile(m);
       if (!clean) return "";
       const isSelected = selectedSet.has(clean.id);
+      const heightText = formatHeightDisplay(clean.heightCm);
+      const locationText = [clean.cityName || clean.city, clean.state]
+        .filter((v, idx, arr) => v && (idx === 0 || !String(arr[0]).toLowerCase().includes(String(v).toLowerCase())))
+        .join(", ");
+      const monogram = clean.fullName
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0].toUpperCase())
+        .join("") || "SA";
+
+      const mediaHtml = clean.photoConsent && clean.avatarUrl
+        ? `<img src="${escapeHtml(clean.avatarUrl)}" alt="${escapeHtml(clean.fullName)} — Official Studio Roster" loading="lazy" />`
+        : `<div class="model-photo-consent-placeholder" role="img" aria-label="${escapeHtml(t("castingPhotoPrivateLabel"))}">
+            <span class="model-consent-monogram">${escapeHtml(monogram)}</span>
+            <span class="model-consent-caption">🔒 ${escapeHtml(t("castingPhotoPrivateLabel"))}</span>
+          </div>`;
+
+      const specs = [
+        clean.age ? `${clean.age} ${t("castingYearsUnit")}` : "",
+        heightText,
+        clean.experienceLevel
+      ].filter(Boolean);
+
       return `
       <article class="studio-card public-model-card ${isSelected ? "is-selected" : ""}" data-public-model-id="${escapeHtml(clean.id)}">
         <div class="public-model-media">
-          <img src="${escapeHtml(clean.avatarUrl)}" alt="${escapeHtml(clean.fullName)} — Official Studio Roster" loading="lazy" />
+          ${mediaHtml}
           <span class="public-model-roster-tag">★ ${escapeHtml(t("rosterBadge"))}</span>
+          ${clean.hasPortfolio ? `<span class="public-model-portfolio-badge">${escapeHtml(t("castingPortfolioPill"))}</span>` : ""}
         </div>
         <div class="public-model-body">
           <div class="public-model-head">
             <div>
               <h4>${escapeHtml(clean.fullName)}</h4>
-              <span class="public-model-meta">${escapeHtml(clean.gender)} • ${escapeHtml(clean.city)}</span>
+              <span class="public-model-meta">${escapeHtml(clean.gender)} • ${escapeHtml(locationText || clean.city)}</span>
             </div>
             <span class="badge">${escapeHtml(clean.category)}</span>
           </div>
-          ${clean.skills ? `<p class="public-model-skills">${escapeHtml(clean.skills)}</p>` : ""}
           ${
-            clean.portfolioUrl
-              ? `<a class="public-model-link" href="${escapeHtml(clean.portfolioUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t("companyViewPortfolioLink"))} ↗</a>`
+            specs.length
+              ? `<div class="public-model-specs-row">${specs.map((s) => `<span class="public-model-spec-pill">${escapeHtml(s)}</span>`).join("")}</div>`
               : ""
           }
+          ${
+            clean.skillTags.length
+              ? `<div class="model-skill-pills">${clean.skillTags.slice(0, 4).map((tag) => `<span class="model-skill-pill">${escapeHtml(tag)}</span>`).join("")}</div>`
+              : clean.skills
+                ? `<p class="public-model-skills">${escapeHtml(clean.skills)}</p>`
+                : ""
+          }
           <div class="public-model-privacy-note">🔒 ${escapeHtml(t("companyModelPrivacyNote"))}</div>
-          <button
-            type="button"
-            class="${isSelected ? "btn-gold" : "btn-outline"} public-model-request-btn"
-            data-toggle-req-model-id="${escapeHtml(clean.id)}"
-            data-toggle-req-model-name="${escapeHtml(clean.fullName)}"
-            aria-pressed="${isSelected ? "true" : "false"}"
-          >${escapeHtml(isSelected ? t("companyModelSelectedBtn") : t("companyRequestModelBtn"))}</button>
+          <div class="public-model-card-actions">
+            <button
+              type="button"
+              class="btn-outline btn-sm public-model-view-btn"
+              data-view-model-profile="${escapeHtml(clean.id)}"
+            >${escapeHtml(t("castingViewProfileBtn"))}</button>
+            <button
+              type="button"
+              class="btn-outline btn-sm public-model-audition-btn"
+              data-audition-request-model-id="${escapeHtml(clean.id)}"
+              data-audition-request-model-name="${escapeHtml(clean.fullName)}"
+            >${escapeHtml(t("castingRequestAuditionBtn"))}</button>
+            <button
+              type="button"
+              class="btn-outline btn-sm public-model-shoot-btn"
+              data-shoot-booking-model-id="${escapeHtml(clean.id)}"
+              data-shoot-booking-model-name="${escapeHtml(clean.fullName)}"
+            >${escapeHtml(t("castingShootBookingBtn"))}</button>
+            <button
+              type="button"
+              class="${isSelected ? "btn-gold" : "btn-outline"} btn-sm public-model-request-btn"
+              data-toggle-req-model-id="${escapeHtml(clean.id)}"
+              data-toggle-req-model-name="${escapeHtml(clean.fullName)}"
+              data-casting-inquiry-model-id="${escapeHtml(clean.id)}"
+              data-casting-inquiry-model-name="${escapeHtml(clean.fullName)}"
+              aria-pressed="${isSelected ? "true" : "false"}"
+            >${escapeHtml(isSelected ? t("companyModelSelectedBtn") : t("castingInquiryBtn"))}</button>
+          </div>
         </div>
       </article>`;
     })
