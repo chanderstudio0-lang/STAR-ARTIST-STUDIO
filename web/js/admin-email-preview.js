@@ -754,6 +754,142 @@ function formatRecordOptionLabel(type, item) {
   return `${item.clientName || "Client"} • ${item.serviceType || "Session"} (${item.preferredDate || "TBD"})`;
 }
 
+function sanitizeFlatRecordSnapshot(record) {
+  if (!record || typeof record !== "object") return {};
+  const clean = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (key === "createdAt" || key === "updatedAt") continue;
+    if (typeof val === "string") {
+      clean[key] = val.slice(0, 1000);
+    } else if (typeof val === "number" && Number.isFinite(val)) {
+      clean[key] = val;
+    } else if (typeof val === "boolean") {
+      clean[key] = val;
+    } else if (Array.isArray(val)) {
+      clean[key] = val
+        .filter((item) => typeof item === "string" || typeof item === "number")
+        .slice(0, 20)
+        .map((item) => String(item).slice(0, 120));
+    }
+  }
+  return clean;
+}
+
+function sanitizeOverridesForDispatch(overrides = {}) {
+  if (!overrides || typeof overrides !== "object") return {};
+  const allowedKeys = [
+    "brandName",
+    "brandTagline",
+    "accentColor",
+    "accentLightColor",
+    "footerText",
+    "bookingSubjectTemplate",
+    "modelSubjectTemplate",
+    "companySubjectTemplate",
+    "bookingCtaLabel",
+    "modelCtaLabel",
+    "companyCtaLabel"
+  ];
+  const clean = {};
+  for (const key of allowedKeys) {
+    if (overrides[key] !== undefined && String(overrides[key]).trim() !== "") {
+      clean[key] = String(overrides[key]).trim().slice(0, 220);
+    }
+  }
+  return clean;
+}
+
+/**
+ * Builds a Firestore-rules-compliant payload for triggering a test notification
+ * email strictly to the authorized Studio Admin address.
+ */
+export function buildAdminTestEmailRequestPayload({
+  type = "booking",
+  record = null,
+  recordId = "",
+  brandOverrides = {}
+} = {}) {
+  const preview = buildAdminEmailPreview({ type, record, recordId, brandOverrides });
+  const testSubject = preview.subject.startsWith("[TEST]")
+    ? preview.subject
+    : `[TEST] ${preview.subject}`;
+
+  return {
+    templateType: preview.type,
+    recipientEmail: DEFAULT_EMAIL_PREVIEW_BRAND.adminEmail,
+    recordId: preview.recordId,
+    isSample: preview.isSample,
+    recordSnapshot: sanitizeFlatRecordSnapshot(record || SAMPLE_EMAIL_PREVIEW_RECORDS[preview.type]),
+    templateOverrides: sanitizeOverridesForDispatch(brandOverrides),
+    subject: sanitizeEmailHeader(testSubject, 200)
+  };
+}
+
+/**
+ * Renders the live SMTP verification & test email delivery status card inside
+ * the Email Preview envelope.
+ */
+export function renderAdminTestEmailStatusHtml(
+  testState = {},
+  { t = (k) => k, escapeHtml = escapeEmailHtml } = {}
+) {
+  const status = String(testState?.status || "idle");
+  if (status === "idle") return "";
+
+  const recipient = testState.recipient || DEFAULT_EMAIL_PREVIEW_BRAND.adminEmail;
+  const hostInfo = testState.smtpHost ? `${testState.smtpHost}${testState.smtpPort ? `:${testState.smtpPort}` : ""}` : "";
+
+  if (status === "sending" || status === "queued") {
+    const title = status === "sending" ? t("adminEmailTestStatusSending") : t("adminEmailTestStatusQueued");
+    const detail = t("adminEmailTestStatusQueuedDetail").replace("{email}", recipient);
+    return `
+      <div id="adminEmailTestStatusBanner" class="email-preview-test-status is-pending" role="status" aria-live="polite" data-test-email-status="${escapeHtml(status)}">
+        <span class="email-test-spinner" aria-hidden="true"></span>
+        <div class="email-preview-test-status-copy">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(detail)}</span>
+        </div>
+      </div>`;
+  }
+
+  if (status === "awaiting_worker") {
+    const detail = t("adminEmailTestStatusAwaitingDetail").replace("{email}", recipient);
+    return `
+      <div id="adminEmailTestStatusBanner" class="email-preview-test-status is-warning" role="status" aria-live="polite" data-test-email-status="awaiting_worker">
+        <span class="email-test-status-icon" aria-hidden="true">⏳</span>
+        <div class="email-preview-test-status-copy">
+          <strong>${escapeHtml(t("adminEmailTestStatusAwaiting"))}</strong>
+          <span>${escapeHtml(detail)}</span>
+        </div>
+      </div>`;
+  }
+
+  if (status === "sent") {
+    const parts = [
+      t("adminEmailTestStatusSentDetail").replace("{email}", recipient),
+      hostInfo ? `SMTP: ${hostInfo}` : "",
+      testState.messageId ? `ID: ${testState.messageId}` : ""
+    ].filter(Boolean);
+    return `
+      <div id="adminEmailTestStatusBanner" class="email-preview-test-status is-sent" role="status" aria-live="polite" data-test-email-status="sent">
+        <span class="email-test-status-icon" aria-hidden="true">✓</span>
+        <div class="email-preview-test-status-copy">
+          <strong>${escapeHtml(t("adminEmailTestStatusSent"))}</strong>
+          <span>${escapeHtml(parts.join(" • "))}</span>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div id="adminEmailTestStatusBanner" class="email-preview-test-status is-failed" role="alert" data-test-email-status="failed">
+      <span class="email-test-status-icon" aria-hidden="true">⚠</span>
+      <div class="email-preview-test-status-copy">
+        <strong>${escapeHtml(t("adminEmailTestStatusFailed"))}</strong>
+        <span>${escapeHtml(testState.error || t("adminEmailTestStatusFailedFallback"))}</span>
+      </div>
+    </div>`;
+}
+
 /**
  * Renders the complete Admin Email Preview studio section HTML.
  * Uses a strictly sandboxed iframe (sandbox="") so previewed HTML can never execute scripts.
@@ -768,6 +904,8 @@ export function renderAdminEmailPreviewSectionHtml({
   const viewMode = ["html", "text", "source"].includes(previewState.viewMode) ? previewState.viewMode : "html";
   const viewport = previewState.viewport === "mobile" ? "mobile" : "desktop";
   const overrides = previewState.overrides || {};
+  const testSend = previewState.testSend || { status: "idle" };
+  const isSendingTest = testSend.status === "sending" || testSend.status === "queued";
 
   const liveRecords = getPreviewRecordsForType(activeType, adminData);
   const selectedRecordId = String(previewState.recordId || "__sample__");
@@ -824,6 +962,9 @@ export function renderAdminEmailPreviewSectionHtml({
         ></iframe>
       </div>`;
   }
+
+  const testBtnLabel = isSendingTest ? t("adminEmailSendingTestBtn") : t("adminEmailSendTestBtn");
+  const testStatusHtml = renderAdminTestEmailStatusHtml(testSend, { t, escapeHtml });
 
   return `
   <section id="adminEmailPreviewPanel" class="studio-card email-preview-panel" aria-labelledby="adminEmailPreviewHeading">
@@ -919,11 +1060,23 @@ export function renderAdminEmailPreviewSectionHtml({
       </div>
       <div class="email-preview-action-bar">
         <span class="badge">${escapeHtml(preview.isSample ? t("adminEmailSourceSampleBadge") : t("adminEmailSourceLiveBadge"))} • ${escapeHtml(preview.recordLabel)}</span>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div class="email-preview-action-buttons">
           <button type="button" class="btn-outline btn-sm" id="emailPreviewCopySubjectBtn" data-email-preview-copy="subject">${escapeHtml(t("adminEmailCopySubjectBtn"))}</button>
-          <button type="button" class="btn-gold btn-sm" id="emailPreviewCopyHtmlBtn" data-email-preview-copy="html">${escapeHtml(t("adminEmailCopyHtmlBtn"))}</button>
+          <button type="button" class="btn-outline btn-sm" id="emailPreviewCopyHtmlBtn" data-email-preview-copy="html">${escapeHtml(t("adminEmailCopyHtmlBtn"))}</button>
+          <button
+            type="button"
+            class="btn-gold btn-sm email-preview-send-test-btn${isSendingTest ? " is-loading" : ""}"
+            id="emailPreviewSendTestBtn"
+            data-email-preview-send-test
+            aria-busy="${isSendingTest ? "true" : "false"}"
+            ${isSendingTest ? "disabled" : ""}
+          >
+            ${isSendingTest ? '<span class="email-test-btn-spinner" aria-hidden="true"></span>' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>'}
+            <span>${escapeHtml(testBtnLabel)}</span>
+          </button>
         </div>
       </div>
+      ${testStatusHtml}
     </div>
 
     ${bodyStageHtml}

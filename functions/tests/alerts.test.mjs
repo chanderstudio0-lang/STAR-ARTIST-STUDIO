@@ -394,3 +394,139 @@ test("Customizable HTML template engine loads external templates, prevents path 
   assert.ok(sent[0].html.includes("Glamour Productions"));
 });
 
+test("handleAdminTestEmailRequested verifies SMTP, sends branded [TEST] HTML email strictly to chanderstudio0@gmail.com, blocks unauthorized callers, and redacts secrets on error", async () => {
+  const { handleAdminTestEmailRequested } = await import("../src/handlers.js");
+
+  // 1. Authorized admin triggers test email -> verify() called, [TEST] email dispatched, status written back
+  const sentMessages = [];
+  const statusUpdates = [];
+  let verifyCalls = 0;
+  const fakeTransporter = {
+    async verify() {
+      verifyCalls += 1;
+      return true;
+    },
+    async sendMail(msg) {
+      sentMessages.push(msg);
+      return { messageId: "smtp_test_msg_001" };
+    }
+  };
+  const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
+
+  const okRes = await handleAdminTestEmailRequested(
+    {
+      params: { testId: "emailtest_001" },
+      data: {
+        id: "emailtest_001",
+        data: () => ({
+          requestedByEmail: "chanderstudio0@gmail.com",
+          recipientEmail: "attacker@example.com", // Ignored: server forces chanderstudio0@gmail.com
+          templateType: "booking",
+          recordId: "bk_sample_01",
+          recordSnapshot: {
+            clientName: "Priya Kapoor",
+            contactNumber: "+91 9812890081",
+            serviceType: "Royal Bridal Film",
+            preferredDate: "2026-12-28",
+            status: "Pending"
+          },
+          templateOverrides: {
+            brandName: "STAR ARTIST TEST BRAND",
+            accentColor: "#E5B842"
+          },
+          status: "queued"
+        })
+      }
+    },
+    {
+      smtpUser: "chanderstudio0@gmail.com",
+      smtpPass: "super-secret-app-password",
+      transporter: fakeTransporter,
+      updateStatusDoc: async (patch) => statusUpdates.push(patch),
+      logger: silentLogger
+    }
+  );
+
+  assert.equal(okRes.sent, true);
+  assert.equal(okRes.smtpVerified, true);
+  assert.equal(verifyCalls, 1, "Must verify SMTP transport before dispatching test email");
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].to, "chanderstudio0@gmail.com", "Must strictly send to authorized admin email");
+  assert.ok(sentMessages[0].subject.startsWith("[TEST] "), "Test subject must include [TEST] prefix");
+  assert.ok(sentMessages[0].html.includes("STAR ARTIST TEST BRAND"));
+  assert.ok(sentMessages[0].html.includes("Priya Kapoor"));
+  assert.equal(statusUpdates.length, 1);
+  assert.equal(statusUpdates[0].status, "sent");
+  assert.equal(statusUpdates[0].smtpVerified, true);
+  assert.equal(statusUpdates[0].messageId, "smtp_test_msg_001");
+
+  // 2. Unauthorized requester is strictly rejected
+  const rejectedPatches = [];
+  const rejectedRes = await handleAdminTestEmailRequested(
+    {
+      params: { testId: "emailtest_unauth" },
+      data: {
+        id: "emailtest_unauth",
+        data: () => ({
+          requestedByEmail: "intruder@example.com",
+          templateType: "model",
+          status: "queued"
+        })
+      }
+    },
+    {
+      smtpUser: "chanderstudio0@gmail.com",
+      smtpPass: "super-secret-app-password",
+      transporter: fakeTransporter,
+      updateStatusDoc: async (patch) => rejectedPatches.push(patch),
+      logger: silentLogger
+    }
+  );
+  assert.equal(rejectedRes.sent, false);
+  assert.equal(rejectedRes.reason, "unauthorized_requester");
+  assert.equal(sentMessages.length, 1, "Unauthorized caller must never dispatch mail");
+  assert.equal(rejectedPatches[0].status, "failed");
+
+  // 3. SMTP failure writes sanitized error status and redacts SMTP_PASS
+  const failedPatches = [];
+  const failingTransporter = {
+    async verify() {
+      throw new Error("Invalid login for super-secret-app-password on smtp.gmail.com");
+    },
+    async sendMail() {
+      throw new Error("Should not call sendMail after verify fails");
+    }
+  };
+  const failRes = await handleAdminTestEmailRequested(
+    {
+      params: { testId: "emailtest_fail" },
+      data: {
+        id: "emailtest_fail",
+        data: () => ({
+          requestedByEmail: "chanderstudio0@gmail.com",
+          templateType: "company",
+          status: "queued"
+        })
+      }
+    },
+    {
+      smtpUser: "chanderstudio0@gmail.com",
+      smtpPass: "super-secret-app-password",
+      transporter: failingTransporter,
+      updateStatusDoc: async (patch) => failedPatches.push(patch),
+      logger: silentLogger
+    }
+  );
+  assert.equal(failRes.sent, false);
+  assert.equal(failRes.smtpVerified, false);
+  assert.equal(failedPatches[0].status, "failed");
+  assert.equal(failedPatches[0].errorMessage.includes("super-secret-app-password"), false, "Must redact SMTP password");
+  assert.ok(failedPatches[0].errorMessage.includes("[REDACTED]"));
+
+  // 4. functions/index.js exports sendAdminTestNotificationEmail bound to adminEmailTests/{testId}
+  const indexSrc = fs.readFileSync(path.join(functionsDir, "index.js"), "utf8");
+  assert.ok(indexSrc.includes("export const sendAdminTestNotificationEmail"));
+  assert.ok(indexSrc.includes('document: "adminEmailTests/{testId}"'));
+});
+
+

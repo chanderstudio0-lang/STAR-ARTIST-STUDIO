@@ -22,6 +22,28 @@ export async function createEmailTransporter(smtpConfig, { nodemailerLib = null 
 }
 
 /**
+ * Verifies the configured Nodemailer SMTP transport connection & credentials.
+ */
+export async function verifySmtpTransport({
+  smtpConfig = resolveSmtpConfig(),
+  transporter = null,
+  nodemailerLib = null
+} = {}) {
+  const activeTransporter =
+    transporter || (await createEmailTransporter(smtpConfig, { nodemailerLib }));
+  if (typeof activeTransporter.verify === "function") {
+    await activeTransporter.verify();
+  }
+  return {
+    verified: true,
+    host: smtpConfig.host,
+    port: smtpConfig.port,
+    secure: smtpConfig.secure,
+    transporter: activeTransporter
+  };
+}
+
+/**
  * Sends a single admin alert email via the configured SMTP transport.
  */
 export async function sendAdminAlertEmail({

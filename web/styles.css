@@ -2299,7 +2299,151 @@ textarea:focus {
   border-color: #fca5a5;
 }
 
-/* Gallery Lightbox Stage, Pinch-to-Zoom, Slideshow Controls, CSS Filter Presets, Download & Web Share Buttons */
+/* Gallery Lightbox Stage, Fullscreen Mode, Pinch-to-Zoom, Slideshow Controls, CSS Filter Presets, Download & Web Share Buttons */
+.lightbox-modal-card {
+  max-width: 720px;
+}
+
+.lightbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.lightbox-title {
+  margin: 0;
+  color: var(--gold);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.lightbox-fullscreen-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.16s ease;
+}
+
+.lightbox-fullscreen-btn.is-active {
+  border-color: var(--gold);
+  background: var(--gold-container);
+  color: var(--gold-light);
+}
+
+[data-theme="light"] .lightbox-fullscreen-btn.is-active {
+  color: var(--gold-dark);
+}
+
+#lightboxModal.is-fullscreen,
+#lightboxModal:fullscreen,
+#lightboxModal:-webkit-full-screen {
+  padding: 0;
+  background: #050505;
+  z-index: 120;
+}
+
+#lightboxModal.is-fullscreen .lightbox-modal-card,
+#lightboxModal:fullscreen .lightbox-modal-card,
+#lightboxModal:-webkit-full-screen .lightbox-modal-card {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border-radius: 0;
+  border: none;
+  padding: 12px 16px 14px;
+  gap: 10px;
+  background: #050505;
+  color: #f6f1e3;
+  overflow: hidden;
+}
+
+#lightboxModal.is-fullscreen .lightbox-header .icon-btn,
+#lightboxModal:fullscreen .lightbox-header .icon-btn,
+#lightboxModal:-webkit-full-screen .lightbox-header .icon-btn {
+  background: rgba(24, 24, 24, 0.9);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: #f8e5a0;
+}
+
+#lightboxModal.is-fullscreen .lightbox-fullscreen-btn.is-active,
+#lightboxModal:fullscreen .lightbox-fullscreen-btn.is-active,
+#lightboxModal:-webkit-full-screen .lightbox-fullscreen-btn.is-active {
+  background: rgba(212, 175, 55, 0.24);
+  border-color: var(--gold);
+  color: #f8e5a0;
+}
+
+#lightboxModal.is-fullscreen .lightbox-stage,
+#lightboxModal:fullscreen .lightbox-stage,
+#lightboxModal:-webkit-full-screen .lightbox-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  background: #000;
+}
+
+#lightboxModal.is-fullscreen .lightbox-image,
+#lightboxModal:fullscreen .lightbox-image,
+#lightboxModal:-webkit-full-screen .lightbox-image {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+#lightboxModal.is-fullscreen .lightbox-slideshow-bar,
+#lightboxModal:fullscreen .lightbox-slideshow-bar,
+#lightboxModal:-webkit-full-screen .lightbox-slideshow-bar {
+  flex-shrink: 0;
+}
+
+#lightboxModal.is-fullscreen .lightbox-zoom-controls,
+#lightboxModal:fullscreen .lightbox-zoom-controls,
+#lightboxModal:-webkit-full-screen .lightbox-zoom-controls {
+  background: rgba(24, 24, 24, 0.9);
+  border-color: rgba(212, 175, 55, 0.35);
+}
+
+#lightboxModal.is-fullscreen .lightbox-zoom-btn,
+#lightboxModal:fullscreen .lightbox-zoom-btn,
+#lightboxModal:-webkit-full-screen .lightbox-zoom-btn,
+#lightboxModal.is-fullscreen .lightbox-zoom-level,
+#lightboxModal:fullscreen .lightbox-zoom-level,
+#lightboxModal:-webkit-full-screen .lightbox-zoom-level {
+  color: #f6f1e3;
+}
+
+#lightboxModal.is-fullscreen .lightbox-exif-panel,
+#lightboxModal:fullscreen .lightbox-exif-panel,
+#lightboxModal:-webkit-full-screen .lightbox-exif-panel,
+#lightboxModal.is-fullscreen .lightbox-filter-section,
+#lightboxModal:fullscreen .lightbox-filter-section,
+#lightboxModal:-webkit-full-screen .lightbox-filter-section,
+#lightboxModal.is-fullscreen .lightbox-footer,
+#lightboxModal:fullscreen .lightbox-footer,
+#lightboxModal:-webkit-full-screen .lightbox-footer {
+  display: none;
+}
+
 .lightbox-stage {
   position: relative;
   display: flex;
@@ -3181,13 +3325,49 @@ textarea:focus {
   justify-content: center;
   gap: 8px;
   min-height: 44px;
+  min-width: 156px;
   padding: 10px 16px;
   white-space: nowrap;
+  transition: opacity 0.18s ease, transform 0.16s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 .admin-export-csv-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.admin-export-csv-btn.is-loading {
+  opacity: 0.92;
+  cursor: wait;
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.35);
+}
+
+.admin-export-csv-btn.is-exported {
+  background: linear-gradient(135deg, #22c55e, #15803d);
+  color: #ffffff;
+  border-color: rgba(34, 197, 94, 0.7);
+}
+
+.admin-export-csv-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2.2px solid rgba(22, 17, 2, 0.28);
+  border-top-color: #161102;
+  animation: adminCsvSpin 0.72s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes adminCsvSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-export-csv-spinner {
+    animation-duration: 1.8s;
+  }
 }
 
 [data-theme="light"] .admin-bookings-toolbar {
@@ -3912,6 +4092,131 @@ textarea:focus {
 [data-theme="light"] .email-preview-customizer,
 [data-theme="light"] .email-preview-envelope {
   background: #faf8f3;
+}
+
+.email-preview-action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.email-preview-send-test-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+}
+
+.email-preview-send-test-btn.is-loading {
+  opacity: 0.9;
+  cursor: wait;
+}
+
+.email-test-btn-spinner,
+.email-test-spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(22, 17, 2, 0.28);
+  border-top-color: #161102;
+  animation: adminCsvSpin 0.72s linear infinite;
+  flex-shrink: 0;
+}
+
+.email-test-spinner {
+  width: 18px;
+  height: 18px;
+  border-color: rgba(212, 175, 55, 0.3);
+  border-top-color: var(--gold-light);
+}
+
+.email-preview-test-status {
+  margin-top: 10px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.email-preview-test-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.email-preview-test-status-copy span {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.email-test-status-icon {
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.email-preview-test-status.is-pending {
+  border-color: rgba(212, 175, 55, 0.45);
+  background: rgba(212, 175, 55, 0.1);
+}
+
+.email-preview-test-status.is-pending strong {
+  color: var(--gold-light);
+}
+
+.email-preview-test-status.is-warning {
+  border-color: rgba(245, 158, 11, 0.48);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.email-preview-test-status.is-warning strong {
+  color: #fcd34d;
+}
+
+.email-preview-test-status.is-sent {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.email-preview-test-status.is-sent strong,
+.email-preview-test-status.is-sent .email-test-status-icon {
+  color: #6ee7b7;
+}
+
+.email-preview-test-status.is-failed {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.email-preview-test-status.is-failed strong,
+.email-preview-test-status.is-failed .email-test-status-icon {
+  color: #fca5a5;
+}
+
+[data-theme="light"] .email-preview-test-status.is-pending strong {
+  color: var(--gold-dark);
+}
+
+[data-theme="light"] .email-preview-test-status.is-warning strong {
+  color: #b45309;
+}
+
+[data-theme="light"] .email-preview-test-status.is-sent strong,
+[data-theme="light"] .email-preview-test-status.is-sent .email-test-status-icon {
+  color: #15803d;
+}
+
+[data-theme="light"] .email-preview-test-status.is-failed strong,
+[data-theme="light"] .email-preview-test-status.is-failed .email-test-status-icon {
+  color: #b91c1c;
 }
 
 

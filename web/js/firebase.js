@@ -1070,3 +1070,57 @@ export async function adminPublishAnnouncement({ title, message, category, prior
     updatedAt: fsMod.serverTimestamp()
   });
 }
+
+export async function adminRequestTestEmail({
+  templateType = "booking",
+  recordId = "",
+  recordSnapshot = {},
+  isSample = true,
+  templateOverrides = {},
+  subject = ""
+} = {}) {
+  const ctx = await initFirebaseClient();
+  const user = requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const safeType = ["booking", "model", "company"].includes(templateType) ? templateType : "booking";
+  const recipientEmail = String(STUDIO_CONTACT.adminEmail || "chanderstudio0@gmail.com").trim().toLowerCase();
+  const safeSubject = String(subject || `[TEST] ${safeType} notification`).trim().slice(0, 200);
+  const testId = `emailtest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  await fsMod.setDoc(fsMod.doc(db, "adminEmailTests", testId), {
+    requestedByUid: user.uid,
+    requestedByEmail: String(user.email || recipientEmail).trim().toLowerCase(),
+    recipientEmail,
+    templateType: safeType,
+    recordId: String(recordId || "").trim().slice(0, 128),
+    isSample: Boolean(isSample),
+    recordSnapshot: recordSnapshot && typeof recordSnapshot === "object" ? recordSnapshot : {},
+    templateOverrides: templateOverrides && typeof templateOverrides === "object" ? templateOverrides : {},
+    subject: safeSubject,
+    status: "queued",
+    createdAt: fsMod.serverTimestamp()
+  });
+
+  return { testId, recipientEmail, subject: safeSubject };
+}
+
+export async function adminSubscribeTestEmailStatus(testId, { onUpdate, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  if (!testId) return () => {};
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.doc(db, "adminEmailTests", testId),
+    (snap) => {
+      if (!snap.exists()) return;
+      if (typeof onUpdate === "function") {
+        onUpdate({ id: snap.id, ...snap.data() });
+      }
+    },
+    (err) => {
+      if (typeof onError === "function") {
+        onError(err);
+      }
+    }
+  );
+}

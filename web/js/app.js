@@ -28,6 +28,8 @@ import {
 } from "./admin-model-growth.js";
 import {
   exportBookingsToCsv,
+  applyAdminCsvButtonState,
+  runAdminBookingsCsvExport,
   renderAdminBookingsToolbarHtml
 } from "./admin-bookings-export.js";
 import {
@@ -37,6 +39,7 @@ import {
 } from "./admin-booking-tracker.js";
 import {
   buildAdminEmailPreview,
+  buildAdminTestEmailRequestPayload,
   getPreviewRecordsForType,
   renderAdminEmailPreviewSectionHtml
 } from "./admin-email-preview.js";
@@ -79,6 +82,7 @@ import {
   formatLightboxSlideCounter,
   resolveLightboxKeyAction,
   createLightboxSlideshowController,
+  createLightboxFullscreenController,
   applyLightboxZoomTransform,
   createLightboxZoomController,
   LIGHTBOX_MAX_ZOOM,
@@ -139,6 +143,8 @@ import {
   adminUpdateGalleryStatus,
   adminDeleteGalleryItem,
   adminPublishAnnouncement,
+  adminRequestTestEmail,
+  adminSubscribeTestEmailStatus,
   initFirebaseClient,
   shouldShowManualFirebaseSetup,
   saveLocalDevFirebaseConfig,
@@ -173,7 +179,16 @@ const state = {
     recordId: "__sample__",
     viewMode: "html",
     viewport: "desktop",
-    overrides: {}
+    overrides: {},
+    testSend: {
+      status: "idle",
+      testId: "",
+      recipient: STUDIO_CONTACT.adminEmail,
+      messageId: "",
+      smtpHost: "",
+      smtpPort: "",
+      error: ""
+    }
   },
   publicModels: mergePublicModels([]),
   publicModelGenderFilter: "all",
@@ -203,6 +218,7 @@ const state = {
   exifCache: {},
   uploadedGalleryMedia: null,
   isEncodingGalleryImage: false,
+  adminCsvExportStatus: "idle",
   adminData: { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] }
 };
 
@@ -978,6 +994,7 @@ function renderAdminConsole() {
   if (state.adminTab === "bookings") {
     const toolbarHtml = renderAdminBookingsToolbarHtml({
       count: state.adminData.bookings.length,
+      status: state.adminCsvExportStatus,
       t,
       escapeHtml
     });
@@ -1649,7 +1666,19 @@ function wireEvents() {
         showToast(t("adminAccessDeniedToast"));
         return;
       }
-      const res = exportBookingsToCsv(state.adminData.bookings);
+      if (state.adminCsvExportStatus === "processing") {
+        return;
+      }
+      const res = await runAdminBookingsCsvExport(state.adminData.bookings, {
+        onStateChange: (nextStatus) => {
+          state.adminCsvExportStatus = nextStatus;
+          applyAdminCsvButtonState(document.getElementById("adminExportBookingsCsvBtn"), nextStatus, {
+            count: state.adminData.bookings.length,
+            t,
+            escapeHtml
+          });
+        }
+      });
       if (res.status === "exported") {
         showToast(t("adminExportBookingsSuccessToast").replace("{count}", String(res.count)));
       } else {
@@ -1744,6 +1773,137 @@ function wireEvents() {
         showToast(copyTarget === "subject" ? t("adminEmailCopiedSubjectToast") : t("adminEmailCopiedHtmlToast"));
       } catch {
         showToast("Unable to access clipboard on this browser.");
+      }
+      return;
+    }
+
+    const sendTestEmailBtn = e.target.closest("[data-email-preview-send-test]");
+    if (sendTestEmailBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const currentStatus = state.adminEmailPreview.testSend?.status;
+      if (currentStatus === "sending" || currentStatus === "queued") {
+        return;
+      }
+
+      if (typeof state._unsubTestEmailStatus === "function") {
+        state._unsubTestEmailStatus();
+        state._unsubTestEmailStatus = null;
+      }
+      if (state._testEmailWorkerTimer) {
+        clearTimeout(state._testEmailWorkerTimer);
+        state._testEmailWorkerTimer = null;
+      }
+
+      const { type, recordId, overrides } = state.adminEmailPreview;
+      const liveRecords = getPreviewRecordsForType(type, state.adminData);
+      const matchedRecord =
+        recordId && recordId !== "__sample__" ? liveRecords.find((item) => item.id === recordId) || null : null;
+      const requestPayload = buildAdminTestEmailRequestPayload({
+        type,
+        record: matchedRecord,
+        recordId: matchedRecord?.id || "",
+        brandOverrides: overrides
+      });
+
+      state.adminEmailPreview.testSend = {
+        status: "sending",
+        testId: "",
+        recipient: requestPayload.recipientEmail,
+        messageId: "",
+        smtpHost: "",
+        smtpPort: "",
+        error: ""
+      };
+      renderAdminConsole();
+
+      try {
+        const queued = await adminRequestTestEmail(requestPayload);
+        state.adminEmailPreview.testSend = {
+          status: "queued",
+          testId: queued.testId,
+          recipient: queued.recipientEmail,
+          messageId: "",
+          smtpHost: "",
+          smtpPort: "",
+          error: ""
+        };
+        renderAdminConsole();
+        showToast(t("adminEmailTestQueuedToast").replace("{email}", queued.recipientEmail));
+
+        state._testEmailWorkerTimer = setTimeout(() => {
+          if (
+            state.adminEmailPreview.testSend?.testId === queued.testId &&
+            state.adminEmailPreview.testSend?.status === "queued"
+          ) {
+            state.adminEmailPreview.testSend = {
+              ...state.adminEmailPreview.testSend,
+              status: "awaiting_worker"
+            };
+            renderAdminConsole();
+          }
+        }, 12000);
+
+        state._unsubTestEmailStatus = await adminSubscribeTestEmailStatus(queued.testId, {
+          onUpdate: (docData) => {
+            if (state.adminEmailPreview.testSend?.testId !== queued.testId) return;
+            const remoteStatus = String(docData?.status || "");
+            if (remoteStatus === "sent") {
+              clearTimeout(state._testEmailWorkerTimer);
+              state._testEmailWorkerTimer = null;
+              state.adminEmailPreview.testSend = {
+                status: "sent",
+                testId: queued.testId,
+                recipient: docData.recipientEmail || queued.recipientEmail,
+                messageId: docData.messageId || "",
+                smtpHost: docData.smtpHost || "",
+                smtpPort: docData.smtpPort || "",
+                error: ""
+              };
+              renderAdminConsole();
+              showToast(t("adminEmailTestSentToast").replace("{email}", docData.recipientEmail || queued.recipientEmail));
+              if (typeof state._unsubTestEmailStatus === "function") {
+                state._unsubTestEmailStatus();
+                state._unsubTestEmailStatus = null;
+              }
+            } else if (remoteStatus === "failed") {
+              clearTimeout(state._testEmailWorkerTimer);
+              state._testEmailWorkerTimer = null;
+              const errText = docData.errorMessage || t("adminEmailTestStatusFailedFallback");
+              state.adminEmailPreview.testSend = {
+                status: "failed",
+                testId: queued.testId,
+                recipient: docData.recipientEmail || queued.recipientEmail,
+                messageId: "",
+                smtpHost: docData.smtpHost || "",
+                smtpPort: docData.smtpPort || "",
+                error: errText
+              };
+              renderAdminConsole();
+              showToast(t("adminEmailTestFailedToast").replace("{error}", errText));
+              if (typeof state._unsubTestEmailStatus === "function") {
+                state._unsubTestEmailStatus();
+                state._unsubTestEmailStatus = null;
+              }
+            }
+          },
+          onError: () => {}
+        });
+      } catch (err) {
+        const errText = err?.message || t("adminEmailTestStatusFailedFallback");
+        state.adminEmailPreview.testSend = {
+          status: "failed",
+          testId: "",
+          recipient: requestPayload.recipientEmail,
+          messageId: "",
+          smtpHost: "",
+          smtpPort: "",
+          error: errText
+        };
+        renderAdminConsole();
+        showToast(t("adminEmailTestFailedToast").replace("{error}", errText));
       }
       return;
     }
@@ -2201,6 +2361,34 @@ function wireEvents() {
     }
   });
 
+  function syncLightboxFullscreenUi(isFullscreen = false) {
+    const modal = document.getElementById("lightboxModal");
+    const btn = document.getElementById("lightboxFullscreenBtn");
+    const enterIcon = document.getElementById("lightboxFullscreenEnterIcon");
+    const exitIcon = document.getElementById("lightboxFullscreenExitIcon");
+    const label = isFullscreen ? t("lightboxExitFullscreen") : t("lightboxEnterFullscreen");
+
+    modal?.classList.toggle("is-fullscreen", Boolean(isFullscreen));
+    if (btn) {
+      btn.classList.toggle("is-active", Boolean(isFullscreen));
+      btn.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("title", `${label} (F)`);
+    }
+    enterIcon?.classList.toggle("hidden", Boolean(isFullscreen));
+    exitIcon?.classList.toggle("hidden", !isFullscreen);
+  }
+
+  const lightboxFullscreen = createLightboxFullscreenController({
+    getTargetEl: () => document.getElementById("lightboxModal"),
+    onStateChange: ({ isFullscreen }) => {
+      syncLightboxFullscreenUi(isFullscreen);
+      if (lightboxZoom.isZoomed()) {
+        lightboxZoom.reset();
+      }
+    }
+  });
+
   function renderLightboxSlide() {
     const total = state.activeLightboxItems.length;
     if (total <= 0 || state.activeLightboxIndex < 0 || state.activeLightboxIndex >= total) return;
@@ -2260,6 +2448,7 @@ function wireEvents() {
       }
     }
     syncLightboxSlideshowUi();
+    syncLightboxFullscreenUi(lightboxFullscreen.isFullscreen());
   }
 
   function openLightboxAt(items, index = 0, folderName = "All") {
@@ -2287,6 +2476,7 @@ function wireEvents() {
   function closeLightbox() {
     lightboxSlideshow.stop();
     lightboxZoom.reset();
+    lightboxFullscreen.exit();
     document.getElementById("lightboxImg")?.classList.remove("is-pinching");
     state.activeLightboxItem = null;
     state.activeLightboxItems = [];
@@ -2340,12 +2530,23 @@ function wireEvents() {
     showToast(nowPlaying ? t("lightboxSlideshowStartedToast") : t("lightboxSlideshowPausedToast"));
   });
 
+  document.getElementById("lightboxFullscreenBtn")?.addEventListener("click", () => {
+    lightboxFullscreen.toggle();
+  });
+
+  document.addEventListener("fullscreenchange", () => {
+    lightboxFullscreen.syncFromDocument();
+  });
+  document.addEventListener("webkitfullscreenchange", () => {
+    lightboxFullscreen.syncFromDocument();
+  });
+
   document.getElementById("closeLightboxBtn")?.addEventListener("click", () => {
     closeLightbox();
   });
 
   document.getElementById("lightboxModal")?.addEventListener("click", (e) => {
-    if (e.target === e.currentTarget) {
+    if (e.target === e.currentTarget && !lightboxFullscreen.isFullscreen()) {
       closeLightbox();
     }
   });
@@ -2530,9 +2731,16 @@ function wireEvents() {
         const nowPlaying = lightboxSlideshow.toggle();
         showToast(nowPlaying ? t("lightboxSlideshowStartedToast") : t("lightboxSlideshowPausedToast"));
       }
+    } else if (action === "toggle-fullscreen") {
+      e.preventDefault();
+      lightboxFullscreen.toggle();
     } else if (action === "close") {
       e.preventDefault();
-      closeLightbox();
+      if (lightboxFullscreen.isFullscreen()) {
+        lightboxFullscreen.exit();
+      } else {
+        closeLightbox();
+      }
     }
   });
 

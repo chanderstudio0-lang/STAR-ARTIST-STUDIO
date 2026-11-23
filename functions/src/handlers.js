@@ -4,7 +4,7 @@ import {
   buildNewModelApplicationAlertEmail,
   buildNewCompanyBookingAlertEmail
 } from "./email-templates.js";
-import { sendAdminAlertEmail } from "./mailer.js";
+import { sendAdminAlertEmail, verifySmtpTransport } from "./mailer.js";
 
 async function resolveRuntimeOverrides({ templateOverrides = null, loadTemplateOverrides = null, logger = console }) {
   if (templateOverrides && typeof templateOverrides === "object") {
@@ -191,4 +191,227 @@ export async function handleNewCompanyBookingCreated(
     messageId: delivery.messageId,
     subject: emailPayload.subject
   };
+}
+
+const TEST_EMAIL_SAMPLE_RECORDS = Object.freeze({
+  booking: Object.freeze({
+    clientName: "Simranpreet Kaur",
+    contactNumber: "+91 9812890081",
+    serviceType: "High-Fashion Editorial — Pro Package",
+    preferredDate: "2026-12-14",
+    preferredTime: "11:00 AM",
+    location: "Star Artist Studio Floor (Talwara Khurd, Sirsa)",
+    status: "Pending",
+    notes: "SMTP & HTML template test booking preview from the Admin Console."
+  }),
+  model: Object.freeze({
+    fullName: "Aarav Sharma",
+    age: 22,
+    gender: "Male",
+    city: "Sirsa, Haryana",
+    phoneNumber: "+91 9812890081",
+    skills: "Editorial Print, Ramp Walk, Ethnic & Bridal Couture",
+    portfolioUrls: "https://gen-lang-client-0548683163.web.app/#gallery",
+    consentGiven: true,
+    status: "pending"
+  }),
+  company: Object.freeze({
+    companyName: "Royal Heritage Couture Events",
+    organizationType: "Event Organizer",
+    contactPerson: "Vikram Malhotra",
+    mobileNumber: "+91 9812890081",
+    email: "casting@royalheritageevents.in",
+    address: "Hissar Road Commercial Complex, Sirsa, Haryana",
+    modelRequirement: "Both",
+    modelsCount: 6,
+    eventType: "Fashion Show",
+    eventDate: "2026-12-22",
+    eventLocation: "Grand Courtyard Banquet, Sirsa",
+    budget: "₹85,000",
+    requestedModelNames: ["Ananya Verma", "Kabir Gill"],
+    detailedRequirements: "SMTP & HTML template test company booking preview from the Admin Console.",
+    status: "Pending"
+  })
+});
+
+function sanitizeSmtpErrorMessage(err, smtpPass = "") {
+  let msg = String(err?.message || err || "SMTP delivery failed.").trim();
+  if (smtpPass && smtpPass.length >= 4) {
+    msg = msg.split(smtpPass).join("[REDACTED]");
+  }
+  return msg.slice(0, 280);
+}
+
+/**
+ * Core handler invoked when the authorized Studio Admin queues a test notification
+ * email in adminEmailTests/{testId} from the Admin Dashboard Email Preview tab.
+ * Always restricts delivery strictly to the authorized admin email (never open relay).
+ */
+export async function handleAdminTestEmailRequested(
+  event,
+  {
+    env = process.env,
+    smtpUser = "",
+    smtpPass = "",
+    transporter = null,
+    verifySmtpImpl = verifySmtpTransport,
+    sendMailImpl = sendAdminAlertEmail,
+    templateOverrides = null,
+    loadTemplateOverrides = null,
+    updateStatusDoc = null,
+    logger = console
+  } = {}
+) {
+  const payload = event?.data?.data?.();
+  const testId = event?.params?.testId || event?.data?.id || "";
+
+  if (!payload || typeof payload !== "object") {
+    logger.warn("Skipping test email: empty Firestore document snapshot.", { testId });
+    return { sent: false, reason: "empty_snapshot", type: "testEmail", docId: testId };
+  }
+
+  const smtpConfig = resolveSmtpConfig(env, { smtpUser, smtpPass });
+  const requesterEmail = String(payload.requestedByEmail || "").trim().toLowerCase();
+  const authorizedEmail = String(smtpConfig.adminEmail || "").trim().toLowerCase();
+
+  if (!requesterEmail || requesterEmail !== authorizedEmail) {
+    const errMsg = "Rejected test email request: unauthorized requester email.";
+    logger.warn(errMsg, { testId, requesterEmail });
+    if (typeof updateStatusDoc === "function") {
+      await updateStatusDoc({
+        status: "failed",
+        smtpVerified: false,
+        errorMessage: errMsg,
+        processedAt: new Date().toISOString()
+      });
+    }
+    return { sent: false, reason: "unauthorized_requester", type: "testEmail", docId: testId };
+  }
+
+  const templateType = ["booking", "model", "company"].includes(payload.templateType)
+    ? payload.templateType
+    : "booking";
+
+  const persistedOverrides = await resolveRuntimeOverrides({
+    templateOverrides,
+    loadTemplateOverrides,
+    logger
+  });
+  const requestOverrides =
+    payload.templateOverrides && typeof payload.templateOverrides === "object"
+      ? payload.templateOverrides
+      : {};
+  const mergedOverrides = { ...persistedOverrides, ...requestOverrides };
+
+  const sourceRecord =
+    payload.recordSnapshot && typeof payload.recordSnapshot === "object" && Object.keys(payload.recordSnapshot).length > 0
+      ? payload.recordSnapshot
+      : TEST_EMAIL_SAMPLE_RECORDS[templateType];
+  const recordId = String(payload.recordId || testId || `test_${templateType}`).trim().slice(0, 128);
+
+  let emailPayload;
+  if (templateType === "model") {
+    emailPayload = buildNewModelApplicationAlertEmail({
+      modelId: recordId,
+      model: sourceRecord,
+      dashboardUrl: smtpConfig.dashboardUrl,
+      env,
+      templateOverrides: mergedOverrides
+    });
+  } else if (templateType === "company") {
+    emailPayload = buildNewCompanyBookingAlertEmail({
+      requestId: recordId,
+      request: sourceRecord,
+      dashboardUrl: smtpConfig.dashboardUrl,
+      env,
+      templateOverrides: mergedOverrides
+    });
+  } else {
+    emailPayload = buildNewBookingAlertEmail({
+      bookingId: recordId,
+      booking: sourceRecord,
+      dashboardUrl: smtpConfig.dashboardUrl,
+      env,
+      templateOverrides: mergedOverrides
+    });
+  }
+
+  const testSubject = emailPayload.subject.startsWith("[TEST]")
+    ? emailPayload.subject
+    : `[TEST] ${emailPayload.subject}`;
+
+  try {
+    const verification = await verifySmtpImpl({ smtpConfig, transporter });
+    const verifiedTransporter = verification?.transporter || transporter;
+    const delivery = await sendMailImpl({
+      ...emailPayload,
+      subject: testSubject,
+      smtpConfig,
+      transporter: verifiedTransporter
+    });
+
+    const processedAt = new Date().toISOString();
+    if (typeof updateStatusDoc === "function") {
+      await updateStatusDoc({
+        status: "sent",
+        smtpVerified: true,
+        smtpHost: smtpConfig.host,
+        smtpPort: smtpConfig.port,
+        recipientEmail: delivery.recipient,
+        renderedSubject: testSubject,
+        messageId: delivery.messageId || "",
+        errorMessage: "",
+        processedAt
+      });
+    }
+
+    logger.info("Sent admin test notification email.", {
+      testId,
+      templateType,
+      recipient: delivery.recipient,
+      messageId: delivery.messageId
+    });
+
+    return {
+      sent: true,
+      smtpVerified: true,
+      type: "testEmail",
+      templateType,
+      docId: testId,
+      recipient: delivery.recipient,
+      messageId: delivery.messageId,
+      subject: testSubject,
+      smtpHost: smtpConfig.host,
+      smtpPort: smtpConfig.port
+    };
+  } catch (err) {
+    const safeError = sanitizeSmtpErrorMessage(err, smtpConfig.pass);
+    logger.error("Admin test notification email failed.", {
+      testId,
+      templateType,
+      error: safeError
+    });
+    if (typeof updateStatusDoc === "function") {
+      await updateStatusDoc({
+        status: "failed",
+        smtpVerified: false,
+        smtpHost: smtpConfig.host,
+        smtpPort: smtpConfig.port,
+        recipientEmail: smtpConfig.adminEmail,
+        renderedSubject: testSubject,
+        errorMessage: safeError,
+        processedAt: new Date().toISOString()
+      });
+    }
+    return {
+      sent: false,
+      smtpVerified: false,
+      reason: "smtp_error",
+      errorMessage: safeError,
+      type: "testEmail",
+      templateType,
+      docId: testId,
+      recipient: smtpConfig.adminEmail
+    };
+  }
 }

@@ -3187,6 +3187,319 @@ test("Admin Dashboard Email Preview mode renders branded booking, 18+ model, and
   assert.ok(swJs.includes('"/js/admin-email-preview.js"'), "sw.js must pre-cache /js/admin-email-preview.js");
 });
 
+test("Gallery lightbox full-screen toggle uses browser Fullscreen API with vendor-prefix and viewport fallback support", async () => {
+  const shareMod = await import(pathToFileURL(path.join(webDir, "js/gallery-share.js")).href);
+
+  // 1. Keyboard shortcut F / f maps to toggle-fullscreen
+  assert.equal(shareMod.resolveLightboxKeyAction("f"), "toggle-fullscreen");
+  assert.equal(shareMod.resolveLightboxKeyAction("F"), "toggle-fullscreen");
+
+  // 2. Native Fullscreen API enter, fullscreenchange sync, and exit flow
+  const events = [];
+  const fakeDoc = {
+    fullscreenEnabled: true,
+    fullscreenElement: null,
+    async exitFullscreen() {
+      this.fullscreenElement = null;
+    }
+  };
+  let requestCalls = 0;
+  const fakeTarget = {
+    async requestFullscreen() {
+      requestCalls += 1;
+      fakeDoc.fullscreenElement = fakeTarget;
+    }
+  };
+
+  assert.equal(shareMod.isFullscreenApiSupported(fakeTarget, fakeDoc), true);
+  assert.equal(shareMod.getFullscreenElement(fakeDoc), null);
+
+  const ctrl = shareMod.createLightboxFullscreenController({
+    getTargetEl: () => fakeTarget,
+    doc: fakeDoc,
+    onStateChange: (snap) => events.push(snap)
+  });
+
+  const enterResult = await ctrl.toggle();
+  assert.equal(requestCalls, 1, "toggle() must invoke element.requestFullscreen()");
+  assert.equal(enterResult.active, true);
+  assert.equal(enterResult.mode, "native");
+  assert.equal(ctrl.isFullscreen(), true);
+  assert.equal(ctrl.isNativeFullscreen(), true);
+
+  // Simulate user exiting native fullscreen via browser Escape key (fullscreenchange)
+  fakeDoc.fullscreenElement = null;
+  const synced = ctrl.syncFromDocument();
+  assert.equal(synced.active, false);
+  assert.equal(ctrl.isFullscreen(), false);
+  assert.equal(events[events.length - 1].isFullscreen, false);
+
+  // Re-enter and exit programmatically via toggle()
+  await ctrl.enter();
+  assert.equal(ctrl.isNativeFullscreen(), true);
+  const exitResult = await ctrl.toggle();
+  assert.equal(exitResult.active, false);
+  assert.equal(fakeDoc.fullscreenElement, null);
+
+  // 3. Safari webkit vendor-prefix support
+  const webkitDoc = {
+    webkitFullscreenEnabled: true,
+    webkitFullscreenElement: null,
+    webkitExitFullscreen() {
+      this.webkitFullscreenElement = null;
+    }
+  };
+  const webkitTarget = {
+    webkitRequestFullscreen() {
+      webkitDoc.webkitFullscreenElement = webkitTarget;
+    }
+  };
+  const webkitCtrl = shareMod.createLightboxFullscreenController({
+    getTargetEl: () => webkitTarget,
+    doc: webkitDoc
+  });
+  const webkitEnter = await webkitCtrl.enter();
+  assert.equal(webkitEnter.active, true);
+  assert.equal(webkitEnter.mode, "native");
+  assert.equal(webkitCtrl.isNativeFullscreen(), true);
+  await webkitCtrl.exit();
+  assert.equal(webkitCtrl.isFullscreen(), false);
+
+  // 4. Graceful CSS viewport fallback when Fullscreen API is unavailable (e.g., iOS Safari)
+  const fallbackEvents = [];
+  const fallbackCtrl = shareMod.createLightboxFullscreenController({
+    getTargetEl: () => ({}),
+    doc: { fullscreenEnabled: false, fullscreenElement: null },
+    onStateChange: (snap) => fallbackEvents.push(snap)
+  });
+  const fbEnter = await fallbackCtrl.toggle();
+  assert.equal(fbEnter.active, true);
+  assert.equal(fbEnter.mode, "fallback");
+  assert.equal(fallbackCtrl.isFullscreen(), true);
+  assert.equal(fallbackCtrl.isNativeFullscreen(), false);
+  const fbExit = await fallbackCtrl.toggle();
+  assert.equal(fbExit.active, false);
+  assert.equal(fallbackEvents.length, 2);
+
+  // 5. HTML, CSS, and app.js integration assertions
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(html.includes('id="lightboxFullscreenBtn"'), "Lightbox must render #lightboxFullscreenBtn");
+  assert.ok(html.includes('id="lightboxFullscreenEnterIcon"'), "Lightbox must include expand fullscreen icon");
+  assert.ok(html.includes('id="lightboxFullscreenExitIcon"'), "Lightbox must include exit fullscreen icon");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const token of [
+    ".lightbox-fullscreen-btn",
+    "#lightboxModal.is-fullscreen",
+    "#lightboxModal:fullscreen",
+    "#lightboxModal:-webkit-full-screen",
+    "#lightboxModal:fullscreen .lightbox-image"
+  ]) {
+    assert.ok(css.includes(token), `styles.css missing fullscreen lightbox rule: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("createLightboxFullscreenController"), "app.js must wire createLightboxFullscreenController");
+  assert.ok(appJs.includes('"fullscreenchange"'), "app.js must listen for fullscreenchange events");
+  assert.ok(appJs.includes("lightboxFullscreen.exit()"), "app.js must exit fullscreen cleanly when closing lightbox");
+});
+
+test("Admin Dashboard CSV export button displays temporary loading animation and status text during download generation", async () => {
+  const csvMod = await import(pathToFileURL(path.join(webDir, "js/admin-bookings-export.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const t = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Toolbar renders idle, processing (spinner + disabled + aria-busy), and done states
+  const processingHtml = csvMod.renderAdminBookingsToolbarHtml({ count: 5, status: "processing", t });
+  assert.ok(processingHtml.includes("is-loading"), "Processing state must apply is-loading class");
+  assert.ok(processingHtml.includes('aria-busy="true"'), "Processing state must set aria-busy=true");
+  assert.ok(processingHtml.includes("admin-export-csv-spinner"), "Processing state must render spinner element");
+  assert.ok(processingHtml.includes("Generating CSV..."), "Processing state must show localized status text");
+  assert.ok(processingHtml.includes("disabled"), "Button must be disabled while processing");
+
+  const doneHtml = csvMod.renderAdminBookingsToolbarHtml({ count: 5, status: "done", t });
+  assert.ok(doneHtml.includes("is-exported"), "Done state must apply is-exported class");
+  assert.ok(doneHtml.includes("CSV Downloaded"), "Done state must show downloaded confirmation label");
+
+  // 2. In-place button updater mutates attributes, classes, disabled state, and innerHTML cleanly
+  const classes = new Set();
+  const attrs = {};
+  const fakeBtn = {
+    disabled: false,
+    innerHTML: "",
+    setAttribute(k, v) {
+      attrs[k] = v;
+    },
+    classList: {
+      toggle(cls, force) {
+        if (force) classes.add(cls);
+        else classes.delete(cls);
+      }
+    }
+  };
+  csvMod.applyAdminCsvButtonState(fakeBtn, "processing", { count: 3, t });
+  assert.equal(fakeBtn.disabled, true);
+  assert.equal(attrs["aria-busy"], "true");
+  assert.equal(attrs["data-export-status"], "processing");
+  assert.equal(classes.has("is-loading"), true);
+  assert.ok(fakeBtn.innerHTML.includes("admin-export-csv-spinner"));
+
+  csvMod.applyAdminCsvButtonState(fakeBtn, "idle", { count: 3, t });
+  assert.equal(fakeBtn.disabled, false);
+  assert.equal(attrs["aria-busy"], "false");
+  assert.equal(classes.has("is-loading"), false);
+  assert.ok(fakeBtn.innerHTML.includes("Export CSV"));
+
+  // 3. Async export runner transitions cleanly through processing -> done -> idle
+  const transitions = [];
+  const fakeLink = { href: "", download: "", style: {}, clicked: false, click() { this.clicked = true; }, remove() {} };
+  const fakeDoc = { createElement: () => fakeLink, body: { appendChild() {}, removeChild() {} } };
+  const result = await csvMod.runAdminBookingsCsvExport(
+    [
+      {
+        id: "bk_1",
+        clientName: "Aarav Sharma",
+        contactNumber: "+91 9812890081",
+        serviceType: "Royal Wedding Film",
+        preferredDate: "2026-12-20",
+        status: "Confirmed"
+      }
+    ],
+    {
+      onStateChange: (status) => transitions.push(status),
+      minProcessingMs: 10,
+      exportedHoldMs: 10,
+      delayFn: async () => {},
+      exportOptions: {
+        doc: fakeDoc,
+        BlobCtor: class FakeBlob { constructor(parts, opts) { this.parts = parts; this.opts = opts; } },
+        urlApi: { createObjectURL: () => "blob:test-csv", revokeObjectURL: () => {} }
+      }
+    }
+  );
+  assert.equal(result.status, "exported");
+  assert.equal(result.count, 1);
+  assert.equal(fakeLink.clicked, true);
+  assert.deepEqual(transitions, ["processing", "done", "idle"]);
+
+  // 4. Empty booking list immediately reports empty without hanging in loading state
+  const emptyTransitions = [];
+  const emptyRes = await csvMod.runAdminBookingsCsvExport([], {
+    onStateChange: (status) => emptyTransitions.push(status),
+    delayFn: async () => {}
+  });
+  assert.equal(emptyRes.status, "empty");
+  assert.deepEqual(emptyTransitions, ["idle"]);
+
+  // 5. CSS animation & app.js wiring checks
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  for (const token of [
+    ".admin-export-csv-btn.is-loading",
+    ".admin-export-csv-btn.is-exported",
+    ".admin-export-csv-spinner",
+    "@keyframes adminCsvSpin"
+  ]) {
+    assert.ok(css.includes(token), `styles.css missing CSV loading animation rule: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("runAdminBookingsCsvExport"), "app.js must invoke runAdminBookingsCsvExport");
+  assert.ok(appJs.includes("applyAdminCsvButtonState"), "app.js must update CSV button state in-place");
+});
+
+test("Admin Dashboard Email Preview 'Test Email Notification' builds admin-locked payload, renders live SMTP status banners, and enforces Firestore rules", async () => {
+  const previewMod = await import(pathToFileURL(path.join(webDir, "js/admin-email-preview.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const t = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Test email request payload locks recipient to chanderstudio0@gmail.com and prefixes [TEST]
+  const payload = previewMod.buildAdminTestEmailRequestPayload({
+    type: "booking",
+    record: {
+      id: "bk_test_99",
+      clientName: "Riya Malhotra",
+      serviceType: "Luxury Bridal Shoot",
+      preferredDate: "2026-12-20",
+      createdAt: { seconds: 1791979200 }
+    },
+    brandOverrides: {
+      brandName: "STAR ARTIST LUXURY",
+      accentColor: "#E5C158",
+      ignoredUnknownField: "should_not_pass"
+    }
+  });
+  assert.equal(payload.templateType, "booking");
+  assert.equal(payload.recipientEmail, "chanderstudio0@gmail.com");
+  assert.equal(payload.isSample, false);
+  assert.ok(payload.subject.startsWith("[TEST] "));
+  assert.equal(payload.recordSnapshot.clientName, "Riya Malhotra");
+  assert.equal("createdAt" in payload.recordSnapshot, false, "Non-serializable Firestore timestamps stripped from snapshot");
+  assert.equal(payload.templateOverrides.brandName, "STAR ARTIST LUXURY");
+  assert.equal("ignoredUnknownField" in payload.templateOverrides, false);
+
+  // 2. Rendered Email Preview panel includes Send Test Email button and live status states
+  const idleHtml = previewMod.renderAdminEmailPreviewSectionHtml({
+    previewState: { type: "model", recordId: "__sample__", viewMode: "html", viewport: "desktop", overrides: {} },
+    adminData: {},
+    t
+  });
+  assert.ok(idleHtml.includes('id="emailPreviewSendTestBtn"'));
+  assert.ok(idleHtml.includes("data-email-preview-send-test"));
+  assert.ok(idleHtml.includes("Send Test Email"));
+
+  const sendingHtml = previewMod.renderAdminEmailPreviewSectionHtml({
+    previewState: {
+      type: "booking",
+      testSend: { status: "queued", recipient: "chanderstudio0@gmail.com" }
+    },
+    adminData: {},
+    t
+  });
+  assert.ok(sendingHtml.includes('aria-busy="true"'));
+  assert.ok(sendingHtml.includes('data-test-email-status="queued"'));
+  assert.ok(sendingHtml.includes("Sending Test..."));
+
+  const sentBanner = previewMod.renderAdminTestEmailStatusHtml(
+    { status: "sent", recipient: "chanderstudio0@gmail.com", smtpHost: "smtp.gmail.com", smtpPort: 465, messageId: "msg_42" },
+    { t }
+  );
+  assert.ok(sentBanner.includes('data-test-email-status="sent"'));
+  assert.ok(sentBanner.includes("SMTP: smtp.gmail.com:465"));
+  assert.ok(sentBanner.includes("ID: msg_42"));
+
+  const failBanner = previewMod.renderAdminTestEmailStatusHtml(
+    { status: "failed", error: "535 Authentication failed" },
+    { t }
+  );
+  assert.ok(failBanner.includes('data-test-email-status="failed"'));
+  assert.ok(failBanner.includes("535 Authentication failed"));
+
+  const awaitingBanner = previewMod.renderAdminTestEmailStatusHtml(
+    { status: "awaiting_worker", recipient: "chanderstudio0@gmail.com" },
+    { t }
+  );
+  assert.ok(awaitingBanner.includes('data-test-email-status="awaiting_worker"'));
+
+  // 3. Firestore security rules strictly lock adminEmailTests/{testId} to isAdmin() & chanderstudio0@gmail.com
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  assert.ok(rules.includes("function isValidAdminEmailTest(data)"));
+  assert.ok(rules.includes("match /adminEmailTests/{testId}"));
+  assert.ok(rules.includes("data.recipientEmail.lower() == 'chanderstudio0@gmail.com'"));
+
+  // 4. firebase.js & app.js integration checks
+  const fbJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(fbJs.includes("export async function adminRequestTestEmail"));
+  assert.ok(fbJs.includes("export async function adminSubscribeTestEmailStatus"));
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("data-email-preview-send-test"));
+  assert.ok(appJs.includes("adminRequestTestEmail"));
+  assert.ok(appJs.includes("adminSubscribeTestEmailStatus"));
+});
+
+
+
+
 
 
 

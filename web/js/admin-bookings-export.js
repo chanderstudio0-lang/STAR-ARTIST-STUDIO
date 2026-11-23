@@ -131,15 +131,121 @@ export function exportBookingsToCsv(
 }
 
 /**
+ * Builds the inner icon + label markup for the Admin Bookings CSV export button
+ * across idle, processing, and done feedback states.
+ */
+export function getAdminCsvButtonMarkup(
+  status = "idle",
+  { t = (k) => k, escapeHtml = defaultEscapeHtml } = {}
+) {
+  if (status === "processing") {
+    return `
+      <span class="admin-export-csv-spinner" aria-hidden="true"></span>
+      <span class="admin-export-csv-label">${escapeHtml(t("adminExportCsvLoadingLabel"))}</span>`;
+  }
+  if (status === "done") {
+    return `
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+      <span class="admin-export-csv-label">${escapeHtml(t("adminExportCsvDoneLabel"))}</span>`;
+  }
+  return `
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="7 10 12 15 17 10"></polyline>
+      <line x1="12" y1="15" x2="12" y2="3"></line>
+    </svg>
+    <span class="admin-export-csv-label">${escapeHtml(t("adminExportCsvBtn"))}</span>`;
+}
+
+/**
+ * Updates an existing #adminExportBookingsCsvBtn element in-place so the
+ * loading animation and confirmation text animate without re-rendering the tab.
+ */
+export function applyAdminCsvButtonState(
+  buttonEl,
+  status = "idle",
+  { count = 0, t = (k) => k, escapeHtml = defaultEscapeHtml } = {}
+) {
+  if (!buttonEl) return;
+  const safeCount = Math.max(0, Number(count) || 0);
+  const normalized = status === "processing" || status === "done" ? status : "idle";
+  const isProcessing = normalized === "processing";
+  const isDone = normalized === "done";
+
+  buttonEl.disabled = safeCount === 0 || isProcessing;
+  buttonEl.setAttribute?.("aria-busy", isProcessing ? "true" : "false");
+  buttonEl.setAttribute?.("data-export-status", normalized);
+  buttonEl.classList?.toggle?.("is-loading", isProcessing);
+  buttonEl.classList?.toggle?.("is-exported", isDone);
+  buttonEl.innerHTML = getAdminCsvButtonMarkup(normalized, { t, escapeHtml });
+}
+
+/**
+ * Runs the CSV export with temporary processing and confirmation button states
+ * so admins receive clear visual feedback while booking rows are packaged.
+ */
+export async function runAdminBookingsCsvExport(
+  bookings = [],
+  {
+    onStateChange = () => {},
+    minProcessingMs = 450,
+    exportedHoldMs = 1400,
+    delayFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    exportOptions = {}
+  } = {}
+) {
+  const list = Array.isArray(bookings) ? bookings : [];
+  if (!list.length) {
+    onStateChange("idle", null);
+    return { status: "empty", count: 0, fileName: "", csv: "" };
+  }
+
+  onStateChange("processing", null);
+  try {
+    if (minProcessingMs > 0) {
+      await delayFn(minProcessingMs);
+    }
+    const result = exportBookingsToCsv(list, exportOptions);
+    if (result.status === "exported") {
+      onStateChange("done", result);
+      if (exportedHoldMs > 0) {
+        await delayFn(exportedHoldMs);
+      }
+      onStateChange("idle", result);
+    } else {
+      onStateChange("idle", result);
+    }
+    return result;
+  } catch (err) {
+    onStateChange("idle", null);
+    throw err;
+  }
+}
+
+/**
  * Renders the Admin Bookings tab toolbar with the Export CSV action button.
  */
 export function renderAdminBookingsToolbarHtml({
   count = 0,
+  status = "idle",
   t = (k) => k,
   escapeHtml = defaultEscapeHtml
 } = {}) {
   const safeCount = Math.max(0, Number(count) || 0);
-  const disabledAttr = safeCount === 0 ? "disabled" : "";
+  const normalized = status === "processing" || status === "done" ? status : "idle";
+  const isProcessing = normalized === "processing";
+  const isDone = normalized === "done";
+  const disabledAttr = safeCount === 0 || isProcessing ? "disabled" : "";
+  const stateClasses = [
+    "btn-gold",
+    "admin-export-csv-btn",
+    isProcessing ? "is-loading" : "",
+    isDone ? "is-exported" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return `
     <div class="studio-card admin-bookings-toolbar">
@@ -150,16 +256,14 @@ export function renderAdminBookingsToolbarHtml({
       <button
         id="adminExportBookingsCsvBtn"
         type="button"
-        class="btn-gold admin-export-csv-btn"
+        class="${stateClasses}"
         data-adm-export-bookings-csv
+        data-export-status="${normalized}"
+        aria-busy="${isProcessing ? "true" : "false"}"
+        aria-live="polite"
         ${disabledAttr}
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-        <span>${escapeHtml(t("adminExportCsvBtn"))}</span>
+        ${getAdminCsvButtonMarkup(normalized, { t, escapeHtml })}
       </button>
     </div>`;
 }

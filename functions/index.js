@@ -7,7 +7,8 @@ import { FIRESTORE_DATABASE_ID, FUNCTIONS_REGION } from "./src/config.js";
 import {
   handleNewBookingCreated,
   handleNewModelApplicationCreated,
-  handleNewCompanyBookingCreated
+  handleNewCompanyBookingCreated,
+  handleAdminTestEmailRequested
 } from "./src/handlers.js";
 
 if (!getApps().length) {
@@ -95,6 +96,44 @@ export const notifyAdminOnNewCompanyBooking = onDocumentCreated(
       smtpUser: SMTP_USER.value(),
       smtpPass: SMTP_PASS.value(),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
+      logger
+    });
+  }
+);
+
+/**
+ * Fires when the verified Studio Admin triggers "Send Test Email" from the
+ * Admin Dashboard Email Preview panel. Verifies SMTP and sends a [TEST] HTML
+ * email strictly to chanderstudio0@gmail.com, then writes delivery telemetry back.
+ */
+export const sendAdminTestNotificationEmail = onDocumentCreated(
+  {
+    document: "adminEmailTests/{testId}",
+    database: FIRESTORE_DATABASE_ID,
+    region: FUNCTIONS_REGION,
+    secrets: [SMTP_USER, SMTP_PASS],
+    retry: false
+  },
+  async (event) => {
+    const db = getFirestore(FIRESTORE_DATABASE_ID);
+    const testId = event?.params?.testId || event?.data?.id || "";
+    const statusRef = testId ? db.doc(`adminEmailTests/${testId}`) : null;
+
+    await handleAdminTestEmailRequested(event, {
+      smtpUser: SMTP_USER.value(),
+      smtpPass: SMTP_PASS.value(),
+      loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
+      updateStatusDoc: async (patch) => {
+        if (!statusRef) return;
+        try {
+          await statusRef.set(patch, { merge: true });
+        } catch (err) {
+          logger.warn("Unable to update adminEmailTests status document.", {
+            testId,
+            error: err?.message || String(err)
+          });
+        }
+      },
       logger
     });
   }

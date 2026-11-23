@@ -189,6 +189,9 @@ export function resolveLightboxKeyAction(key) {
       return "toggle-play";
     case "Escape":
       return "close";
+    case "f":
+    case "F":
+      return "toggle-fullscreen";
     default:
       return null;
   }
@@ -1003,6 +1006,145 @@ export async function downloadGalleryFolderAsZip(
     fileName,
     byteLength: zipBytes.byteLength,
     zipBytes
+  };
+}
+
+export function getFullscreenElement(doc = globalThis.document) {
+  if (!doc) return null;
+  return (
+    doc.fullscreenElement ||
+    doc.webkitFullscreenElement ||
+    doc.mozFullScreenElement ||
+    doc.msFullscreenElement ||
+    null
+  );
+}
+
+export function isFullscreenApiSupported(targetEl, doc = globalThis.document) {
+  if (!targetEl) return false;
+  if (doc && doc.fullscreenEnabled === false && doc.webkitFullscreenEnabled !== true) {
+    return false;
+  }
+  return Boolean(
+    typeof targetEl.requestFullscreen === "function" ||
+      typeof targetEl.webkitRequestFullscreen === "function" ||
+      typeof targetEl.mozRequestFullScreen === "function" ||
+      typeof targetEl.msRequestFullscreen === "function"
+  );
+}
+
+export function createLightboxFullscreenController({
+  getTargetEl = () => null,
+  doc = globalThis.document,
+  onStateChange = () => {}
+} = {}) {
+  let pseudoFullscreen = false;
+  let lastNotifiedActive = false;
+
+  function isNativeFullscreen() {
+    const target = getTargetEl?.();
+    const activeEl = getFullscreenElement(doc);
+    if (!target || !activeEl) return false;
+    return activeEl === target || (typeof activeEl.contains === "function" && activeEl.contains(target));
+  }
+
+  function isFullscreen() {
+    return isNativeFullscreen() || pseudoFullscreen;
+  }
+
+  function notify(force = false) {
+    const nativeActive = isNativeFullscreen();
+    if (nativeActive && pseudoFullscreen) {
+      pseudoFullscreen = false;
+    }
+    const active = nativeActive || pseudoFullscreen;
+    const mode = nativeActive ? "native" : pseudoFullscreen ? "fallback" : "none";
+    if (force || active !== lastNotifiedActive) {
+      lastNotifiedActive = active;
+      onStateChange({ isFullscreen: active, isNative: nativeActive, mode });
+    }
+    return { active, isNative: nativeActive, mode };
+  }
+
+  async function enter() {
+    const target = getTargetEl?.();
+    if (!target) {
+      return { active: false, isNative: false, mode: "unavailable" };
+    }
+    if (isNativeFullscreen()) {
+      return notify(true);
+    }
+
+    const requestMethod =
+      target.requestFullscreen ||
+      target.webkitRequestFullscreen ||
+      target.mozRequestFullScreen ||
+      target.msRequestFullscreen;
+
+    if (typeof requestMethod === "function" && isFullscreenApiSupported(target, doc)) {
+      try {
+        const result = requestMethod.call(target);
+        if (result && typeof result.then === "function") {
+          await result;
+        }
+        pseudoFullscreen = false;
+        const activeAfterRequest = isNativeFullscreen();
+        if (activeAfterRequest) {
+          return notify(true);
+        }
+        lastNotifiedActive = true;
+        onStateChange({ isFullscreen: true, isNative: true, mode: "native" });
+        return { active: true, isNative: true, mode: "native" };
+      } catch {
+        // Fall through to CSS viewport fullscreen fallback if native Fullscreen API rejects
+      }
+    }
+
+    pseudoFullscreen = true;
+    return notify(true);
+  }
+
+  async function exit() {
+    if (isNativeFullscreen() && doc) {
+      const exitMethod =
+        doc.exitFullscreen ||
+        doc.webkitExitFullscreen ||
+        doc.mozCancelFullScreen ||
+        doc.msExitFullscreen;
+      if (typeof exitMethod === "function") {
+        try {
+          const result = exitMethod.call(doc);
+          if (result && typeof result.then === "function") {
+            await result;
+          }
+        } catch {
+          // Ensure local state still resets cleanly
+        }
+      }
+    }
+
+    pseudoFullscreen = false;
+    return notify(true);
+  }
+
+  async function toggle() {
+    if (isFullscreen()) {
+      return exit();
+    }
+    return enter();
+  }
+
+  function syncFromDocument() {
+    return notify(false);
+  }
+
+  return {
+    enter,
+    exit,
+    toggle,
+    isFullscreen,
+    isNativeFullscreen,
+    syncFromDocument
   };
 }
 

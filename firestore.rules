@@ -200,6 +200,22 @@ service cloud.firestore {
              (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
+    function isValidAdminEmailTest(data) {
+      return data.requestedByUid == request.auth.uid &&
+             data.requestedByEmail is string &&
+             data.requestedByEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.recipientEmail is string &&
+             data.recipientEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.templateType in ['booking', 'model', 'company'] &&
+             data.status == 'queued' &&
+             data.subject is string && data.subject.size() > 0 && data.subject.size() <= 200 &&
+             (!('recordId' in data) || (data.recordId is string && data.recordId.size() <= 128)) &&
+             (!('isSample' in data) || data.isSample is bool) &&
+             (!('recordSnapshot' in data) || data.recordSnapshot is map) &&
+             (!('templateOverrides' in data) || data.templateOverrides is map) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
     // Default deny all unknown collections
     match /{document=**} {
       allow read, write: if false;
@@ -390,6 +406,13 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidAnnouncement(incoming());
       allow delete: if isAdmin();
+    }
+
+    // Admin-only SMTP & HTML template test email dispatch requests (strictly locked to authorized admin email)
+    match /adminEmailTests/{testId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() && isValidId(testId) && isValidAdminEmailTest(incoming());
+      allow update, delete: if isAdmin();
     }
   }
 }

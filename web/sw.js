@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v32";
+const CACHE_VERSION = "star-artist-pwa-v35";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 

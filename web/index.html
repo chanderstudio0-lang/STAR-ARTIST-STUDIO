@@ -958,10 +958,33 @@
 
   <!-- GALLERY LIGHTBOX MODAL -->
   <div id="lightboxModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle">
-    <div class="modal-card" style="max-width: 720px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
-        <h3 id="lightboxTitle" style="margin: 0; color: var(--gold);"></h3>
-        <button id="closeLightboxBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+    <div class="modal-card lightbox-modal-card">
+      <div class="lightbox-header">
+        <h3 id="lightboxTitle" class="lightbox-title"></h3>
+        <div class="lightbox-header-actions">
+          <button
+            id="lightboxFullscreenBtn"
+            class="icon-btn lightbox-fullscreen-btn"
+            type="button"
+            aria-label="Enter fullscreen"
+            aria-pressed="false"
+            title="Enter fullscreen (F)"
+          >
+            <svg id="lightboxFullscreenEnterIcon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <polyline points="9 21 3 21 3 15"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+            <svg id="lightboxFullscreenExitIcon" class="hidden" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="4 14 10 14 10 20"></polyline>
+              <polyline points="20 10 14 10 14 4"></polyline>
+              <line x1="14" y1="10" x2="21" y2="3"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </button>
+          <button id="closeLightboxBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+        </div>
       </div>
       <div id="lightboxStage" class="lightbox-stage">
         <button id="lightboxPrevBtn" class="lightbox-nav-btn is-prev" type="button" aria-label="Previous photo">
@@ -987,7 +1010,7 @@
           <button id="lightboxZoomResetBtn" class="lightbox-zoom-level" type="button" aria-label="Reset zoom">1.0×</button>
           <button id="lightboxZoomInBtn" class="lightbox-zoom-btn" type="button" aria-label="Zoom in">+</button>
         </div>
-        <span class="lightbox-keyboard-hint" data-i18n="lightboxSlideshowHint">Pinch or double-tap to zoom • ← / →</span>
+        <span class="lightbox-keyboard-hint" data-i18n="lightboxSlideshowHint">Pinch or double-tap to zoom • ← / → • F</span>
       </div>
       <div id="lightboxExifPanel" class="lightbox-exif-panel" aria-label="Image camera metadata"></div>
       <div class="lightbox-filter-section">
