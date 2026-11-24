@@ -4339,7 +4339,7 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   const resDir = path.join(rootDir, "app/src/main/res");
   const bgXml = fs.readFileSync(path.join(resDir, "drawable/ic_launcher_background.xml"), "utf8");
   const fgXml = fs.readFileSync(path.join(resDir, "drawable/ic_launcher_foreground.xml"), "utf8");
-  assert.ok(bgXml.includes("#0C0C0C"), "Android ic_launcher_background.xml must match #0C0C0C black");
+  assert.ok(bgXml.includes("#FFFFFF"), "Android ic_launcher_background.xml must match pure white #FFFFFF background");
   assert.ok(fgXml.includes("@drawable/star_artist_logo_brand"), "Android ic_launcher_foreground.xml must use star_artist_logo_brand");
   const brandDims = readPngDimensions(path.join(resDir, "drawable/star_artist_logo_brand.png"));
   assert.equal(brandDims.width, 512);

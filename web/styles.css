@@ -131,11 +131,12 @@ textarea {
 }
 
 .brand-logo {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 2px solid var(--gold);
-  object-fit: cover;
+  border: none;
+  background: transparent;
+  object-fit: contain;
   flex-shrink: 0;
 }
 
