@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v44";
+const CACHE_VERSION = "star-artist-pwa-v45";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -43,6 +43,7 @@ const APP_SHELL_URLS = [
   "/js/tier-info.js",
   "/js/wedding-packages.js",
   "/js/zip-builder.js",
+  "/icons/brand-logo-white-v45.png",
   "/icons/favicon-16x16.png",
   "/icons/favicon-32x32.png",
   "/icons/favicon-48x48.png",
@@ -283,7 +284,18 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(SHELL_CACHE)
-      .then((cache) => cache.addAll(APP_SHELL_URLS))
+      .then((cache) =>
+        Promise.all(
+          APP_SHELL_URLS.map((url) =>
+            fetch(new Request(url, { cache: "reload" })).then((response) => {
+              if (!response || !response.ok) {
+                throw new Error(`Failed to precache ${url} (${response?.status || "network"})`);
+              }
+              return cache.put(url, response);
+            })
+          )
+        )
+      )
       .then(() => self.skipWaiting())
   );
 });
@@ -377,8 +389,9 @@ self.addEventListener("fetch", (event) => {
     url.pathname.startsWith("/js/");
 
   if (isFreshCodeAsset) {
+    const isIconAsset = url.pathname === "/favicon.ico" || url.pathname.startsWith("/icons/");
     event.respondWith(
-      fetch(request, { cache: "no-cache" })
+      fetch(request, { cache: isIconAsset ? "reload" : "no-cache" })
         .then((response) => {
           if (response && response.ok && response.type === "basic") {
             const copy = response.clone();

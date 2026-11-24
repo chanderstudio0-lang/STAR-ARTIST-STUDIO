@@ -4277,8 +4277,9 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   assert.equal(icoBuf.readUInt16LE(2), 1, "ICO type must be 1 (icon)");
   assert.ok(icoBuf.readUInt16LE(4) >= 3, "favicon.ico should bundle 16x16, 32x32, and 48x48 frames");
 
-  // 2. Verify all square 1:1 PNG web/PWA/Apple Touch icons have exact dimensions
+  // 2. Verify all square 1:1 PNG web/PWA/Apple Touch icons and dedicated website header logo have exact dimensions
   const expectedWebIcons = [
+    ["icons/brand-logo-white-v45.png", 256],
     ["icons/favicon-16x16.png", 16],
     ["icons/favicon-32x32.png", 32],
     ["icons/favicon-48x48.png", 48],
@@ -4305,27 +4306,29 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-512.png" && i.purpose === "any"));
   assert.ok(webmanifest.icons.some((i) => i.src === "/icons/icon-maskable-512.png" && i.purpose === "maskable"));
 
-  // 4. Verify index.html favicon, browser tab, Apple Touch, and PWA icon references
+  // 4. Verify index.html header logo, favicon, browser tab, Apple Touch, and PWA icon references are cache-busted
   const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
   for (const token of [
-    'href="/favicon.ico"',
+    'src="/icons/brand-logo-white-v45.png"',
+    'href="/favicon.ico?v=45"',
     'rel="shortcut icon"',
-    'href="/icons/favicon-16x16.png"',
-    'href="/icons/favicon-32x32.png"',
-    'href="/icons/favicon-48x48.png"',
-    'href="/icons/icon-192.png"',
-    'href="/icons/icon-512.png"',
-    'href="/icons/apple-touch-icon.png"'
+    'href="/icons/favicon-16x16.png?v=45"',
+    'href="/icons/favicon-32x32.png?v=45"',
+    'href="/icons/favicon-48x48.png?v=45"',
+    'href="/icons/icon-192.png?v=45"',
+    'href="/icons/icon-512.png?v=45"',
+    'href="/icons/apple-touch-icon.png?v=45"'
   ]) {
     assert.ok(html.includes(token), `index.html missing icon reference: ${token}`);
   }
 
-  // 5. Verify Service Worker cache version updated and new icon paths precached & refreshed
+  // 5. Verify Service Worker cache version, network-reloaded install precaching, and firebase.json no-cache headers
   const swText = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
-  assert.match(swText, /const CACHE_VERSION = "star-artist-pwa-v(4[1-9]|[5-9]\d|\d{3,})"/, "sw.js must bump CACHE_VERSION to v41+");
+  assert.match(swText, /const CACHE_VERSION = "star-artist-pwa-v(4[5-9]|[5-9]\d|\d{3,})"/, "sw.js must bump CACHE_VERSION to v45+");
   for (const asset of [
     '"/manifest.json"',
     '"/favicon.ico"',
+    '"/icons/brand-logo-white-v45.png"',
     '"/icons/favicon-16x16.png"',
     '"/icons/favicon-32x32.png"',
     '"/icons/favicon-48x48.png"',
@@ -4333,7 +4336,13 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   ]) {
     assert.ok(swText.includes(asset), `sw.js missing icon/manifest cache entry: ${asset}`);
   }
+  assert.ok(swText.includes('cache: "reload"'), "sw.js must bypass stale browser HTTP cache when precaching/fetching icons");
   assert.ok(swText.includes('url.pathname.startsWith("/icons/")'), "sw.js must refresh /icons/ assets cleanly");
+
+  const firebaseJson = JSON.parse(fs.readFileSync(path.join(rootDir, "firebase.json"), "utf8"));
+  const headerSources = (firebaseJson.hosting?.headers || []).map((h) => h.source);
+  assert.ok(headerSources.includes("/icons/**"), "firebase.json must set no-cache headers for /icons/**");
+  assert.ok(headerSources.includes("/favicon.ico"), "firebase.json must set no-cache headers for /favicon.ico");
 
   // 6. Verify Android native adaptive icon & 5-density launcher PNGs
   const resDir = path.join(rootDir, "app/src/main/res");
