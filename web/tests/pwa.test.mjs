@@ -4664,6 +4664,32 @@ test("Admin Dashboard Models tab renders summary card above Model Experience pie
   }
 });
 
+test("Studio Cloud Sync status banner and connected Gmail badge are completely hidden from public UI while background cloud sync stays active", () => {
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+
+  // 1. Top status-strip banner is hidden in HTML with hidden class, hidden attribute, and aria-hidden="true"
+  const stripMatch = html.match(/<div[^>]+id="studioCloudStatusStrip"[^>]*>/);
+  assert.ok(stripMatch, "index.html must mark the status strip with id=\"studioCloudStatusStrip\"");
+  assert.ok(stripMatch[0].includes("status-strip hidden"), "status strip must have hidden class");
+  assert.ok(/\bhidden\b/.test(stripMatch[0]), "status strip must have HTML hidden attribute");
+  assert.ok(stripMatch[0].includes('aria-hidden="true"'), "status strip must have aria-hidden=\"true\"");
+  assert.equal(html.includes("Checking Firebase Studio Sync..."), false, "visible sync text must be removed from HTML");
+
+  // 2. CSS hides .status-strip across desktop and mobile
+  assert.match(css, /\.status-strip\s*\{\s*display:\s*none\s*!important;\s*\}/, "styles.css must hide .status-strip with display: none !important");
+
+  // 3. app.js never renders user email or sync banner text into #signedInUserLabel / #firebaseStatusText while preserving Firebase Cloud Sync & Admin guard
+  assert.equal(
+    appJs.includes("userLabel.textContent = state.user?.email"),
+    false,
+    "app.js must never display connected Gmail address in #signedInUserLabel"
+  );
+  assert.ok(appJs.includes("connectFirebaseCloud"), "Firebase cloud sync must stay active in background");
+  assert.ok(appJs.includes("syncAdminUiVisibility"), "Admin UI visibility gating must remain intact");
+});
+
 
 
 

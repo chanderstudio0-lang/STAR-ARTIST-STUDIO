@@ -1566,16 +1566,24 @@ function openLocalDevFirebaseDialog() {
 }
 
 function updateFirebaseUiStatus() {
+  const statusStrip = document.getElementById("studioCloudStatusStrip");
   const dot = document.getElementById("firebaseStatusDot");
   const txt = document.getElementById("firebaseStatusText");
   const userLabel = document.getElementById("signedInUserLabel");
   const isAdminNow = hasVerifiedAdminSession();
 
+  if (statusStrip) {
+    statusStrip.classList.add("hidden");
+    statusStrip.hidden = true;
+    statusStrip.setAttribute("aria-hidden", "true");
+  }
   if (dot) dot.classList.toggle("ready", state.firebaseReady);
-  if (txt) txt.textContent = state.firebaseReady ? t("firebaseStatusReady") : t("firebaseStatusOffline");
+  if (txt) txt.textContent = "";
   if (userLabel) {
-    userLabel.textContent = state.user?.email || state.user?.displayName || "";
-    userLabel.classList.toggle("hidden", !state.user);
+    userLabel.textContent = "";
+    userLabel.classList.add("hidden");
+    userLabel.hidden = true;
+    userLabel.setAttribute("aria-hidden", "true");
   }
   if (!isAdminNow) {
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));

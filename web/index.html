@@ -168,13 +168,13 @@
   </header>
 
   <main class="container">
-    <div class="status-strip">
+    <div id="studioCloudStatusStrip" class="status-strip hidden" hidden aria-hidden="true">
       <div>
         <span id="firebaseStatusDot" class="status-dot"></span>
-        <span id="firebaseStatusText" style="font-size: 0.88rem; color: var(--text-secondary);">Checking Firebase Studio Sync...</span>
+        <span id="firebaseStatusText" style="font-size: 0.88rem; color: var(--text-secondary);"></span>
       </div>
       <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-        <span id="signedInUserLabel" class="badge hidden"></span>
+        <span id="signedInUserLabel" class="badge hidden" hidden aria-hidden="true"></span>
         <button id="openAdminConsoleQuickBtn" class="chip-btn hidden" style="min-height: 36px; padding: 4px 12px;" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
       </div>
     </div>

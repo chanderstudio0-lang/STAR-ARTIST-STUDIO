@@ -291,18 +291,9 @@ textarea {
   gap: 8px;
 }
 
-/* Status Banner / PWA Install Prompt */
+/* Status Banner (Hidden from public UI; cloud sync runs silently in background) */
 .status-strip {
-  margin-top: 14px;
-  padding: 12px 16px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--outline);
-  background: var(--bg-card);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: none !important;
 }
 
 .status-dot {
