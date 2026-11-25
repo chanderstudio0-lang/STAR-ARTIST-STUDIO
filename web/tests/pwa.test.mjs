@@ -4279,6 +4279,7 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
 
   // 2. Verify all canonical square 1:1 PNG web/PWA/Apple Touch icons and dedicated website header logo have exact dimensions
   const expectedWebIcons = [
+    ["favicon.png", 32],
     ["icons/brand-logo-white-v45.png", 256],
     ["icons/favicon-16x16.png", 16],
     ["icons/favicon-32x32.png", 32],
@@ -4294,17 +4295,12 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
     assert.equal(dims.width, expectedSize, `${relPath} width must be ${expectedSize}`);
     assert.equal(dims.height, expectedSize, `${relPath} height must be ${expectedSize}`);
   }
-  // If root-level duplicate PNGs also exist on disk, validate their dimensions too
-  for (const [relPath, expectedSize] of [
-    ["favicon.png", 48],
-    ["apple-touch-icon.png", 180]
-  ]) {
-    const fullPath = path.join(webDir, relPath);
-    if (fs.existsSync(fullPath)) {
-      const dims = readPngDimensions(fullPath);
-      assert.equal(dims.width, expectedSize, `${relPath} width must be ${expectedSize}`);
-      assert.equal(dims.height, expectedSize, `${relPath} height must be ${expectedSize}`);
-    }
+  // If root-level duplicate apple-touch-icon.png exists on disk, validate its dimensions too
+  const rootAppleTouchPath = path.join(webDir, "apple-touch-icon.png");
+  if (fs.existsSync(rootAppleTouchPath)) {
+    const dims = readPngDimensions(rootAppleTouchPath);
+    assert.equal(dims.width, 180, "apple-touch-icon.png width must be 180");
+    assert.equal(dims.height, 180, "apple-touch-icon.png height must be 180");
   }
 
   // 3. Verify manifest.webmanifest and manifest.json stay synced with Black & Gold #0C0C0C theme
@@ -4343,6 +4339,7 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   for (const asset of [
     '"/manifest.json"',
     '"/favicon.ico"',
+    '"/favicon.png"',
     '"/icons/brand-logo-white-v45.png"',
     '"/icons/favicon-16x16.png"',
     '"/icons/favicon-32x32.png"',
@@ -4355,7 +4352,6 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   ]) {
     assert.ok(shellList.includes(asset), `sw.js APP_SHELL_URLS missing icon/manifest cache entry: ${asset}`);
   }
-  assert.equal(shellList.includes('"/favicon.png"'), false, "sw.js APP_SHELL_URLS must not precache redundant root /favicon.png");
   assert.equal(shellList.includes('"/apple-touch-icon.png"'), false, "sw.js APP_SHELL_URLS must not precache redundant root /apple-touch-icon.png");
   assert.ok(swText.includes('cache: "reload"'), "sw.js must bypass stale browser HTTP cache when precaching/fetching icons");
   assert.ok(swText.includes('url.pathname.startsWith("/icons/")'), "sw.js must refresh /icons/ assets cleanly");
@@ -4368,8 +4364,8 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   assert.ok(headerSources.includes("/apple-touch-icon.png"), "firebase.json must set no-cache headers for /apple-touch-icon.png");
   const rewrites = firebaseJson.hosting?.rewrites || [];
   assert.ok(
-    rewrites.some((r) => r.source === "/favicon.png" && r.destination === "/icons/favicon-48x48.png"),
-    "firebase.json must rewrite /favicon.png to /icons/favicon-48x48.png"
+    rewrites.some((r) => r.source === "/favicon.png" && r.destination === "/icons/favicon-32x32.png"),
+    "firebase.json must rewrite /favicon.png to /icons/favicon-32x32.png"
   );
   assert.ok(
     rewrites.some((r) => r.source === "/apple-touch-icon.png" && r.destination === "/icons/apple-touch-icon.png"),

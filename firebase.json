@@ -156,7 +156,7 @@
     "rewrites": [
       {
         "source": "/favicon.png",
-        "destination": "/icons/favicon-48x48.png"
+        "destination": "/icons/favicon-32x32.png"
       },
       {
         "source": "/apple-touch-icon.png",
