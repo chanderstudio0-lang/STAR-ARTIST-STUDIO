@@ -109,6 +109,24 @@
         ]
       },
       {
+        "source": "/favicon.png",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/apple-touch-icon.png",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, must-revalidate"
+          }
+        ]
+      },
+      {
         "source": "/manifest.webmanifest",
         "headers": [
           {

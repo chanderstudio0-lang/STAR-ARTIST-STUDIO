@@ -294,26 +294,117 @@ export async function initFirebaseClient() {
   };
 }
 
+const GOOGLE_AUTH_MODE_STORAGE_KEY = "star_artist_google_auth_mode";
+let authEnforcementInProgress = false;
+let activeAuthStateCallback = null;
+
+function readPendingGoogleAuthMode() {
+  try {
+    if (typeof sessionStorage === "undefined") return "login";
+    const mode = sessionStorage.getItem(GOOGLE_AUTH_MODE_STORAGE_KEY);
+    sessionStorage.removeItem(GOOGLE_AUTH_MODE_STORAGE_KEY);
+    return mode === "signup" ? "signup" : "login";
+  } catch {
+    return "login";
+  }
+}
+
+function savePendingGoogleAuthMode(mode) {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(GOOGLE_AUTH_MODE_STORAGE_KEY, mode === "signup" ? "signup" : "login");
+    }
+  } catch {
+    // Ignore restricted storage contexts
+  }
+}
+
+function createUnregisteredAccountError() {
+  const err = new Error(
+    "This account is not registered yet. Please create an account first on the Create Account / Sign Up page."
+  );
+  err.code = "auth/unregistered-account";
+  return err;
+}
+
+async function emitVerifiedAuthState(user) {
+  if (typeof activeAuthStateCallback !== "function") return;
+  if (!user || user.isAnonymous === true) {
+    activeAuthStateCallback({ user: null, isAdmin: false, firebaseReady: true });
+    return;
+  }
+  const admin = await checkIsAdmin(user);
+  await ensureUserDocument(user);
+  activeAuthStateCallback({ user, isAdmin: admin, firebaseReady: true });
+}
+
+async function enforceGoogleRegistrationPolicy(ctx, cred, mode = "login") {
+  if (!cred || !cred.user) return { cred, alreadyRegistered: false };
+  const info =
+    typeof ctx.authMod.getAdditionalUserInfo === "function"
+      ? ctx.authMod.getAdditionalUserInfo(cred)
+      : null;
+  const isNewUser = Boolean(info?.isNewUser);
+  const isAdminAccount = isAuthorizedAdminUser(cred.user);
+
+  if (mode === "login" && isNewUser && !isAdminAccount) {
+    const prevEnforcement = authEnforcementInProgress;
+    authEnforcementInProgress = true;
+    try {
+      if (typeof cred.user.delete === "function") {
+        await cred.user.delete().catch(() => {});
+      }
+      await ctx.authMod.signOut(ctx.auth).catch(() => {});
+    } finally {
+      authEnforcementInProgress = prevEnforcement;
+    }
+    throw createUnregisteredAccountError();
+  }
+
+  await ensureUserDocument(cred.user);
+  return { cred, alreadyRegistered: !isNewUser };
+}
+
 export async function subscribeAuthState(onChange) {
+  activeAuthStateCallback = typeof onChange === "function" ? onChange : null;
   const ctx = await initFirebaseClient();
   if (!ctx.ready) {
     onChange({ user: null, isAdmin: false, firebaseReady: false });
     return () => {};
   }
 
-  // Complete any pending mobile redirect sign-in seamlessly
+  // Complete any pending mobile redirect sign-in while enforcing mandatory registration
   if (typeof ctx.authMod.getRedirectResult === "function") {
-    ctx.authMod.getRedirectResult(ctx.auth).catch(() => {});
+    const redirectMode = readPendingGoogleAuthMode();
+    try {
+      const redirectCred = await ctx.authMod.getRedirectResult(ctx.auth);
+      if (redirectCred && redirectCred.user) {
+        await enforceGoogleRegistrationPolicy(ctx, redirectCred, redirectMode);
+      }
+    } catch (err) {
+      if (err?.code === "auth/unregistered-account") {
+        onChange({
+          user: null,
+          isAdmin: false,
+          firebaseReady: true,
+          authError: err
+        });
+      }
+    }
   }
 
   return ctx.authMod.onAuthStateChanged(ctx.auth, async (user) => {
-    if (!user) {
+    if (authEnforcementInProgress) {
+      return;
+    }
+    if (!user || user.isAnonymous === true) {
+      if (user?.isAnonymous === true) {
+        await ctx.authMod.signOut(ctx.auth).catch(() => {});
+      }
       onChange({ user: null, isAdmin: false, firebaseReady: true });
       return;
     }
-    const admin = await checkIsAdmin(user);
-    await ensureUserDocument(user);
-    onChange({ user, isAdmin: admin, firebaseReady: true });
+    await emitVerifiedAuthState(user);
   });
 }
 
@@ -321,18 +412,19 @@ export async function checkIsAdmin(user) {
   return isAuthorizedAdminUser(user);
 }
 
-async function ensureUserDocument(user) {
+async function ensureUserDocument(user, { fullName = "" } = {}) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready || !user) return;
+  if (!ctx.ready || !user || user.isAnonymous === true) return;
   const { fsMod, db } = ctx;
   const userRef = fsMod.doc(db, "users", user.uid);
+  const resolvedName = String(fullName || user.displayName || "Star Artist Member").trim() || "Star Artist Member";
   try {
     const existing = await fsMod.getDoc(userRef);
     if (!existing.exists()) {
       await fsMod.setDoc(userRef, {
         userId: user.uid,
         email: user.email || "",
-        displayName: user.displayName || "Star Artist Member",
+        displayName: resolvedName,
         photoUrl: user.photoURL || "",
         role: "user",
         announcementsOptIn: true,
@@ -362,19 +454,27 @@ export async function syncWorkshopNewsletterOptIn() {
   }
 }
 
-export async function signInWithGooglePopup() {
+export async function signInWithGooglePopup({ mode = "login" } = {}) {
   const ctx = await initFirebaseClient();
   if (!ctx.ready) throw new Error("Unable to reach Star Artist Studio Cloud. Please check your internet connection.");
+  const normalizedMode = mode === "signup" ? "signup" : "login";
   const provider = new ctx.authMod.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
+  authEnforcementInProgress = true;
   try {
-    return await ctx.authMod.signInWithPopup(ctx.auth, provider);
+    const cred = await ctx.authMod.signInWithPopup(ctx.auth, provider);
+    const result = await enforceGoogleRegistrationPolicy(ctx, cred, normalizedMode);
+    authEnforcementInProgress = false;
+    await emitVerifiedAuthState(cred.user);
+    return result;
   } catch (err) {
+    authEnforcementInProgress = false;
     const code = String(err?.code || "");
     if (
       (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment") &&
       typeof ctx.authMod.signInWithRedirect === "function"
     ) {
+      savePendingGoogleAuthMode(normalizedMode);
       return ctx.authMod.signInWithRedirect(ctx.auth, provider);
     }
     throw err;
@@ -384,13 +484,24 @@ export async function signInWithGooglePopup() {
 export async function signInWithEmailPassword(email, password) {
   const ctx = await initFirebaseClient();
   if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
-  return ctx.authMod.signInWithEmailAndPassword(ctx.auth, email.trim(), password);
+  const cred = await ctx.authMod.signInWithEmailAndPassword(ctx.auth, email.trim(), password);
+  await ensureUserDocument(cred.user);
+  return cred;
 }
 
-export async function registerWithEmailPassword(email, password) {
+export async function registerWithEmailPassword(email, password, { fullName = "" } = {}) {
   const ctx = await initFirebaseClient();
   if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
+  const cleanName = String(fullName || "").trim();
   const cred = await ctx.authMod.createUserWithEmailAndPassword(ctx.auth, email.trim(), password);
+  if (cleanName && typeof ctx.authMod.updateProfile === "function") {
+    try {
+      await ctx.authMod.updateProfile(cred.user, { displayName: cleanName });
+    } catch {
+      // Optional display name update fallback
+    }
+  }
+  await ensureUserDocument(cred.user, { fullName: cleanName });
   try {
     await ctx.authMod.sendEmailVerification(cred.user);
   } catch {

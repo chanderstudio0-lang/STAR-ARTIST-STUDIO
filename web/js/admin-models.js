@@ -24,6 +24,39 @@ export function normalizeModelStatus(status) {
   return "pending";
 }
 
+/**
+ * Returns true when a model has completed all required casting documentation
+ * and holds active Official Studio Roster approval:
+ * - Approved roster status and not disabled
+ * - 18+ age verified
+ * - Written 18+ consent signed & photo release consent enabled
+ * - Valid city & phone contact documentation
+ * - Verified portfolio documentation (valid portfolio URL or uploaded portfolio photo)
+ */
+export function isVerifiedRosterModel(model) {
+  if (!model || typeof model !== "object") return false;
+  if (normalizeModelStatus(model.status) !== "approved") return false;
+  if (model.isDisabled === true) return false;
+  const ageNum = Number(model.age);
+  if (!Number.isFinite(ageNum) || ageNum < 18) return false;
+  if (model.consentGiven !== true) return false;
+  if (model.photoConsent === false) return false;
+
+  const hasCity = String(model.city || "").trim().length >= 2;
+  const phoneDigits = String(model.phoneNumber || "").replace(/\D/g, "");
+  const hasPhone = phoneDigits.length >= 8;
+  const hasPortfolioLink = Boolean(safeHttpUrl(model.portfolioUrls));
+  const hasPortfolioPhoto =
+    Array.isArray(model.portfolioPhotos) &&
+    model.portfolioPhotos.some(
+      (src) =>
+        typeof src === "string" &&
+        (src.startsWith("data:image/") || safeHttpUrl(src) || src.startsWith("/images/"))
+    );
+
+  return hasCity && hasPhone && (hasPortfolioLink || hasPortfolioPhoto);
+}
+
 export function summarizeModelApplications(models = []) {
   return models.reduce(
     (acc, m) => {
@@ -113,12 +146,135 @@ export function validateManualModelVerification({
   return null;
 }
 
+/**
+ * Validates and partitions a bulk model status update ("approved" or "rejected")
+ * across multiple selected models simultaneously while enforcing 18+ age and
+ * written consent compliance for approvals and a valid review reason for rejections.
+ */
+export function evaluateBulkModelUpdate({
+  models = [],
+  selectedIds = [],
+  nextStatus = "approved",
+  bulkNote = "",
+  drafts = {},
+  lang = "en"
+} = {}) {
+  const st = normalizeModelStatus(nextStatus);
+  const isHindi = lang === "hi";
+  const cleanBulkNote = String(bulkNote || "").trim();
+
+  if (st !== "approved" && st !== "rejected") {
+    return {
+      ok: false,
+      error: isHindi ? "अमान्य बल्क कार्रवाई।" : "Invalid bulk action status.",
+      eligible: [],
+      skipped: []
+    };
+  }
+
+  const idSet = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id || "").trim()).filter(Boolean));
+  const selectedModels = models.filter((m) => m && idSet.has(String(m.id || "")));
+  if (selectedModels.length === 0) {
+    return {
+      ok: false,
+      error: isHindi
+        ? "कृपया पहले कम से कम एक मॉडल चुनें।"
+        : "Please select at least one model first.",
+      eligible: [],
+      skipped: []
+    };
+  }
+
+  if (cleanBulkNote.length > 1000) {
+    return {
+      ok: false,
+      error: isHindi
+        ? "बल्क नोट 1000 अक्षरों या उससे कम होना चाहिए।"
+        : "Bulk note must be 1000 characters or fewer.",
+      eligible: [],
+      skipped: []
+    };
+  }
+
+  const eligible = [];
+  const skipped = [];
+
+  for (const m of selectedModels) {
+    const draftNote = String(drafts?.[m.id]?.notes ?? "").trim();
+    const existingNote = String(m.adminNotes || "").trim();
+    const resolvedNote =
+      cleanBulkNote ||
+      draftNote ||
+      existingNote ||
+      (st === "approved"
+        ? isHindi
+          ? "बल्क सत्यापन: आधिकारिक रोस्टर हेतु स्वीकृत"
+          : "Bulk verified for Official Studio Roster"
+        : "");
+
+    if (st === "approved") {
+      const ageNum = Number(m.age);
+      if (!Number.isFinite(ageNum) || ageNum < 18) {
+        skipped.push({
+          model: m,
+          reason: isHindi ? "आयु 18 वर्ष से कम है" : "Under 18 years old"
+        });
+        continue;
+      }
+      if (!m.consentGiven) {
+        skipped.push({
+          model: m,
+          reason: isHindi ? "18+ लिखित सहमति नहीं है" : "Missing written 18+ consent"
+        });
+        continue;
+      }
+      eligible.push({ model: m, adminNotes: resolvedNote });
+    } else {
+      if (resolvedNote.length < 3) {
+        skipped.push({
+          model: m,
+          reason: isHindi ? "अस्वीकृति कारण आवश्यक है" : "Rejection reason required"
+        });
+        continue;
+      }
+      eligible.push({ model: m, adminNotes: resolvedNote });
+    }
+  }
+
+  if (eligible.length === 0) {
+    return {
+      ok: false,
+      error:
+        st === "rejected"
+          ? isHindi
+            ? "चयनित मॉडल्स को अस्वीकार करने के लिए कृपया बल्क नोट बॉक्स में संक्षिप्त कारण लिखें।"
+            : "Please enter a brief rejection reason in the Bulk Note box before rejecting selected models."
+          : isHindi
+          ? "चयनित मॉडल्स में से कोई भी 18+ आयु और लिखित सहमति की शर्त पूरी नहीं करता।"
+          : "None of the selected models meet the mandatory 18+ age and written consent requirements.",
+      eligible: [],
+      skipped
+    };
+  }
+
+  return {
+    ok: true,
+    error: null,
+    status: st,
+    eligible,
+    skipped
+  };
+}
+
 export function renderAdminModelsSectionHtml({
   models = [],
   filter = "pending",
   searchQuery = "",
   drafts = {},
   experienceScope = "all",
+  selectedIds = [],
+  bulkNote = "",
+  bulkBusy = false,
   lang = "en",
   t = (k) => k
 }) {
@@ -126,6 +282,10 @@ export function renderAdminModelsSectionHtml({
   const visible = filterModelApplications(models, filter, searchQuery);
   const isHindi = lang === "hi";
   const activeExpScope = experienceScope === "approved" ? "approved" : "all";
+  const selectedSet = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id || "")));
+  const visibleSelectedCount = visible.filter((m) => selectedSet.has(String(m.id || ""))).length;
+  const allVisibleSelected = visible.length > 0 && visibleSelectedCount === visible.length;
+  const totalSelectedCount = selectedSet.size;
 
   const filterPills = [
     { key: "pending", label: `${t("adminFilterPending")} (${counts.pending})` },
@@ -197,14 +357,42 @@ export function renderAdminModelsSectionHtml({
             ? "सत्यापन लंबित"
             : "PENDING REVIEW";
 
+          const isVerifiedRoster = isVerifiedRosterModel(m);
+          const verifiedRosterBadgeHtml = isVerifiedRoster
+            ? `<span class="verified-roster-icon-badge" data-verified-roster-badge="${escapeHtml(m.id)}" title="${escapeHtml(t("verifiedRosterTooltip"))}" aria-label="${escapeHtml(t("verifiedRosterBadgeLabel"))}">
+                <svg class="verified-roster-icon-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true" focusable="false">
+                  <path d="M12 2L4 5.5V11.2C4 16.4 7.4 21.1 12 22.5C16.6 21.1 20 16.4 20 11.2V5.5L12 2Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                  <path d="M8.5 12.2L10.9 14.6L15.8 9.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>${escapeHtml(t("verifiedRosterBadgeLabel"))}</span>
+              </span>`
+            : "";
+
+          const isBulkSelected = selectedSet.has(String(m.id || ""));
+
           return `
-        <article class="studio-card admin-model-card ${cardCls}" data-adm-model-card="${escapeHtml(m.id)}">
+        <article class="studio-card admin-model-card ${cardCls} ${isBulkSelected ? "is-bulk-selected" : ""}" data-adm-model-card="${escapeHtml(m.id)}">
           <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:flex-start;">
-            <div>
-              <strong style="font-size:1.02rem;color:var(--gold-light);">${escapeHtml(m.fullName)}</strong>
-              <div style="font-size:0.84rem;color:var(--text-secondary);">
-                ${escapeHtml(m.gender || "Model")} • ${escapeHtml(m.city || "")}${m.state && !String(m.city || "").toLowerCase().includes(String(m.state).toLowerCase()) ? `, ${escapeHtml(m.state)}` : ""} • ${escapeHtml(m.phoneNumber || "")}
-                ${m.contactEmail ? ` • ${escapeHtml(m.contactEmail)}` : ""}
+            <div class="admin-model-header-left">
+              <label class="admin-bulk-checkbox-wrap" title="${escapeHtml(t("adminBulkSelectModelLabel"))}">
+                <input
+                  type="checkbox"
+                  class="admin-bulk-checkbox"
+                  data-adm-model-select="${escapeHtml(m.id)}"
+                  aria-label="${escapeHtml(t("adminBulkSelectModelLabel"))} ${escapeHtml(m.fullName)}"
+                  ${isBulkSelected ? "checked" : ""}
+                  ${bulkBusy ? "disabled" : ""}
+                />
+              </label>
+              <div>
+                <div class="admin-model-name-row">
+                  <strong style="font-size:1.02rem;color:var(--gold-light);">${escapeHtml(m.fullName)}</strong>
+                  ${verifiedRosterBadgeHtml}
+                </div>
+                <div style="font-size:0.84rem;color:var(--text-secondary);">
+                  ${escapeHtml(m.gender || "Model")} • ${escapeHtml(m.city || "")}${m.state && !String(m.city || "").toLowerCase().includes(String(m.state).toLowerCase()) ? `, ${escapeHtml(m.state)}` : ""} • ${escapeHtml(m.phoneNumber || "")}
+                  ${m.contactEmail ? ` • ${escapeHtml(m.contactEmail)}` : ""}
+                </div>
               </div>
             </div>
             <span class="badge ${statusCls}">${escapeHtml(badgeLabel)}</span>
@@ -403,6 +591,55 @@ export function renderAdminModelsSectionHtml({
         value="${escapeHtml(searchQuery)}"
         placeholder="${escapeHtml(t("adminModelSearchPlaceholder"))}"
       />
+    </div>
+    <div id="adminModelBulkBar" class="studio-card admin-bulk-bar ${totalSelectedCount > 0 ? "has-selection" : ""}" role="region" aria-label="${escapeHtml(t("adminBulkBarLabel"))}">
+      <div class="admin-bulk-bar-top">
+        <label class="admin-bulk-select-all-label">
+          <input
+            type="checkbox"
+            class="admin-bulk-checkbox"
+            data-adm-model-select-all="true"
+            ${allVisibleSelected ? "checked" : ""}
+            ${visible.length === 0 || bulkBusy ? "disabled" : ""}
+          />
+          <span>${escapeHtml(t("adminBulkSelectAllVisible"))} (${visible.length})</span>
+        </label>
+        <div class="admin-bulk-count-wrap">
+          <span class="badge ${totalSelectedCount > 0 ? "status-confirmed" : ""}" data-adm-model-selected-count="${totalSelectedCount}">
+            ${totalSelectedCount} ${escapeHtml(t("adminBulkSelectedSuffix"))}
+          </span>
+          ${
+            totalSelectedCount > 0
+              ? `<button type="button" class="chip-btn" data-adm-model-bulk-clear="true" ${bulkBusy ? "disabled" : ""}>${escapeHtml(t("adminBulkClearBtn"))}</button>`
+              : ""
+          }
+        </div>
+      </div>
+      <div class="admin-bulk-controls">
+        <input
+          type="text"
+          class="input admin-bulk-note-input"
+          maxlength="1000"
+          data-adm-model-bulk-note="true"
+          value="${escapeHtml(bulkNote)}"
+          placeholder="${escapeHtml(t("adminBulkNotePlaceholder"))}"
+          ${bulkBusy ? "disabled" : ""}
+        />
+        <div class="admin-bulk-action-btns">
+          <button
+            type="button"
+            class="btn-gold admin-bulk-btn"
+            data-adm-model-bulk-action="approved"
+            ${totalSelectedCount === 0 || bulkBusy ? "disabled" : ""}
+          >${escapeHtml(bulkBusy ? t("adminBulkProcessing") : t("adminBulkApproveBtn"))}${totalSelectedCount > 0 && !bulkBusy ? ` (${totalSelectedCount})` : ""}</button>
+          <button
+            type="button"
+            class="btn-danger admin-bulk-btn"
+            data-adm-model-bulk-action="rejected"
+            ${totalSelectedCount === 0 || bulkBusy ? "disabled" : ""}
+          >${escapeHtml(bulkBusy ? t("adminBulkProcessing") : t("adminBulkRejectBtn"))}${totalSelectedCount > 0 && !bulkBusy ? ` (${totalSelectedCount})` : ""}</button>
+        </div>
+      </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       ${cardsHtml}

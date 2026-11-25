@@ -4279,6 +4279,8 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
 
   // 2. Verify all square 1:1 PNG web/PWA/Apple Touch icons and dedicated website header logo have exact dimensions
   const expectedWebIcons = [
+    ["favicon.png", 48],
+    ["apple-touch-icon.png", 180],
     ["icons/brand-logo-white-v45.png", 256],
     ["icons/favicon-16x16.png", 16],
     ["icons/favicon-32x32.png", 32],
@@ -4328,6 +4330,8 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   for (const asset of [
     '"/manifest.json"',
     '"/favicon.ico"',
+    '"/favicon.png"',
+    '"/apple-touch-icon.png"',
     '"/icons/brand-logo-white-v45.png"',
     '"/icons/favicon-16x16.png"',
     '"/icons/favicon-32x32.png"',
@@ -4343,6 +4347,8 @@ test("STAR ARTIST STUDIO Golden Logo branding icons are properly sized 1:1 acros
   const headerSources = (firebaseJson.hosting?.headers || []).map((h) => h.source);
   assert.ok(headerSources.includes("/icons/**"), "firebase.json must set no-cache headers for /icons/**");
   assert.ok(headerSources.includes("/favicon.ico"), "firebase.json must set no-cache headers for /favicon.ico");
+  assert.ok(headerSources.includes("/favicon.png"), "firebase.json must set no-cache headers for /favicon.png");
+  assert.ok(headerSources.includes("/apple-touch-icon.png"), "firebase.json must set no-cache headers for /apple-touch-icon.png");
 
   // 6. Verify Android native adaptive icon & 5-density launcher PNGs
   const resDir = path.join(rootDir, "app/src/main/res");
@@ -4773,6 +4779,485 @@ test("WhatsApp & social sharing Open Graph metadata serves a valid public 1200x6
   assert.equal(ignored.some((p) => p.includes("images") || p.includes("og-star-artist-studio")), false, "Hosting ignore must not exclude OG image");
   assert.equal(Boolean(firebaseJson.hosting.redirects && firebaseJson.hosting.redirects.length), false, "Hosting must not redirect static OG image");
 });
+
+test("Public model profile cards include a Share button that generates and deep-links privacy-safe direct profile URLs", async () => {
+  const { renderPublicModelPortfolioCardsHtml } = await import("../js/company-booking.js");
+  const {
+    buildModelProfileShareUrl,
+    extractSharedModelIdFromUrl,
+    renderModelProfileModalHtml
+  } = await import("../js/model-discovery.js");
+  const { extractRequestedRoute, resolveSafeRoute } = await import("../js/admin-guard.js");
+  const { TRANSLATIONS } = await import("../js/i18n.js");
+
+  const sampleModel = {
+    id: "model_sirsa_01",
+    fullName: "Ananya Sharma",
+    gender: "Female",
+    age: 22,
+    heightCm: 170,
+    city: "Sirsa, Haryana",
+    state: "Haryana",
+    category: "Editorial & Runway",
+    skills: "Runway, Bridal, Commercial",
+    experienceLevel: "2+ Years",
+    status: "approved",
+    photoConsent: true,
+    phone: "+919999999999",
+    email: "private@example.com"
+  };
+
+  // 1. Verify direct shareable URL format, encoding, parsing, and zero PII
+  const shareUrl = buildModelProfileShareUrl(sampleModel.id, {
+    origin: "https://gen-lang-client-0548683163.web.app"
+  });
+  assert.equal(
+    shareUrl,
+    "https://gen-lang-client-0548683163.web.app/#companies?model=model_sirsa_01"
+  );
+  assert.equal(shareUrl.includes("private@example.com"), false, "Share URL must never contain email");
+  assert.equal(shareUrl.includes("9999999999"), false, "Share URL must never contain phone");
+  assert.equal(
+    extractSharedModelIdFromUrl({ hash: "#companies?model=model_sirsa_01" }),
+    "model_sirsa_01"
+  );
+  assert.equal(
+    extractSharedModelIdFromUrl({ search: "?model=model_sirsa_01" }),
+    "model_sirsa_01"
+  );
+
+  // 2. Verify route resolution keeps #companies?model=<id> safely on public "companies" view
+  assert.equal(extractRequestedRoute({ hash: "#companies?model=model_sirsa_01" }), "companies");
+  const safeRes = resolveSafeRoute({ hash: "#companies?model=model_sirsa_01", isAdmin: false });
+  assert.equal(safeRes.route, "companies");
+  assert.equal(safeRes.blockedAdminAttempt, false);
+
+  // 3. Verify Share button renders on each public model card and in the profile modal
+  const t = (key) => TRANSLATIONS.en[key] || key;
+  const cardHtml = renderPublicModelPortfolioCardsHtml({ models: [sampleModel], t });
+  assert.ok(cardHtml.includes('data-share-model-profile="model_sirsa_01"'), "Card must include Share button with model ID");
+  assert.ok(cardHtml.includes('data-share-model-name="Ananya Sharma"'), "Card Share button must include model display name");
+  assert.ok(cardHtml.includes(">Share<"), "Card Share button must render Share label");
+  assert.equal(cardHtml.includes("private@example.com"), false, "Card HTML must never expose private email");
+
+  const modalHtml = renderModelProfileModalHtml(sampleModel, { t });
+  assert.ok(modalHtml.includes('data-share-model-profile="model_sirsa_01"'), "Profile modal must also include Share button");
+
+  // 4. Verify bilingual i18n keys and app.js clipboard + deep-link wiring
+  assert.ok(TRANSLATIONS.en.castingShareBtn && TRANSLATIONS.en.castingShareCopiedToast);
+  assert.ok(TRANSLATIONS.hi.castingShareBtn && TRANSLATIONS.hi.castingShareCopiedToast);
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("[data-share-model-profile]"), "app.js must delegate Share button clicks");
+  assert.ok(appJs.includes("copyModelProfileLink"), "app.js must implement copyModelProfileLink");
+  assert.ok(appJs.includes("tryOpenPendingSharedModelProfile"), "app.js must auto-open deep-linked shared model profiles");
+});
+
+test("Mandatory account registration & login gate blocks guest access, requires existing accounts for login, and preserves Admin security", async () => {
+  const {
+    isAuthenticatedMember,
+    extractAuthRouteFromUrl,
+    resolveAuthenticatedAccess,
+    validateRegistrationInput,
+    validateLoginInput,
+    mapFirebaseAuthError,
+    syncAuthGateDom
+  } = await import("../js/auth-gate.js");
+  const { TRANSLATIONS } = await import("../js/i18n.js");
+
+  // 1. Only real non-anonymous Firebase accounts are authenticated; guests & anonymous sessions are blocked
+  assert.equal(isAuthenticatedMember(null), false);
+  assert.equal(isAuthenticatedMember(undefined), false);
+  assert.equal(isAuthenticatedMember({ uid: "" }), false);
+  assert.equal(isAuthenticatedMember({ uid: "guest_123", isAnonymous: true }), false);
+  assert.equal(isAuthenticatedMember({ uid: "user_abc", email: "client@example.com", isAnonymous: false }), true);
+
+  // 2. Auth route detection supports #login, #signup, #register, /signup, ?route=signup
+  assert.equal(extractAuthRouteFromUrl({ hash: "#login" }), "login");
+  assert.equal(extractAuthRouteFromUrl({ hash: "#signup" }), "signup");
+  assert.equal(extractAuthRouteFromUrl({ hash: "#register" }), "signup");
+  assert.equal(extractAuthRouteFromUrl({ pathname: "/signup" }), "signup");
+  assert.equal(extractAuthRouteFromUrl({ search: "?route=login" }), "login");
+  assert.equal(extractAuthRouteFromUrl({ hash: "#catalog" }), "");
+
+  // 3. Unauthenticated visitors trying to access any service are redirected to Login / Sign Up
+  for (const serviceRoute of ["home", "catalog", "booking", "models", "companies", "gallery"]) {
+    const blocked = resolveAuthenticatedAccess({
+      requestedRoute: serviceRoute,
+      hash: `#${serviceRoute}`,
+      user: null,
+      isAdmin: false
+    });
+    assert.equal(blocked.authenticated, false, `Unauthenticated access to ${serviceRoute} must be blocked`);
+    assert.equal(blocked.redirectedToAuth, true);
+    assert.equal(blocked.route, "login");
+    assert.equal(blocked.postAuthRoute, serviceRoute, `Should remember intended service route: ${serviceRoute}`);
+  }
+
+  // Direct #signup navigation opens Create Account / Sign Up screen cleanly
+  const signupDirect = resolveAuthenticatedAccess({
+    requestedRoute: "signup",
+    hash: "#signup",
+    user: null,
+    isAdmin: false
+  });
+  assert.equal(signupDirect.authenticated, false);
+  assert.equal(signupDirect.route, "signup");
+  assert.equal(signupDirect.authMode, "signup");
+
+  // Anonymous Firebase user is also rejected and redirected to Login
+  const anonAttempt = resolveAuthenticatedAccess({
+    requestedRoute: "booking",
+    user: { uid: "anon_99", isAnonymous: true },
+    isAdmin: false
+  });
+  assert.equal(anonAttempt.authenticated, false);
+  assert.equal(anonAttempt.route, "login");
+
+  // 4. Authenticated member unlocks services while Admin remains strictly restricted to chanderstudio0@gmail.com
+  const memberUser = { uid: "u_member_1", email: "artist@example.com", isAnonymous: false };
+  const memberAccess = resolveAuthenticatedAccess({
+    requestedRoute: "login",
+    user: memberUser,
+    isAdmin: false,
+    postAuthRoute: "booking"
+  });
+  assert.equal(memberAccess.authenticated, true);
+  assert.equal(memberAccess.route, "booking");
+  assert.equal(memberAccess.redirectedToAuth, false);
+
+  const memberAdminAttempt = resolveAuthenticatedAccess({
+    requestedRoute: "admin",
+    hash: "#admin",
+    user: memberUser,
+    isAdmin: false
+  });
+  assert.equal(memberAdminAttempt.authenticated, true);
+  assert.equal(memberAdminAttempt.route, "home");
+  assert.equal(memberAdminAttempt.blockedAdminAttempt, true);
+
+  const verifiedAdmin = {
+    uid: "u_admin_1",
+    email: "chanderstudio0@gmail.com",
+    emailVerified: true,
+    isAnonymous: false
+  };
+  const adminAccess = resolveAuthenticatedAccess({
+    requestedRoute: "admin",
+    hash: "#admin",
+    user: verifiedAdmin,
+    isAdmin: true
+  });
+  assert.equal(adminAccess.authenticated, true);
+  assert.equal(adminAccess.route, "admin");
+  assert.equal(adminAccess.blockedAdminAttempt, false);
+
+  // 5. Registration & login input validation + Firebase error mapping
+  assert.equal(validateRegistrationInput({ fullName: "A", email: "a@b.com", password: "password1", confirmPassword: "password1" }).valid, false);
+  assert.equal(validateRegistrationInput({ fullName: "Aarav Verma", email: "bad-email", password: "password1", confirmPassword: "password1" }).valid, false);
+  assert.equal(validateRegistrationInput({ fullName: "Aarav Verma", email: "aarav@example.com", password: "123", confirmPassword: "123" }).valid, false);
+  assert.equal(validateRegistrationInput({ fullName: "Aarav Verma", email: "aarav@example.com", password: "password1", confirmPassword: "password2" }).valid, false);
+  assert.equal(validateRegistrationInput({ fullName: "Aarav Verma", email: "aarav@example.com", password: "password1", confirmPassword: "password1" }).valid, true);
+
+  assert.equal(validateLoginInput({ email: "invalid", password: "password1" }).valid, false);
+  assert.equal(validateLoginInput({ email: "aarav@example.com", password: "123" }).valid, false);
+  assert.equal(validateLoginInput({ email: "aarav@example.com", password: "password1" }).valid, true);
+
+  const tEn = (k) => TRANSLATIONS.en[k] || k;
+  const unregMsg = mapFirebaseAuthError({ code: "auth/unregistered-account" }, { mode: "login", t: tEn });
+  assert.ok(unregMsg.toLowerCase().includes("create an account"), "Unregistered login error must guide user to Create Account / Sign Up");
+  assert.ok(TRANSLATIONS.hi.authErrorAccountNotRegistered, "Hindi translation for unregistered account error must exist");
+
+  // 6. DOM sync toggles auth-gate-active and #view-auth cleanly
+  const makeEl = () => {
+    const classes = new Set();
+    const attrs = {};
+    return {
+      hidden: false,
+      classList: {
+        toggle: (name, force) => (force ? classes.add(name) : classes.delete(name)),
+        contains: (name) => classes.has(name)
+      },
+      setAttribute: (k, v) => {
+        attrs[k] = v;
+      },
+      getAttribute: (k) => attrs[k]
+    };
+  };
+  const els = {
+    "view-auth": makeEl(),
+    authLoginPanel: makeEl(),
+    authSignupPanel: makeEl(),
+    authTabLoginBtn: makeEl(),
+    authTabSignupBtn: makeEl()
+  };
+  const fakeDoc = {
+    body: makeEl(),
+    getElementById: (id) => els[id] || null
+  };
+  syncAuthGateDom(fakeDoc, { isAuthenticated: false, authMode: "signup", authResolved: true });
+  assert.equal(fakeDoc.body.classList.contains("auth-gate-active"), true);
+  assert.equal(els["view-auth"].hidden, false);
+  assert.equal(els.authSignupPanel.hidden, false);
+  assert.equal(els.authLoginPanel.hidden, true);
+
+  syncAuthGateDom(fakeDoc, { isAuthenticated: true, authMode: "login", authResolved: true });
+  assert.equal(fakeDoc.body.classList.contains("auth-gate-active"), false);
+  assert.equal(els["view-auth"].hidden, true);
+
+  // 7. Static HTML, Firebase Auth enforcement & Service Worker checks (zero guest bypass)
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+
+  assert.ok(html.includes('<body class="auth-gate-active auth-checking">'), "Body must start gated before auth resolves");
+  assert.ok(html.includes('id="view-auth"'), "index.html must include mandatory #view-auth gate");
+  assert.ok(html.includes('id="loginAuthForm"') && html.includes('id="signupAuthForm"'), "index.html must provide dedicated Login and Sign Up forms");
+  assert.ok(html.includes('id="loginGoogleBtn"') && html.includes('id="signupGoogleBtn"'), "index.html must separate Google Login and Google Sign Up flows");
+  assert.equal(/continue\s+as\s+guest|guest\s+login|signInAnonymously/i.test(html), false, "HTML must never offer guest or anonymous login");
+  assert.equal(/signInAnonymously/i.test(firebaseJs), false, "firebase.js must never call signInAnonymously");
+  assert.ok(firebaseJs.includes("enforceGoogleRegistrationPolicy"), "firebase.js must enforce registration-first policy for Google login");
+  assert.ok(firebaseJs.includes("auth/unregistered-account"), "firebase.js must throw auth/unregistered-account when an unregistered user attempts Login");
+  assert.ok(firebaseJs.includes("user.isAnonymous === true"), "firebase.js must explicitly reject anonymous Firebase sessions");
+  assert.ok(appJs.includes("resolveAuthenticatedAccess"), "app.js must guard navigation with resolveAuthenticatedAccess");
+  assert.ok(swJs.includes('"/js/auth-gate.js"'), "sw.js must precache /js/auth-gate.js");
+});
+
+test("Admin Dashboard displays a visual 'Verified Roster' icon badge next to names of models with completed documentation", async () => {
+  const { isVerifiedRosterModel, renderAdminModelsSectionHtml } = await import("../js/admin-models.js");
+  const { TRANSLATIONS } = await import("../js/i18n.js");
+
+  const fullyDocumented = {
+    id: "mdl_verified_1",
+    fullName: "Meera Kapoor",
+    gender: "Female",
+    age: 23,
+    city: "Sirsa",
+    state: "Haryana",
+    phoneNumber: "+91 98128 00112",
+    portfolioUrls: "https://portfolio.example.com/meera",
+    consentGiven: true,
+    photoConsent: true,
+    status: "approved",
+    isDisabled: false
+  };
+
+  const photoOnlyDocumented = {
+    ...fullyDocumented,
+    id: "mdl_verified_photo",
+    fullName: "Kabir Gill",
+    portfolioUrls: "",
+    portfolioPhotos: ["data:image/jpeg;base64,/9j/4AAQSkZJRg=="]
+  };
+
+  const missingPortfolio = {
+    ...fullyDocumented,
+    id: "mdl_missing_portfolio",
+    fullName: "Riya Verma",
+    portfolioUrls: "",
+    portfolioPhotos: []
+  };
+
+  const missingConsent = {
+    ...fullyDocumented,
+    id: "mdl_missing_consent",
+    fullName: "Neha Singh",
+    consentGiven: false
+  };
+
+  const disabledApproved = {
+    ...fullyDocumented,
+    id: "mdl_disabled",
+    fullName: "Rohan Sharma",
+    isDisabled: true
+  };
+
+  const pendingModel = {
+    ...fullyDocumented,
+    id: "mdl_pending",
+    fullName: "Simran Kaur",
+    status: "pending"
+  };
+
+  // 1. Documentation completeness predicate
+  assert.equal(isVerifiedRosterModel(fullyDocumented), true);
+  assert.equal(isVerifiedRosterModel(photoOnlyDocumented), true);
+  assert.equal(isVerifiedRosterModel(missingPortfolio), false, "Missing portfolio must not show Verified Roster badge");
+  assert.equal(isVerifiedRosterModel(missingConsent), false, "Missing written consent must not show Verified Roster badge");
+  assert.equal(isVerifiedRosterModel({ ...fullyDocumented, photoConsent: false }), false, "Missing photo consent must not show Verified Roster badge");
+  assert.equal(isVerifiedRosterModel(disabledApproved), false, "Disabled model must not show Verified Roster badge");
+  assert.equal(isVerifiedRosterModel(pendingModel), false, "Pending model must not show Verified Roster badge");
+
+  // 2. Rendered Admin Dashboard HTML places the SVG Verified Roster badge right beside qualifying model names
+  const tEn = (k) => TRANSLATIONS.en[k] || k;
+  const html = renderAdminModelsSectionHtml({
+    models: [fullyDocumented, missingPortfolio, pendingModel],
+    filter: "all",
+    lang: "en",
+    t: tEn
+  });
+
+  assert.ok(html.includes('class="admin-model-name-row"'), "Model header must use .admin-model-name-row");
+  assert.ok(html.includes('data-verified-roster-badge="mdl_verified_1"'), "Qualifying model must render Verified Roster icon badge");
+  assert.ok(html.includes('class="verified-roster-icon-svg"'), "Verified Roster badge must include inline SVG shield-check icon");
+  assert.ok(html.includes(">Verified Roster<"), "Verified Roster badge must render readable label");
+  assert.equal(html.includes('data-verified-roster-badge="mdl_missing_portfolio"'), false, "Incomplete model must not render Verified Roster badge");
+  assert.equal(html.includes('data-verified-roster-badge="mdl_pending"'), false, "Pending model must not render Verified Roster badge");
+
+  // Badge appears directly inside the name row right after the model's fullName
+  const nameIdx = html.indexOf(">Meera Kapoor<");
+  const badgeIdx = html.indexOf('data-verified-roster-badge="mdl_verified_1"');
+  assert.ok(nameIdx > -1 && badgeIdx > nameIdx && badgeIdx - nameIdx < 200, "Verified Roster badge must appear right beside model name");
+
+  // 3. Bilingual Hindi support, CSS styling & Android parity
+  const tHi = (k) => TRANSLATIONS.hi[k] || k;
+  const hiHtml = renderAdminModelsSectionHtml({
+    models: [fullyDocumented],
+    filter: "approved",
+    lang: "hi",
+    t: tHi
+  });
+  assert.ok(hiHtml.includes("सत्यापित रोस्टर"), "Hindi mode must display localized Verified Roster badge label");
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  assert.ok(css.includes(".verified-roster-icon-badge"), "styles.css must style .verified-roster-icon-badge");
+  assert.ok(css.includes(".admin-model-name-row"), "styles.css must style .admin-model-name-row");
+
+  const androidAdminModels = fs.readFileSync(
+    path.join(rootDir, "app/src/main/java/com/example/ui/components/AdminModelVerificationComponent.kt"),
+    "utf8"
+  );
+  assert.ok(androidAdminModels.includes("fun hasCompletedRosterDocumentation"), "Android Admin Dashboard must verify completed documentation");
+  assert.ok(androidAdminModels.includes("admin_verified_roster_badge_"), "Android Admin Dashboard must render Verified Roster icon badge beside model name");
+});
+
+test("Admin Models tab supports bulk Approve/Reject actions across multiple selected models simultaneously", async () => {
+  const { evaluateBulkModelUpdate, renderAdminModelsSectionHtml } = await import("../js/admin-models.js");
+  const { TRANSLATIONS } = await import("../js/i18n.js");
+
+  const models = [
+    {
+      id: "m_ok_1",
+      fullName: "Aanya Gill",
+      gender: "Female",
+      age: 22,
+      city: "Sirsa",
+      phoneNumber: "+91 98128 00101",
+      portfolioUrls: "https://portfolio.example.com/aanya",
+      consentGiven: true,
+      photoConsent: true,
+      status: "pending"
+    },
+    {
+      id: "m_ok_2",
+      fullName: "Devansh Rao",
+      gender: "Male",
+      age: 24,
+      city: "Hisar",
+      phoneNumber: "+91 98128 00102",
+      portfolioUrls: "https://portfolio.example.com/devansh",
+      consentGiven: true,
+      photoConsent: true,
+      status: "pending"
+    },
+    {
+      id: "m_underage",
+      fullName: "Minor Applicant",
+      gender: "Female",
+      age: 17,
+      city: "Sirsa",
+      phoneNumber: "+91 98128 00103",
+      consentGiven: true,
+      status: "pending"
+    },
+    {
+      id: "m_no_consent",
+      fullName: "Unsigned Applicant",
+      gender: "Male",
+      age: 21,
+      city: "Sirsa",
+      phoneNumber: "+91 98128 00104",
+      consentGiven: false,
+      status: "pending"
+    }
+  ];
+
+  // 1. Empty selection is rejected cleanly
+  const emptyRes = evaluateBulkModelUpdate({ models, selectedIds: [], nextStatus: "approved" });
+  assert.equal(emptyRes.ok, false);
+
+  // 2. Bulk Approve admits 18+ consented models and skips underage/unconsented models safely
+  const approveRes = evaluateBulkModelUpdate({
+    models,
+    selectedIds: ["m_ok_1", "m_ok_2", "m_underage", "m_no_consent"],
+    nextStatus: "approved",
+    bulkNote: "Batch verified for Winter Campaign",
+    lang: "en"
+  });
+  assert.equal(approveRes.ok, true);
+  assert.equal(approveRes.status, "approved");
+  assert.equal(approveRes.eligible.length, 2);
+  assert.deepEqual(approveRes.eligible.map((x) => x.model.id), ["m_ok_1", "m_ok_2"]);
+  assert.equal(approveRes.eligible[0].adminNotes, "Batch verified for Winter Campaign");
+  assert.equal(approveRes.skipped.length, 2);
+
+  // 3. Bulk Reject requires a brief rejection reason (>= 3 chars)
+  const rejectNoReason = evaluateBulkModelUpdate({
+    models,
+    selectedIds: ["m_ok_1", "m_ok_2"],
+    nextStatus: "rejected",
+    bulkNote: ""
+  });
+  assert.equal(rejectNoReason.ok, false);
+
+  const rejectWithReason = evaluateBulkModelUpdate({
+    models,
+    selectedIds: ["m_ok_1", "m_ok_2"],
+    nextStatus: "rejected",
+    bulkNote: "Incomplete portfolio links"
+  });
+  assert.equal(rejectWithReason.ok, true);
+  assert.equal(rejectWithReason.status, "rejected");
+  assert.equal(rejectWithReason.eligible.length, 2);
+  assert.equal(rejectWithReason.eligible[1].adminNotes, "Incomplete portfolio links");
+
+  // 4. Rendered Admin Models HTML includes Bulk Action Bar, Select All, checkboxes, and Approve/Reject buttons
+  const tEn = (k) => TRANSLATIONS.en[k] || k;
+  const htmlSelected = renderAdminModelsSectionHtml({
+    models,
+    filter: "pending",
+    selectedIds: ["m_ok_1", "m_ok_2"],
+    bulkNote: "Verified batch",
+    lang: "en",
+    t: tEn
+  });
+  assert.ok(htmlSelected.includes('id="adminModelBulkBar"'), "Must render #adminModelBulkBar");
+  assert.ok(htmlSelected.includes('data-adm-model-select-all="true"'), "Must render Select All Visible checkbox");
+  assert.ok(htmlSelected.includes('data-adm-model-select="m_ok_1"'), "Must render per-card selection checkbox");
+  assert.ok(htmlSelected.includes('data-adm-model-bulk-action="approved"'), "Must render Bulk Approve button");
+  assert.ok(htmlSelected.includes('data-adm-model-bulk-action="rejected"'), "Must render Bulk Reject button");
+  assert.ok(htmlSelected.includes("Bulk Approve (2)"), "Bulk Approve button must reflect selected count");
+  assert.ok(htmlSelected.includes("Bulk Reject (2)"), "Bulk Reject button must reflect selected count");
+  assert.ok(htmlSelected.includes("is-bulk-selected"), "Selected model card must receive .is-bulk-selected highlight");
+
+  // 5. Web app.js parallel batch execution & Android Admin Models parity
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(appJs.includes("evaluateBulkModelUpdate"), "app.js must validate bulk updates with evaluateBulkModelUpdate");
+  assert.ok(appJs.includes("Promise.allSettled"), "app.js must execute bulk model updates simultaneously");
+  assert.ok(appJs.includes("[data-adm-model-bulk-action]"), "app.js must delegate bulk Approve/Reject clicks");
+  assert.ok(TRANSLATIONS.hi.adminBulkApproveBtn && TRANSLATIONS.hi.adminBulkRejectBtn, "Hindi bulk action labels must exist");
+
+  const androidAdminModels = fs.readFileSync(
+    path.join(rootDir, "app/src/main/java/com/example/ui/components/AdminModelVerificationComponent.kt"),
+    "utf8"
+  );
+  assert.ok(androidAdminModels.includes("fun evaluateBulkModelUpdate"), "Android must include evaluateBulkModelUpdate");
+  assert.ok(androidAdminModels.includes("admin_model_bulk_approve_btn"), "Android must render Bulk Approve button");
+  assert.ok(androidAdminModels.includes("admin_model_bulk_reject_btn"), "Android must render Bulk Reject button");
+});
+
+
+
 
 
 

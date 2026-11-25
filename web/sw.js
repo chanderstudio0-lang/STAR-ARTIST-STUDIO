@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v49";
+const CACHE_VERSION = "star-artist-pwa-v54";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -16,6 +16,8 @@ const APP_SHELL_URLS = [
   "/manifest.webmanifest",
   "/manifest.json",
   "/favicon.ico",
+  "/favicon.png",
+  "/apple-touch-icon.png",
   "/firebase-config.json",
   "/js/admin-booking-tracker.js",
   "/js/admin-bookings-export.js",
@@ -25,6 +27,7 @@ const APP_SHELL_URLS = [
   "/js/admin-model-growth.js",
   "/js/admin-models.js",
   "/js/app.js",
+  "/js/auth-gate.js",
   "/js/booking-status.js",
   "/js/catalog-reviews.js",
   "/js/company-booking.js",
@@ -385,11 +388,17 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/manifest.webmanifest" ||
     url.pathname === "/manifest.json" ||
     url.pathname === "/favicon.ico" ||
+    url.pathname === "/favicon.png" ||
+    url.pathname === "/apple-touch-icon.png" ||
     url.pathname.startsWith("/icons/") ||
     url.pathname.startsWith("/js/");
 
   if (isFreshCodeAsset) {
-    const isIconAsset = url.pathname === "/favicon.ico" || url.pathname.startsWith("/icons/");
+    const isIconAsset =
+      url.pathname === "/favicon.ico" ||
+      url.pathname === "/favicon.png" ||
+      url.pathname === "/apple-touch-icon.png" ||
+      url.pathname.startsWith("/icons/");
     event.respondWith(
       fetch(request, { cache: isIconAsset ? "reload" : "no-cache" })
         .then((response) => {

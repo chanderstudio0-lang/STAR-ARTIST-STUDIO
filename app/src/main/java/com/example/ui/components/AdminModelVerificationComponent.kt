@@ -100,6 +100,23 @@ fun isRejectedModelStatus(status: String): Boolean {
 }
 
 /**
+ * Returns true when a model in the Admin Dashboard has completed all required
+ * casting documentation (approved roster status, 18+ age verification, signed consent,
+ * valid city & phone contact details, and valid portfolio documentation URL).
+ */
+fun hasCompletedRosterDocumentation(model: ModelRegistration): Boolean {
+    if (!isRosterApprovedModelStatus(model.status)) return false
+    if (model.age < 18L) return false
+    if (!model.consentGiven) return false
+    val hasCity = model.city.trim().length >= 2
+    val hasPhone = model.phoneNumber.count { it.isDigit() } >= 8
+    val cleanPortfolio = model.portfolioUrls.trim()
+    val hasPortfolioDoc = cleanPortfolio.startsWith("https://", ignoreCase = true) ||
+        cleanPortfolio.startsWith("http://", ignoreCase = true)
+    return hasCity && hasPhone && hasPortfolioDoc
+}
+
+/**
  * Filters model registrations by verification lifecycle bucket ("PENDING", "APPROVED",
  * "REJECTED", or "ALL") and search text across name, city, phone, skills, portfolio URL, and notes.
  */
@@ -175,6 +192,81 @@ fun validateModelVerificationDecision(
     return null
 }
 
+data class BulkModelUpdatePlan(
+    val eligible: List<Pair<ModelRegistration, String>>,
+    val skippedCount: Int,
+    val error: String? = null
+)
+
+/**
+ * Evaluates a simultaneous bulk Approve or Reject update across selected models,
+ * enforcing 18+ age and written consent for approvals and a valid review note for rejections.
+ */
+fun evaluateBulkModelUpdate(
+    models: List<ModelRegistration>,
+    selectedIds: Set<String>,
+    newStatus: String,
+    bulkNote: String,
+    isHindi: Boolean
+): BulkModelUpdatePlan {
+    val normalized = newStatus.trim().lowercase()
+    val selectedModels = models.filter { it.id.isNotBlank() && selectedIds.contains(it.id) }
+    if (selectedModels.isEmpty()) {
+        return BulkModelUpdatePlan(
+            eligible = emptyList(),
+            skippedCount = 0,
+            error = if (isHindi) "कृपया पहले कम से कम एक मॉडल चुनें।" else "Please select at least one model first."
+        )
+    }
+
+    val cleanNote = bulkNote.trim()
+    if (normalized == "rejected" && cleanNote.length < 3) {
+        return BulkModelUpdatePlan(
+            eligible = emptyList(),
+            skippedCount = selectedModels.size,
+            error = if (isHindi) {
+                "बल्क अस्वीकृति के लिए कृपया संक्षिप्त कारण लिखें।"
+            } else {
+                "Please enter a brief rejection reason before rejecting selected models."
+            }
+        )
+    }
+
+    val eligible = mutableListOf<Pair<ModelRegistration, String>>()
+    var skipped = 0
+
+    for (model in selectedModels) {
+        if (normalized == "approved") {
+            if (model.age < 18L || !model.consentGiven) {
+                skipped += 1
+                continue
+            }
+            val resolvedNote = cleanNote.ifBlank {
+                model.adminNotes.trim().ifBlank {
+                    if (isHindi) "बल्क सत्यापन: आधिकारिक रोस्टर हेतु स्वीकृत" else "Bulk verified for Official Studio Roster"
+                }
+            }
+            eligible.add(model to resolvedNote)
+        } else if (normalized == "rejected") {
+            eligible.add(model to cleanNote)
+        }
+    }
+
+    if (eligible.isEmpty()) {
+        return BulkModelUpdatePlan(
+            eligible = emptyList(),
+            skippedCount = skipped,
+            error = if (isHindi) {
+                "चयनित मॉडल्स में से कोई भी 18+ आयु और लिखित सहमति की शर्त पूरी नहीं करता।"
+            } else {
+                "None of the selected models meet the mandatory 18+ age and written consent requirements."
+            }
+        )
+    }
+
+    return BulkModelUpdatePlan(eligible = eligible, skippedCount = skipped, error = null)
+}
+
 @Composable
 fun AdminModelVerificationSection(
     models: List<ModelRegistration>,
@@ -187,6 +279,17 @@ fun AdminModelVerificationSection(
 
     var sectionFilter by remember { mutableStateOf("PENDING") }
     var searchQuery by remember { mutableStateOf("") }
+    var selectedModelIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var bulkFeedbackMessage by remember { mutableStateOf<String?>(null) }
+    var showBulkApproveDialog by remember { mutableStateOf(false) }
+    var showBulkRejectDialog by remember { mutableStateOf(false) }
+    var bulkActionNote by remember { mutableStateOf("") }
+    var bulkDialogError by remember { mutableStateOf<String?>(null) }
+
+    val validModelIds = remember(models) { models.map { it.id }.filter { it.isNotBlank() }.toSet() }
+    val activeSelectedIds = remember(selectedModelIds, validModelIds) {
+        selectedModelIds.intersect(validModelIds)
+    }
 
     val pendingCount = remember(models) { models.count { isPendingModelStatus(it.status) } }
     val rosterCount = remember(models) { models.count { isRosterApprovedModelStatus(it.status) } }
@@ -199,6 +302,10 @@ fun AdminModelVerificationSection(
             searchQuery = searchQuery
         )
     }
+    val visibleSelectableIds = remember(filteredModels) {
+        filteredModels.map { it.id }.filter { it.isNotBlank() }.toSet()
+    }
+    val allVisibleSelected = visibleSelectableIds.isNotEmpty() && visibleSelectableIds.all { activeSelectedIds.contains(it) }
 
     if (isLoading) {
         AdminSkeletonList()
@@ -401,6 +508,368 @@ fun AdminModelVerificationSection(
                 .testTag("admin_model_search_input")
         )
 
+        // Bulk Approve / Reject Action Bar
+        Surface(
+            color = if (activeSelectedIds.isNotEmpty()) Color(0xFF1F1B12) else StudioCardSurface,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(
+                1.dp,
+                if (activeSelectedIds.isNotEmpty()) GoldPrimary else StudioOutline
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .testTag("admin_model_bulk_bar")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(enabled = visibleSelectableIds.isNotEmpty()) {
+                                selectedModelIds = if (allVisibleSelected) {
+                                    activeSelectedIds - visibleSelectableIds
+                                } else {
+                                    activeSelectedIds + visibleSelectableIds
+                                }
+                                bulkFeedbackMessage = null
+                            }
+                            .padding(end = 6.dp)
+                            .testTag("admin_model_bulk_select_all")
+                    ) {
+                        Checkbox(
+                            checked = allVisibleSelected,
+                            enabled = visibleSelectableIds.isNotEmpty(),
+                            onCheckedChange = { checked ->
+                                selectedModelIds = if (checked) {
+                                    activeSelectedIds + visibleSelectableIds
+                                } else {
+                                    activeSelectedIds - visibleSelectableIds
+                                }
+                                bulkFeedbackMessage = null
+                            },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = GoldPrimary,
+                                checkmarkColor = StudioBlack,
+                                uncheckedColor = GoldLight
+                            )
+                        )
+                        Text(
+                            text = if (isHindi) {
+                                "सभी दृश्यमान चुनें (${visibleSelectableIds.size})"
+                            } else {
+                                "Select All (${visibleSelectableIds.size})"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            color = if (activeSelectedIds.isNotEmpty()) GoldContainer else StudioElevatedSurface,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = if (isHindi) "${activeSelectedIds.size} चयनित" else "${activeSelectedIds.size} selected",
+                                color = if (activeSelectedIds.isNotEmpty()) GoldLight else TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        if (activeSelectedIds.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    selectedModelIds = emptySet()
+                                    bulkFeedbackMessage = null
+                                },
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("admin_model_bulk_clear_btn")
+                            ) {
+                                Text(
+                                    text = if (isHindi) "साफ़ करें" else "Clear",
+                                    color = GoldLight,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            bulkDialogError = null
+                            bulkActionNote = ""
+                            showBulkApproveDialog = true
+                        },
+                        enabled = activeSelectedIds.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GoldPrimary,
+                            contentColor = StudioBlack,
+                            disabledContainerColor = StudioElevatedSurface,
+                            disabledContentColor = TextSecondary
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("admin_model_bulk_approve_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isHindi) {
+                                "बल्क स्वीकृत (${activeSelectedIds.size})"
+                            } else {
+                                "Bulk Approve (${activeSelectedIds.size})"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            bulkDialogError = null
+                            bulkActionNote = ""
+                            showBulkRejectDialog = true
+                        },
+                        enabled = activeSelectedIds.isNotEmpty(),
+                        border = BorderStroke(
+                            1.dp,
+                            if (activeSelectedIds.isNotEmpty()) ErrorRed else StudioOutline
+                        ),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = ErrorRed,
+                            disabledContentColor = TextSecondary
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("admin_model_bulk_reject_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isHindi) {
+                                "बल्क अस्वीकार (${activeSelectedIds.size})"
+                            } else {
+                                "Bulk Reject (${activeSelectedIds.size})"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                bulkFeedbackMessage?.let { msg ->
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GoldLight,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag("admin_model_bulk_feedback")
+                    )
+                }
+            }
+        }
+
+        if (showBulkApproveDialog) {
+            AlertDialog(
+                onDismissRequest = { showBulkApproveDialog = false },
+                containerColor = StudioCardSurface,
+                title = {
+                    Text(
+                        text = if (isHindi) "बल्क मॉडल स्वीकृति" else "Bulk Approve Models",
+                        color = GoldLight,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = if (isHindi) {
+                                "${activeSelectedIds.size} चयनित मॉडल(स) को आधिकारिक स्टूडियो रोस्टर में स्वीकृत करें। 18+ आयु या सहमति के बिना आवेदन स्वतः छोड़े जाएंगे।"
+                            } else {
+                                "Approve ${activeSelectedIds.size} selected model(s) into the Official Studio Roster simultaneously. Applicants under 18 or missing consent will be skipped automatically."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        OutlinedTextField(
+                            value = bulkActionNote,
+                            onValueChange = {
+                                bulkActionNote = it
+                                bulkDialogError = null
+                            },
+                            label = {
+                                Text(
+                                    text = if (isHindi) "बल्क नोट (वैकल्पिक)" else "Bulk Note (Optional)",
+                                    fontSize = 12.sp
+                                )
+                            },
+                            singleLine = false,
+                            maxLines = 2,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        bulkDialogError?.let { err ->
+                            Text(text = err, color = ErrorRed, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val plan = evaluateBulkModelUpdate(
+                                models = models,
+                                selectedIds = activeSelectedIds,
+                                newStatus = "approved",
+                                bulkNote = bulkActionNote,
+                                isHindi = isHindi
+                            )
+                            if (plan.error != null) {
+                                bulkDialogError = plan.error
+                            } else {
+                                plan.eligible.forEach { (m, note) ->
+                                    onUpdateModelStatus(m.id, "approved", note)
+                                }
+                                selectedModelIds = emptySet()
+                                bulkFeedbackMessage = if (isHindi) {
+                                    "बल्क अपडेट पूर्ण: ${plan.eligible.size} स्वीकृत" +
+                                        if (plan.skippedCount > 0) ", ${plan.skippedCount} छोड़े गए।" else "।"
+                                } else {
+                                    "Bulk update complete: ${plan.eligible.size} approved" +
+                                        if (plan.skippedCount > 0) ", ${plan.skippedCount} skipped." else "."
+                                }
+                                showBulkApproveDialog = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary, contentColor = StudioBlack)
+                    ) {
+                        Text(if (isHindi) "स्वीकृत करें" else "Approve All", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBulkApproveDialog = false }) {
+                        Text(if (isHindi) "रद्द करें" else "Cancel", color = TextSecondary)
+                    }
+                }
+            )
+        }
+
+        if (showBulkRejectDialog) {
+            AlertDialog(
+                onDismissRequest = { showBulkRejectDialog = false },
+                containerColor = StudioCardSurface,
+                title = {
+                    Text(
+                        text = if (isHindi) "बल्क मॉडल अस्वीकृति" else "Bulk Reject Models",
+                        color = ErrorRed,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = if (isHindi) {
+                                "${activeSelectedIds.size} चयनित मॉडल(स) को अस्वीकार करने के लिए संक्षिप्त कारण दर्ज करें।"
+                            } else {
+                                "Enter a brief reason to reject ${activeSelectedIds.size} selected model(s) simultaneously."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        OutlinedTextField(
+                            value = bulkActionNote,
+                            onValueChange = {
+                                bulkActionNote = it
+                                bulkDialogError = null
+                            },
+                            label = {
+                                Text(
+                                    text = if (isHindi) "अस्वीकृति कारण *" else "Rejection Reason *",
+                                    fontSize = 12.sp
+                                )
+                            },
+                            singleLine = false,
+                            maxLines = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        bulkDialogError?.let { err ->
+                            Text(text = err, color = ErrorRed, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val plan = evaluateBulkModelUpdate(
+                                models = models,
+                                selectedIds = activeSelectedIds,
+                                newStatus = "rejected",
+                                bulkNote = bulkActionNote,
+                                isHindi = isHindi
+                            )
+                            if (plan.error != null) {
+                                bulkDialogError = plan.error
+                            } else {
+                                plan.eligible.forEach { (m, note) ->
+                                    onUpdateModelStatus(m.id, "rejected", note)
+                                }
+                                selectedModelIds = emptySet()
+                                bulkFeedbackMessage = if (isHindi) {
+                                    "बल्क अपडेट पूर्ण: ${plan.eligible.size} अस्वीकृत।"
+                                } else {
+                                    "Bulk update complete: ${plan.eligible.size} rejected."
+                                }
+                                showBulkRejectDialog = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ErrorRed, contentColor = Color.White)
+                    ) {
+                        Text(if (isHindi) "अस्वीकार करें" else "Reject All", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBulkRejectDialog = false }) {
+                        Text(if (isHindi) "रद्द करें" else "Cancel", color = TextSecondary)
+                    }
+                }
+            )
+        }
+
         if (filteredModels.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -457,9 +926,21 @@ fun AdminModelVerificationSection(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(filteredModels, key = { it.id.ifBlank { "${it.userId}_${it.fullName}" } }) { model ->
+                    val isSelected = model.id.isNotBlank() && activeSelectedIds.contains(model.id)
                     AdminModelVerificationCard(
                         model = model,
                         language = language,
+                        isBulkSelected = isSelected,
+                        onToggleBulkSelect = { checked ->
+                            if (model.id.isNotBlank()) {
+                                selectedModelIds = if (checked) {
+                                    activeSelectedIds + model.id
+                                } else {
+                                    activeSelectedIds - model.id
+                                }
+                                bulkFeedbackMessage = null
+                            }
+                        },
                         onUpdate = onUpdateModelStatus
                     )
                 }
@@ -472,6 +953,8 @@ fun AdminModelVerificationSection(
 fun AdminModelVerificationCard(
     model: ModelRegistration,
     language: AppLanguage = AppLanguage.ENGLISH,
+    isBulkSelected: Boolean = false,
+    onToggleBulkSelect: ((Boolean) -> Unit)? = null,
     onUpdate: (String, String, String) -> Unit
 ) {
     val isHindi = language == AppLanguage.HINDI
@@ -505,14 +988,18 @@ fun AdminModelVerificationCard(
             .fillMaxWidth()
             .border(
                 BorderStroke(
-                    1.2.dp,
-                    Brush.horizontalGradient(
-                        listOf(
-                            itemStatus.primaryColor.copy(alpha = 0.75f),
-                            itemStatus.borderColor.copy(alpha = 0.45f),
-                            StudioOutline
+                    if (isBulkSelected) 2.dp else 1.2.dp,
+                    if (isBulkSelected) {
+                        Brush.horizontalGradient(listOf(GoldPrimary, GoldLight, GoldPrimary))
+                    } else {
+                        Brush.horizontalGradient(
+                            listOf(
+                                itemStatus.primaryColor.copy(alpha = 0.75f),
+                                itemStatus.borderColor.copy(alpha = 0.45f),
+                                StudioOutline
+                            )
                         )
-                    )
+                    }
                 ),
                 RoundedCornerShape(16.dp)
             )
@@ -526,19 +1013,71 @@ fun AdminModelVerificationCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Header: Applicant Name + Status Badge
+            // Header: Bulk Select Checkbox + Applicant Name + Verified Roster Icon Badge + Status Badge
+            val hasFullDocumentation = hasCompletedRosterDocumentation(model)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = model.fullName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = GoldLight
+                if (onToggleBulkSelect != null) {
+                    Checkbox(
+                        checked = isBulkSelected,
+                        onCheckedChange = onToggleBulkSelect,
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = GoldPrimary,
+                            checkmarkColor = StudioBlack,
+                            uncheckedColor = GoldLight
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("admin_model_bulk_select_${model.id}")
                     )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = model.fullName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = GoldLight,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (hasFullDocumentation) {
+                            Surface(
+                                color = Color(0xFF1D2A1F),
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.85f)),
+                                modifier = Modifier.testTag("admin_verified_roster_badge_${model.id}")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.VerifiedUser,
+                                        contentDescription = if (isHindi) "सत्यापित रोस्टर" else "Verified Roster",
+                                        tint = SuccessGreen,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = if (isHindi) "सत्यापित रोस्टर" else "Verified Roster",
+                                        color = GoldLight,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = 0.2.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Text(
                         text = "${model.gender} • ${model.city}",
                         style = MaterialTheme.typography.bodySmall,

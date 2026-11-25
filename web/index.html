@@ -149,7 +149,7 @@
     }
   </script>
 </head>
-<body>
+<body class="auth-gate-active auth-checking">
   <header class="topbar">
     <div class="container topbar-inner">
       <a href="#home" class="brand" data-route="home">
@@ -203,8 +203,123 @@
       <button id="bannerInstallCtaBtn" class="btn-gold" type="button" data-i18n="installBtn">Install App</button>
     </div>
 
+    <!-- MANDATORY ACCOUNT ACCESS GATE (LOGIN / CREATE ACCOUNT) -->
+    <section id="view-auth" class="view-section auth-gate-section" aria-label="Account Access">
+      <div class="studio-card auth-gate-card">
+        <div class="auth-gate-brand">
+          <img src="/icons/brand-logo-white-v45.png" alt="STAR ARTIST STUDIO Logo" class="auth-gate-logo" width="76" height="76" />
+          <span class="eyebrow" data-i18n="authGateEyebrow">REGISTERED MEMBERS ONLY</span>
+          <h2 class="auth-gate-title" data-i18n="authGateTitle">Welcome to STAR ARTIST STUDIO</h2>
+          <p class="auth-gate-subtitle" data-i18n="authGateSubtitle">
+            Create an account first or sign in with your registered account to access bookings, 18+ model casting, company services, and studio gallery. Guest access is disabled.
+          </p>
+        </div>
+
+        <p id="authSessionCheckingNote" class="auth-checking-note" data-i18n="authCheckingSession">
+          Verifying your registered session…
+        </p>
+
+        <div class="auth-gate-tabs" role="tablist" aria-label="Authentication Mode">
+          <button
+            id="authTabLoginBtn"
+            type="button"
+            class="auth-tab-btn active"
+            role="tab"
+            aria-selected="true"
+            aria-controls="authLoginPanel"
+            data-auth-tab="login"
+            data-i18n="authTabLogin"
+          >Sign In</button>
+          <button
+            id="authTabSignupBtn"
+            type="button"
+            class="auth-tab-btn"
+            role="tab"
+            aria-selected="false"
+            aria-controls="authSignupPanel"
+            data-auth-tab="signup"
+            data-i18n="authTabSignup"
+          >Create Account / Sign Up</button>
+        </div>
+
+        <div id="authGateAlert" class="auth-gate-alert hidden" role="alert" aria-live="polite"></div>
+
+        <p id="authAdminGateHint" class="auth-admin-hint hidden" data-i18n="authAdminNotice">
+          Admin Dashboard access is restricted exclusively to the authorized Studio Administrator Gmail account. Sign in with Google to continue.
+        </p>
+
+        <!-- LOGIN PANEL (EXISTING REGISTERED ACCOUNTS ONLY) -->
+        <div id="authLoginPanel" class="auth-gate-panel" role="tabpanel" aria-labelledby="authTabLoginBtn">
+          <p class="auth-panel-note" data-i18n="authLoginPanelNote">
+            Sign in with your existing registered account. New visitors must register on Create Account / Sign Up first.
+          </p>
+
+          <button id="loginGoogleBtn" class="btn-gold auth-full-btn" type="button" data-i18n="authLoginGoogleBtn">
+            Sign In with Registered Google Account
+          </button>
+
+          <div class="auth-divider"><span data-i18n="orEmail">or sign in with email</span></div>
+
+          <form id="loginAuthForm" class="form-grid" novalidate>
+            <div class="field">
+              <label for="loginEmail" data-i18n="emailLabel">Email Address</label>
+              <input id="loginEmail" type="email" class="input" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="loginPassword" data-i18n="passwordLabel">Password</label>
+              <input id="loginPassword" type="password" class="input" autocomplete="current-password" required minlength="6" />
+            </div>
+            <button id="loginSubmitBtn" type="submit" class="btn-gold auth-full-btn" data-i18n="signInSubmit">Sign In</button>
+          </form>
+
+          <div class="auth-switch-row">
+            <span data-i18n="authNoAccountPrompt">New to STAR ARTIST STUDIO?</span>
+            <button id="switchToSignupBtn" type="button" class="auth-inline-link" data-auth-tab="signup" data-i18n="authCreateAccountLink">Create Account / Sign Up</button>
+          </div>
+        </div>
+
+        <!-- CREATE ACCOUNT / SIGN UP PANEL (MANDATORY FOR NEW USERS) -->
+        <div id="authSignupPanel" class="auth-gate-panel hidden" role="tabpanel" aria-labelledby="authTabSignupBtn" hidden>
+          <p class="auth-panel-note" data-i18n="authSignupPanelNote">
+            Register your free STAR ARTIST STUDIO account to unlock all studio services, bookings, and casting tools.
+          </p>
+
+          <button id="signupGoogleBtn" class="btn-gold auth-full-btn" type="button" data-i18n="authSignupGoogleBtn">
+            Create Account with Google
+          </button>
+
+          <div class="auth-divider"><span data-i18n="authOrRegisterEmail">or register with email</span></div>
+
+          <form id="signupAuthForm" class="form-grid" novalidate>
+            <div class="field">
+              <label for="signupFullName" data-i18n="authFullNameLabel">Full Name</label>
+              <input id="signupFullName" type="text" class="input" autocomplete="name" required minlength="2" maxlength="100" />
+            </div>
+            <div class="field">
+              <label for="signupEmail" data-i18n="emailLabel">Email Address</label>
+              <input id="signupEmail" type="email" class="input" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="signupPassword" data-i18n="passwordLabel">Password</label>
+              <input id="signupPassword" type="password" class="input" autocomplete="new-password" required minlength="6" maxlength="128" />
+            </div>
+            <div class="field">
+              <label for="signupConfirmPassword" data-i18n="authConfirmPasswordLabel">Confirm Password</label>
+              <input id="signupConfirmPassword" type="password" class="input" autocomplete="new-password" required minlength="6" maxlength="128" />
+            </div>
+            <button id="signupSubmitBtn" type="submit" class="btn-gold auth-full-btn" data-i18n="registerSubmit">Create Account</button>
+          </form>
+
+          <div class="auth-switch-row">
+            <span data-i18n="authHaveAccountPrompt">Already have an account?</span>
+            <button id="switchToLoginBtn" type="button" class="auth-inline-link" data-auth-tab="login" data-i18n="signInSubmit">Sign In</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- HOME VIEW -->
-    <section id="view-home" class="view-section">
+    <section id="view-home" class="view-section hidden" hidden>
       <div class="hero-grid">
         <div class="hero-card">
           <span class="eyebrow" data-i18n="heroBadge">BESPOKE LUXURY PRODUCTION</span>

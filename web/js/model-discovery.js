@@ -456,7 +456,73 @@ export function renderModelProfileModalHtml(
             data-shoot-booking-model-id="${escapeHtml(model.id)}"
             data-shoot-booking-model-name="${escapeHtml(model.fullName)}"
           >${escapeHtml(t("castingShootBookingBtn"))}</button>
+          <button
+            type="button"
+            class="btn-outline public-model-share-btn"
+            data-share-model-profile="${escapeHtml(model.id)}"
+            data-share-model-name="${escapeHtml(model.fullName)}"
+            aria-label="${escapeHtml(t("castingShareBtn"))} ${escapeHtml(model.fullName)}"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="18" cy="5" r="3"></circle>
+              <circle cx="6" cy="12" r="3"></circle>
+              <circle cx="18" cy="19" r="3"></circle>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+            <span class="share-btn-label">${escapeHtml(t("castingShareBtn"))}</span>
+          </button>
         </div>
       </div>
     </div>`;
+}
+
+export const DEFAULT_STUDIO_PUBLIC_ORIGIN = "https://gen-lang-client-0548683163.web.app";
+
+/**
+ * Builds a privacy-safe direct shareable URL for a verified public model profile
+ * (contains only the public model document ID — never phone, email, or address).
+ */
+export function buildModelProfileShareUrl(
+  modelId,
+  { origin = DEFAULT_STUDIO_PUBLIC_ORIGIN } = {}
+) {
+  const cleanId = String(modelId || "").trim();
+  if (!cleanId) return "";
+  const rawOrigin = String(origin || "").trim();
+  const safeOrigin = /^https?:\/\/[^/\s]+/i.test(rawOrigin)
+    ? rawOrigin.replace(/\/+$/, "")
+    : DEFAULT_STUDIO_PUBLIC_ORIGIN;
+  return `${safeOrigin}/#companies?model=${encodeURIComponent(cleanId)}`;
+}
+
+/**
+ * Extracts a deep-linked public model ID from either the URL hash (#companies?model=<id>)
+ * or standard query string (?model=<id>).
+ */
+export function extractSharedModelIdFromUrl({ hash = "", search = "" } = {}) {
+  const cleanHash = String(hash || "").trim();
+  const hashQueryIdx = cleanHash.indexOf("?");
+  if (hashQueryIdx !== -1) {
+    try {
+      const hashParams = new URLSearchParams(cleanHash.slice(hashQueryIdx + 1));
+      const id = String(hashParams.get("model") || "").trim();
+      if (id) return id;
+    } catch {
+      // Ignore malformed hash params
+    }
+  }
+
+  const cleanSearch = String(search || "").trim();
+  if (cleanSearch) {
+    try {
+      const searchParams = new URLSearchParams(cleanSearch.startsWith("?") ? cleanSearch : `?${cleanSearch}`);
+      const id = String(searchParams.get("model") || "").trim();
+      if (id) return id;
+    } catch {
+      // Ignore malformed query params
+    }
+  }
+
+  return "";
 }

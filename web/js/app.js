@@ -12,7 +12,9 @@ import {
   renderCatalogFeedbackHtml
 } from "./catalog-reviews.js";
 import {
+  filterModelApplications,
   validateManualModelVerification,
+  evaluateBulkModelUpdate,
   renderAdminModelsSectionHtml
 } from "./admin-models.js";
 import {
@@ -22,6 +24,15 @@ import {
   resolveSafeRoute,
   syncAdminUiVisibility
 } from "./admin-guard.js";
+import {
+  isAuthenticatedMember,
+  extractAuthRouteFromUrl,
+  resolveAuthenticatedAccess,
+  validateRegistrationInput,
+  validateLoginInput,
+  mapFirebaseAuthError,
+  syncAuthGateDom
+} from "./auth-gate.js";
 import {
   mountModelGrowthChart,
   unmountModelGrowthChart
@@ -118,7 +129,9 @@ import {
   getAvailableStatesFromModels,
   getAvailableCitiesFromModels,
   countActiveDiscoveryFilters,
-  renderModelProfileModalHtml
+  renderModelProfileModalHtml,
+  buildModelProfileShareUrl,
+  extractSharedModelIdFromUrl
 } from "./model-discovery.js";
 import {
   MAX_PORTFOLIO_PHOTOS,
@@ -195,7 +208,9 @@ import {
 const state = {
   lang: localStorage.getItem("star_artist_lang") === "hi" ? "hi" : "en",
   theme: localStorage.getItem("star_artist_theme") === "light" ? "light" : "dark",
-  route: "home",
+  route: "login",
+  authMode: "login",
+  postAuthRoute: "home",
   user: null,
   isAdmin: false,
   authResolved: false,
@@ -213,6 +228,9 @@ const state = {
   adminModelFilter: "pending",
   adminModelSearch: "",
   adminModelDrafts: {},
+  adminSelectedModelIds: [],
+  adminBulkModelNote: "",
+  adminBulkUpdating: false,
   adminCompanyFilter: "all",
   adminCompanySearch: "",
   adminCompanyNoteDrafts: {},
@@ -235,6 +253,7 @@ const state = {
   publicModels: mergePublicModels([]),
   publicModelFilters: { ...DEFAULT_MODEL_DISCOVERY_FILTERS, skills: [] },
   activeProfileModelId: null,
+  pendingSharedModelId: "",
   myCompanyProfile: null,
   myCompanyBookings: [],
   selectedRequestedModels: [],
@@ -385,7 +404,44 @@ function hasVerifiedAdminSession() {
   return Boolean(state.isAdmin && isAuthorizedAdminUser(state.user));
 }
 
-function openAuthModal({ adminNotice = false } = {}) {
+function setAuthGateAlert(message = "", { isInfo = false } = {}) {
+  const alertEl = document.getElementById("authGateAlert");
+  if (!alertEl) return;
+  const clean = String(message || "").trim();
+  alertEl.textContent = clean;
+  alertEl.classList.toggle("hidden", !clean);
+  alertEl.classList.toggle("is-info", Boolean(clean && isInfo));
+}
+
+function setAuthMode(mode = "login", { updateUrl = true, clearAlert = true, adminNotice = false } = {}) {
+  const normalized = mode === "signup" ? "signup" : "login";
+  state.authMode = normalized;
+  if (clearAlert) {
+    setAuthGateAlert("");
+  }
+  const adminGateHint = document.getElementById("authAdminGateHint");
+  if (adminGateHint) {
+    adminGateHint.classList.toggle("hidden", !adminNotice);
+  }
+  syncAuthGateDom(document, {
+    isAuthenticated: isAuthenticatedMember(state.user),
+    authMode: normalized,
+    authResolved: state.authResolved
+  });
+  if (updateUrl && !isAuthenticatedMember(state.user)) {
+    const targetHash = `#${normalized}`;
+    if (window.location.hash !== targetHash) {
+      history.replaceState(null, "", `/${targetHash}`);
+    }
+  }
+}
+
+function openAuthModal({ adminNotice = false, mode = "login" } = {}) {
+  if (!isAuthenticatedMember(state.user)) {
+    setAuthMode(mode, { updateUrl: true, clearAlert: false, adminNotice });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
   const hint = document.getElementById("authAdminHint");
   if (hint) {
     hint.classList.toggle("hidden", !adminNotice);
@@ -400,50 +456,93 @@ function closeAuthModal() {
 
 function navigateTo(route, { silentBlock = false } = {}) {
   const validRoutes = ["home", "catalog", "booking", "models", "companies", "gallery", "admin"];
+  const authenticated = isAuthenticatedMember(state.user);
   const isAdminNow = hasVerifiedAdminSession();
-  const resolution = resolveSafeRoute({
+  const access = resolveAuthenticatedAccess({
     requestedRoute: route,
     pathname: window.location.pathname,
     hash: window.location.hash,
     search: window.location.search,
-    isAdmin: isAdminNow
+    user: state.user,
+    isAdmin: isAdminNow,
+    postAuthRoute: state.postAuthRoute
   });
 
-  if (resolution.blockedAdminAttempt) {
+  if (!access.authenticated) {
+    if (access.postAuthRoute && access.postAuthRoute !== "login" && access.postAuthRoute !== "signup") {
+      state.postAuthRoute = access.postAuthRoute;
+    }
+    if (access.blockedAdminAttempt) {
+      syncAdminUiVisibility(document, { isAdmin: false });
+      state.pendingAdminRoute = true;
+    }
+    state.route = access.route;
+    state.authMode = access.authMode;
+
+    validRoutes.forEach((r) => {
+      const sec = document.getElementById(`view-${r}`);
+      if (!sec) return;
+      sec.classList.add("hidden");
+      sec.hidden = true;
+      if (r === "admin") {
+        sec.setAttribute("aria-hidden", "true");
+      }
+    });
+
+    syncAuthGateDom(document, {
+      isAuthenticated: false,
+      authMode: access.authMode,
+      authResolved: state.authResolved
+    });
+
+    const adminGateHint = document.getElementById("authAdminGateHint");
+    if (adminGateHint) {
+      adminGateHint.classList.toggle("hidden", !access.blockedAdminAttempt);
+    }
+
+    const authHash = `#${access.authMode}`;
+    if (access.shouldNormalizeUrl || window.location.hash !== authHash) {
+      history.replaceState(null, "", `/${authHash}`);
+    }
+
+    if (!silentBlock && state.authResolved && route && route !== "login" && route !== "signup") {
+      showToast(access.blockedAdminAttempt ? t("adminSignInRequiredToast") : t("authMustSignInToast"));
+    }
+    return;
+  }
+
+  syncAuthGateDom(document, {
+    isAuthenticated: true,
+    authMode: state.authMode,
+    authResolved: state.authResolved
+  });
+
+  if (access.blockedAdminAttempt) {
     syncAdminUiVisibility(document, { isAdmin: false });
-    if (resolution.shouldNormalizeUrl) {
+    if (access.shouldNormalizeUrl) {
       history.replaceState(null, "", "/#home");
     }
-    if (!state.authResolved) {
-      state.pendingAdminRoute = true;
-    } else if (!silentBlock) {
-      if (state.user) {
-        showToast(t("adminAccessDeniedToast"));
-      } else {
-        state.pendingAdminRoute = true;
-        showToast(t("adminSignInRequiredToast"));
-        if (state.firebaseReady) {
-          openAuthModal({ adminNotice: true });
-        } else {
-          showToast(t("firebaseReconnectingToast"));
-          connectFirebaseCloud().then((ready) => {
-            if (ready) openAuthModal({ adminNotice: true });
-          });
-        }
-      }
+    if (!silentBlock && state.authResolved) {
+      showToast(t("adminAccessDeniedToast"));
     }
   }
 
-  const target = resolution.route;
+  const target = access.route;
   state.route = target;
-  if (resolution.shouldNormalizeUrl || window.location.hash !== `#${target}`) {
-    history.replaceState(null, "", `/#${target}`);
+  state.postAuthRoute = target;
+  const preservedModelId =
+    target === "companies" ? (state.activeProfileModelId || state.pendingSharedModelId) : "";
+  const desiredHash = preservedModelId
+    ? `#companies?model=${encodeURIComponent(preservedModelId)}`
+    : `#${target}`;
+  if (access.shouldNormalizeUrl || window.location.hash !== desiredHash) {
+    history.replaceState(null, "", `/${desiredHash}`);
   }
 
   validRoutes.forEach((r) => {
     const sec = document.getElementById(`view-${r}`);
     if (!sec) return;
-    const show = r === target && (r !== "admin" || isAdminNow);
+    const show = authenticated && r === target && (r !== "admin" || isAdminNow);
     sec.classList.toggle("hidden", !show);
     sec.hidden = !show;
     if (r === "admin") {
@@ -899,19 +998,105 @@ function renderActiveModelProfileModal() {
   });
 }
 
-function openModelProfileModal(modelId) {
+function openModelProfileModal(modelId, { updateUrl = true } = {}) {
   const modal = document.getElementById("modelProfileModal");
   if (!modal) return;
   const model = state.publicModels.find((m) => m.id === modelId);
   if (!model) return;
   state.activeProfileModelId = model.id;
+  state.pendingSharedModelId = "";
   renderActiveModelProfileModal();
   modal.classList.remove("hidden");
+  if (updateUrl && state.route === "companies") {
+    const shareHash = `#companies?model=${encodeURIComponent(model.id)}`;
+    if (window.location.hash !== shareHash) {
+      history.replaceState(null, "", `/${shareHash}`);
+    }
+  }
 }
 
 function closeModelProfileModal() {
   state.activeProfileModelId = null;
+  state.pendingSharedModelId = "";
   document.getElementById("modelProfileModal")?.classList.add("hidden");
+  if (window.location.hash.includes("?model=")) {
+    history.replaceState(null, "", `/#${state.route || "companies"}`);
+  }
+}
+
+function tryOpenPendingSharedModelProfile() {
+  const targetId = String(state.pendingSharedModelId || "").trim();
+  if (!targetId) return false;
+  const match = state.publicModels.find((m) => m.id === targetId);
+  if (!match) return false;
+  if (state.route !== "companies") {
+    navigateTo("companies", { silentBlock: true });
+  }
+  openModelProfileModal(match.id, { updateUrl: true });
+  return true;
+}
+
+async function copyModelProfileLink(modelId, modelName, triggerBtn = null) {
+  const shareUrl = buildModelProfileShareUrl(modelId, {
+    origin: window.location.origin
+  });
+  if (!shareUrl) return;
+
+  let copied = false;
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+  }
+
+  if (!copied) {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = shareUrl;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-9999px";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, shareUrl.length);
+      copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+    } catch {
+      copied = false;
+    }
+  }
+
+  const resolvedName =
+    modelName ||
+    state.publicModels.find((m) => m.id === modelId)?.fullName ||
+    "Roster Model";
+
+  if (copied) {
+    showToast(t("castingShareCopiedToast").replace("{name}", resolvedName));
+    if (triggerBtn) {
+      triggerBtn.classList.add("is-copied");
+      const labelEl = triggerBtn.querySelector(".share-btn-label");
+      if (labelEl) {
+        labelEl.textContent = `✓ ${t("castingShareCopiedBtn")}`;
+      }
+      if (triggerBtn._copiedResetTimer) {
+        clearTimeout(triggerBtn._copiedResetTimer);
+      }
+      triggerBtn._copiedResetTimer = setTimeout(() => {
+        triggerBtn.classList.remove("is-copied");
+        const activeLabel = triggerBtn.querySelector(".share-btn-label");
+        if (activeLabel) {
+          activeLabel.textContent = t("castingShareBtn");
+        }
+      }, 2200);
+    }
+  } else {
+    showToast(t("castingShareFailedToast"));
+  }
 }
 
 function resetModelDiscoveryFilters() {
@@ -1309,12 +1494,17 @@ function renderAdminConsole() {
       : `<div class="studio-card"><p style="margin:0;color:var(--text-secondary);">${escapeHtml(t("adminNoBookingsDesc"))}</p></div>`;
     body.innerHTML = `${toolbarHtml}${bookingsCardsHtml}`;
   } else if (state.adminTab === "models") {
+    const validIds = new Set((state.adminData.models || []).map((m) => String(m?.id || "")));
+    state.adminSelectedModelIds = (state.adminSelectedModelIds || []).filter((id) => validIds.has(String(id)));
     body.innerHTML = renderAdminModelsSectionHtml({
       models: state.adminData.models,
       filter: state.adminModelFilter,
       searchQuery: state.adminModelSearch,
       drafts: state.adminModelDrafts,
       experienceScope: state.adminModelExperienceScope,
+      selectedIds: state.adminSelectedModelIds,
+      bulkNote: state.adminBulkModelNote,
+      bulkBusy: state.adminBulkUpdating,
       lang: state.lang,
       t
     });
@@ -1425,6 +1615,7 @@ async function refreshCloudData() {
     if (publicModelsRes.status === "fulfilled") {
       state.publicModels = mergePublicModels(publicModelsRes.value);
       renderPublicModels();
+      tryOpenPendingSharedModelProfile();
     }
     if (weddingConfigsRes.status === "fulfilled") {
       state.weddingPackageConfigs = weddingConfigsRes.value;
@@ -2310,6 +2501,86 @@ function wireEvents() {
       return;
     }
 
+    const admBulkClearBtn = e.target.closest("[data-adm-model-bulk-clear]");
+    if (admBulkClearBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminSelectedModelIds = [];
+      renderAdminConsole();
+      return;
+    }
+
+    const admBulkActionBtn = e.target.closest("[data-adm-model-bulk-action]");
+    if (admBulkActionBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      if (state.adminBulkUpdating) return;
+      const nextStatus = admBulkActionBtn.getAttribute("data-adm-model-bulk-action") || "";
+      const evaluation = evaluateBulkModelUpdate({
+        models: state.adminData.models || [],
+        selectedIds: state.adminSelectedModelIds || [],
+        nextStatus,
+        bulkNote: state.adminBulkModelNote || "",
+        drafts: state.adminModelDrafts || {},
+        lang: state.lang
+      });
+      if (!evaluation.ok) {
+        showToast(evaluation.error || "Unable to run bulk model action.");
+        return;
+      }
+      const actionVerb = evaluation.status === "approved" ? "Approve" : "Reject";
+      if (
+        !window.confirm(
+          `${actionVerb} ${evaluation.eligible.length} selected model(s) simultaneously?${
+            evaluation.skipped.length > 0
+              ? ` (${evaluation.skipped.length} ineligible model(s) will be skipped.)`
+              : ""
+          }`
+        )
+      ) {
+        return;
+      }
+
+      state.adminBulkUpdating = true;
+      renderAdminConsole();
+      try {
+        const results = await Promise.allSettled(
+          evaluation.eligible.map(({ model, adminNotes }) =>
+            adminUpdateModelStatus(model.id, evaluation.status, adminNotes, model)
+          )
+        );
+        let succeeded = 0;
+        let failed = 0;
+        results.forEach((res, idx) => {
+          const item = evaluation.eligible[idx];
+          if (res.status === "fulfilled") {
+            succeeded += 1;
+            if (item?.model?.id) {
+              delete state.adminModelDrafts[item.model.id];
+            }
+          } else {
+            failed += 1;
+          }
+        });
+        state.adminSelectedModelIds = [];
+        state.adminBulkModelNote = "";
+        const label = evaluation.status === "approved" ? "approved" : "rejected";
+        const parts = [`${succeeded} ${label}`];
+        if (evaluation.skipped.length > 0) parts.push(`${evaluation.skipped.length} skipped`);
+        if (failed > 0) parts.push(`${failed} failed`);
+        showToast(`Bulk update complete: ${parts.join(", ")}.`);
+        await loadAdminConsole();
+        await refreshCloudData();
+      } catch (bulkErr) {
+        showToast(bulkErr?.message || "Bulk model update failed.");
+      } finally {
+        state.adminBulkUpdating = false;
+        renderAdminConsole();
+      }
+      return;
+    }
+
     if (e.target.matches("[data-adm-bk-id]")) {
       if (!hasVerifiedAdminSession()) {
         showToast(t("adminAccessDeniedToast"));
@@ -2482,6 +2753,11 @@ function wireEvents() {
       const btn = e.target.closest("[data-view-model-profile]");
       const modelId = btn.getAttribute("data-view-model-profile");
       if (modelId) openModelProfileModal(modelId);
+    } else if (e.target.closest("[data-share-model-profile]")) {
+      const btn = e.target.closest("[data-share-model-profile]");
+      const modelId = btn.getAttribute("data-share-model-profile");
+      const fullName = btn.getAttribute("data-share-model-name") || "Roster Model";
+      if (modelId) copyModelProfileLink(modelId, fullName, btn);
     } else if (e.target.closest("[data-shoot-booking-model-id]")) {
       const btn = e.target.closest("[data-shoot-booking-model-id]");
       const modelId = btn.getAttribute("data-shoot-booking-model-id");
@@ -2606,6 +2882,38 @@ function wireEvents() {
       return;
     }
 
+    const selectAllInput = e.target.closest("[data-adm-model-select-all]");
+    if (selectAllInput) {
+      if (!hasVerifiedAdminSession()) return;
+      const visibleModels = filterModelApplications(
+        state.adminData.models || [],
+        state.adminModelFilter,
+        state.adminModelSearch
+      );
+      const nextSet = new Set(state.adminSelectedModelIds || []);
+      visibleModels.forEach((m) => {
+        if (!m?.id) return;
+        if (selectAllInput.checked) nextSet.add(String(m.id));
+        else nextSet.delete(String(m.id));
+      });
+      state.adminSelectedModelIds = Array.from(nextSet);
+      renderAdminConsole();
+      return;
+    }
+
+    const selectOneInput = e.target.closest("[data-adm-model-select]");
+    if (selectOneInput) {
+      if (!hasVerifiedAdminSession()) return;
+      const modelId = String(selectOneInput.getAttribute("data-adm-model-select") || "");
+      if (!modelId) return;
+      const nextSet = new Set(state.adminSelectedModelIds || []);
+      if (selectOneInput.checked) nextSet.add(modelId);
+      else nextSet.delete(modelId);
+      state.adminSelectedModelIds = Array.from(nextSet);
+      renderAdminConsole();
+      return;
+    }
+
     const checkInput = e.target.closest("[data-adm-model-check]");
     if (!checkInput) return;
     const modelId = checkInput.getAttribute("data-adm-model-check");
@@ -2624,6 +2932,13 @@ function wireEvents() {
         state.adminEmailPreview.overrides[key] = emailOverrideInput.value;
         refreshEmailPreviewLiveStage();
       }
+      return;
+    }
+
+    const admBulkNoteInput = e.target.closest("[data-adm-model-bulk-note]");
+    if (admBulkNoteInput) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminBulkModelNote = admBulkNoteInput.value || "";
       return;
     }
 
@@ -2807,19 +3122,26 @@ function wireEvents() {
   });
 
   document.getElementById("authActionBtn")?.addEventListener("click", async () => {
-    if (state.user) {
+    if (isAuthenticatedMember(state.user)) {
       await signOutFirebase();
       showToast("Signed out.");
     } else if (!state.firebaseReady) {
       const ready = await connectFirebaseCloud();
       if (ready) {
-        openAuthModal({ adminNotice: false });
+        setAuthMode("login", { updateUrl: true });
       } else {
         showToast(t("firebaseReconnectingToast"));
       }
     } else {
-      openAuthModal({ adminNotice: false });
+      setAuthMode("login", { updateUrl: true });
     }
+  });
+
+  document.querySelectorAll("[data-auth-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const nextMode = btn.getAttribute("data-auth-tab") === "signup" ? "signup" : "login";
+      setAuthMode(nextMode, { updateUrl: true, clearAlert: true });
+    });
   });
 
   document.getElementById("adminSignOutBtn")?.addEventListener("click", async () => {
@@ -3403,13 +3725,91 @@ function wireEvents() {
     }
   });
 
-  document.getElementById("googleSignInBtn")?.addEventListener("click", async () => {
+  const handleGoogleAuth = async (mode = "login") => {
+    setAuthGateAlert("");
     try {
-      await signInWithGooglePopup();
+      if (!state.firebaseReady) {
+        const ready = await connectFirebaseCloud();
+        if (!ready) {
+          const msg = t("firebaseReconnectingToast");
+          setAuthGateAlert(msg);
+          showToast(msg);
+          return;
+        }
+      }
+      const res = await signInWithGooglePopup({ mode });
       closeAuthModal();
-      showToast("Signed in with Google!");
+      if (mode === "signup") {
+        showToast(res?.alreadyRegistered ? t("authGoogleAlreadyRegisteredToast") : t("authSignupSuccessToast"));
+      } else {
+        showToast(t("authLoginSuccessToast"));
+      }
     } catch (err) {
-      showToast(err.message || "Google Sign-In failed");
+      const msg = mapFirebaseAuthError(err, { mode, t });
+      setAuthGateAlert(msg);
+      showToast(msg);
+      if (err?.code === "auth/unregistered-account") {
+        setAuthMode("signup", { updateUrl: true, clearAlert: false });
+      }
+    }
+  };
+
+  document.getElementById("loginGoogleBtn")?.addEventListener("click", () => handleGoogleAuth("login"));
+  document.getElementById("signupGoogleBtn")?.addEventListener("click", () => handleGoogleAuth("signup"));
+  document.getElementById("googleSignInBtn")?.addEventListener("click", () => handleGoogleAuth("login"));
+
+  document.getElementById("loginAuthForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setAuthGateAlert("");
+    const email = document.getElementById("loginEmail")?.value || "";
+    const password = document.getElementById("loginPassword")?.value || "";
+    const validation = validateLoginInput({ email, password });
+    if (!validation.valid) {
+      const msg = t(validation.errorKey);
+      setAuthGateAlert(msg);
+      showToast(msg);
+      return;
+    }
+    try {
+      await signInWithEmailPassword(validation.clean.email, validation.clean.password);
+      e.target.reset();
+      closeAuthModal();
+      showToast(t("authLoginSuccessToast"));
+    } catch (err) {
+      const msg = mapFirebaseAuthError(err, { mode: "login", t });
+      setAuthGateAlert(msg);
+      showToast(msg);
+    }
+  });
+
+  document.getElementById("signupAuthForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setAuthGateAlert("");
+    const fullName = document.getElementById("signupFullName")?.value || "";
+    const email = document.getElementById("signupEmail")?.value || "";
+    const password = document.getElementById("signupPassword")?.value || "";
+    const confirmPassword = document.getElementById("signupConfirmPassword")?.value || "";
+    const validation = validateRegistrationInput({ fullName, email, password, confirmPassword });
+    if (!validation.valid) {
+      const msg = t(validation.errorKey);
+      setAuthGateAlert(msg);
+      showToast(msg);
+      return;
+    }
+    try {
+      await registerWithEmailPassword(validation.clean.email, validation.clean.password, {
+        fullName: validation.clean.fullName
+      });
+      e.target.reset();
+      closeAuthModal();
+      showToast(t("authSignupSuccessToast"));
+    } catch (err) {
+      const msg = mapFirebaseAuthError(err, { mode: "signup", t });
+      setAuthGateAlert(msg);
+      showToast(msg);
+      if (err?.code === "auth/email-already-in-use") {
+        setAuthMode("login", { updateUrl: true, clearAlert: false });
+      }
     }
   });
 
@@ -3421,9 +3821,9 @@ function wireEvents() {
         document.getElementById("authPassword").value
       );
       closeAuthModal();
-      showToast("Signed in!");
+      showToast(t("authLoginSuccessToast"));
     } catch (err) {
-      showToast(err.message);
+      showToast(mapFirebaseAuthError(err, { mode: "login", t }));
     }
   });
 
@@ -3434,9 +3834,9 @@ function wireEvents() {
         document.getElementById("authPassword").value
       );
       closeAuthModal();
-      showToast("Account created! Verification email sent.");
+      showToast(t("authSignupSuccessToast"));
     } catch (err) {
-      showToast(err.message);
+      showToast(mapFirebaseAuthError(err, { mode: "signup", t }));
     }
   });
 
@@ -4218,17 +4618,40 @@ function wireEvents() {
   });
 
   const handleBrowserUrlChange = () => {
-    const requested = extractRequestedRoute({
+    const authUrlRoute = extractAuthRouteFromUrl({
       pathname: window.location.pathname,
       hash: window.location.hash,
       search: window.location.search
     });
-    if (requested !== state.route || isAdminUrlAttempt({
-      pathname: window.location.pathname,
+    const sharedModelId = extractSharedModelIdFromUrl({
       hash: window.location.hash,
       search: window.location.search
-    })) {
+    });
+    if (sharedModelId) {
+      state.pendingSharedModelId = sharedModelId;
+    }
+    const requested = authUrlRoute
+      ? authUrlRoute
+      : sharedModelId
+      ? "companies"
+      : extractRequestedRoute({
+          pathname: window.location.pathname,
+          hash: window.location.hash,
+          search: window.location.search
+        });
+    if (
+      !isAuthenticatedMember(state.user) ||
+      requested !== state.route ||
+      isAdminUrlAttempt({
+        pathname: window.location.pathname,
+        hash: window.location.hash,
+        search: window.location.search
+      })
+    ) {
       navigateTo(requested);
+    }
+    if (sharedModelId && isAuthenticatedMember(state.user)) {
+      tryOpenPendingSharedModelProfile();
     }
   };
   window.addEventListener("hashchange", handleBrowserUrlChange);
@@ -4315,52 +4738,89 @@ async function connectFirebaseCloud() {
 
   if (state.firebaseReady && !authSubscriptionAttached) {
     authSubscriptionAttached = true;
-    await subscribeAuthState(async ({ user, isAdmin, firebaseReady }) => {
-      state.user = user;
-      state.isAdmin = Boolean(isAdmin && isAuthorizedAdminUser(user));
+    await subscribeAuthState(async ({ user, isAdmin, firebaseReady, authError }) => {
+      const authenticated = isAuthenticatedMember(user);
+      state.user = authenticated ? user : null;
+      state.isAdmin = Boolean(authenticated && isAdmin && isAuthorizedAdminUser(user));
       state.authResolved = true;
       state.firebaseReady = firebaseReady;
 
       if (!state.isAdmin) {
         stopAdminRealtimeTracker();
         adminBookingTracker.resetSessionLog();
+        state.adminSelectedModelIds = [];
+        state.adminBulkModelNote = "";
         state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
+      }
+
+      if (!authenticated) {
+        state.myBookings = [];
+        state.myModels = [];
+        state.myNotifications = [];
+        state.myCompanyProfile = null;
+        state.myCompanyBookings = [];
+        closeModelProfileModal();
+        const openLightbox = document.getElementById("lightboxModal");
+        if (openLightbox && !openLightbox.classList.contains("hidden")) {
+          document.getElementById("closeLightboxBtn")?.click();
+        }
       }
 
       updateFirebaseUiStatus();
 
+      if (authError?.code === "auth/unregistered-account") {
+        const msg = mapFirebaseAuthError(authError, { mode: "login", t });
+        setAuthGateAlert(msg);
+        showToast(msg);
+        navigateTo("signup", { silentBlock: true });
+        return;
+      }
+
+      if (!authenticated) {
+        const targetAuthMode = state.authMode === "signup" ? "signup" : "login";
+        navigateTo(targetAuthMode, { silentBlock: true });
+        if (state.pendingAdminRoute) {
+          const adminGateHint = document.getElementById("authAdminGateHint");
+          if (adminGateHint) adminGateHint.classList.remove("hidden");
+        }
+        return;
+      }
+
+      setAuthGateAlert("");
+      closeAuthModal();
+
       if (state.pendingAdminRoute) {
+        state.pendingAdminRoute = false;
         if (state.isAdmin) {
-          state.pendingAdminRoute = false;
-          closeAuthModal();
-          navigateTo("admin");
-        } else if (user) {
-          state.pendingAdminRoute = false;
-          closeAuthModal();
-          navigateTo("home", { silentBlock: true });
-          showToast(t("adminAccessDeniedToast"));
+          navigateTo("admin", { silentBlock: true });
         } else {
           navigateTo("home", { silentBlock: true });
-          const authModal = document.getElementById("authModal");
-          if (authModal?.classList.contains("hidden")) {
-            showToast(t("adminSignInRequiredToast"));
-            openAuthModal({ adminNotice: true });
-          }
+          showToast(t("adminAccessDeniedToast"));
         }
-      } else if (state.route === "admin" && !state.isAdmin) {
-        navigateTo("home", { silentBlock: true });
+      } else {
+        const destination =
+          state.route === "login" || state.route === "signup"
+            ? state.postAuthRoute || "home"
+            : state.route === "admin" && !state.isAdmin
+            ? "home"
+            : state.route;
+        navigateTo(destination, { silentBlock: true });
       }
 
       renderMyBookings();
       renderMyModels();
       renderMyCompanyBookings();
-      if (user) {
-        await syncQueuedBookings();
-      }
+      await syncQueuedBookings();
       await refreshCloudData();
+      tryOpenPendingSharedModelProfile();
     });
   } else if (!state.firebaseReady) {
     state.authResolved = true;
+    syncAuthGateDom(document, {
+      isAuthenticated: isAuthenticatedMember(state.user),
+      authMode: state.authMode,
+      authResolved: true
+    });
     if (state.pendingAdminRoute) {
       state.pendingAdminRoute = false;
       showToast(t("firebaseReconnectingToast"));
@@ -4389,11 +4849,29 @@ async function bootstrap() {
   setupPwaInstall();
   wireEvents();
 
-  const initialRoute = extractRequestedRoute({
+  const initialAuthRoute = extractAuthRouteFromUrl({
     pathname: window.location.pathname,
     hash: window.location.hash,
     search: window.location.search
   });
+  const initialSharedModelId = extractSharedModelIdFromUrl({
+    hash: window.location.hash,
+    search: window.location.search
+  });
+  if (initialSharedModelId) {
+    state.pendingSharedModelId = initialSharedModelId;
+    state.postAuthRoute = "companies";
+  }
+
+  const initialRoute = initialAuthRoute
+    ? initialAuthRoute
+    : initialSharedModelId
+    ? "companies"
+    : extractRequestedRoute({
+        pathname: window.location.pathname,
+        hash: window.location.hash,
+        search: window.location.search
+      });
   navigateTo(initialRoute, { silentBlock: true });
 
   await connectFirebaseCloud();
