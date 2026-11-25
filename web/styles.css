@@ -933,12 +933,19 @@ textarea:focus {
   background: rgba(139, 98, 0, 0.08);
 }
 
-/* Mandatory Member Access Gate (Login / Create Account) */
+/* Mandatory Member Access Gate (Login / Create Account / Password Reset) */
+body.auth-gate-active .view-section:not(#view-auth),
 body.auth-gate-active .desktop-nav,
 body.auth-gate-active .studio-footer,
 body.auth-gate-active #installPromptBanner,
 body.auth-gate-active .bottom-nav-btn[data-route] {
   display: none !important;
+}
+
+.auth-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
 }
 
 body.auth-gate-active .bottom-nav {

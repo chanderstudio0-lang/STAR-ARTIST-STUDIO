@@ -510,6 +510,18 @@ export async function registerWithEmailPassword(email, password, { fullName = ""
   return cred;
 }
 
+function hasVerifiedMemberAuth(ctx) {
+  const u = ctx?.auth?.currentUser;
+  return Boolean(ctx?.ready && u && u.isAnonymous !== true && String(u.uid || "").trim().length > 0);
+}
+
+export async function sendPasswordReset(email) {
+  const ctx = await initFirebaseClient();
+  if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  await ctx.authMod.sendPasswordResetEmail(ctx.auth, cleanEmail);
+}
+
 export async function signOutFirebase() {
   const ctx = await initFirebaseClient();
   if (!ctx.ready) return;
@@ -518,7 +530,7 @@ export async function signOutFirebase() {
 
 export async function fetchApprovedGallery() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) return [];
+  if (!hasVerifiedMemberAuth(ctx)) return [];
   const { fsMod, db } = ctx;
   const q = fsMod.query(
     fsMod.collection(db, "gallery"),
@@ -892,7 +904,7 @@ export async function fetchAnnouncements() {
 
 export async function fetchServiceReviews() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready || !ctx.auth.currentUser) return [];
+  if (!hasVerifiedMemberAuth(ctx)) return [];
   const { fsMod, db } = ctx;
   const snap = await fsMod.getDocs(fsMod.collection(db, "reviews"));
   return snap.docs
@@ -952,7 +964,7 @@ export async function submitCatalogReview({ packageId, serviceType, rating, comm
 
 export async function fetchPublicApprovedModels() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) return [];
+  if (!hasVerifiedMemberAuth(ctx)) return [];
   const { fsMod, db } = ctx;
   const snap = await fsMod.getDocs(fsMod.collection(db, "publicModels"));
   return snap.docs
@@ -1413,7 +1425,7 @@ export async function adminSubscribeTestEmailStatus(testId, { onUpdate, onError 
 
 export async function fetchWeddingPackageConfigs() {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready) return [];
+  if (!hasVerifiedMemberAuth(ctx)) return [];
   const { fsMod, db } = ctx;
   try {
     const snap = await fsMod.getDocs(fsMod.collection(db, "servicePackages"));

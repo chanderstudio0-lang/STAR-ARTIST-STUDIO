@@ -269,6 +269,9 @@
               <label for="loginPassword" data-i18n="passwordLabel">Password</label>
               <input id="loginPassword" type="password" class="input" autocomplete="current-password" required minlength="6" />
             </div>
+            <div class="auth-forgot-row">
+              <button id="forgotPasswordLinkBtn" type="button" class="auth-inline-link" data-auth-tab="reset" data-i18n="authForgotPasswordLink">Forgot password?</button>
+            </div>
             <button id="loginSubmitBtn" type="submit" class="btn-gold auth-full-btn" data-i18n="signInSubmit">Sign In</button>
           </form>
 
@@ -315,11 +318,30 @@
             <button id="switchToLoginBtn" type="button" class="auth-inline-link" data-auth-tab="login" data-i18n="signInSubmit">Sign In</button>
           </div>
         </div>
+
+        <!-- PASSWORD RESET PANEL -->
+        <div id="authResetPanel" class="auth-gate-panel hidden" role="tabpanel" aria-labelledby="forgotPasswordLinkBtn" hidden>
+          <p class="auth-panel-note" data-i18n="authResetPanelNote">
+            Enter your registered email address and we will send you a secure Firebase password reset link.
+          </p>
+
+          <form id="resetPasswordForm" class="form-grid" novalidate>
+            <div class="field">
+              <label for="resetEmail" data-i18n="emailLabel">Email Address</label>
+              <input id="resetEmail" type="email" class="input" autocomplete="email" required />
+            </div>
+            <button id="resetSubmitBtn" type="submit" class="btn-gold auth-full-btn" data-i18n="authResetSubmitBtn">Send Password Reset Link</button>
+          </form>
+
+          <div class="auth-switch-row">
+            <button id="resetBackToLoginBtn" type="button" class="auth-inline-link" data-auth-tab="login" data-i18n="authResetBackToLogin">Back to Sign In</button>
+          </div>
+        </div>
       </div>
     </section>
 
     <!-- HOME VIEW -->
-    <section id="view-home" class="view-section hidden" hidden>
+    <section id="view-home" class="view-section hidden" hidden aria-hidden="true">
       <div class="hero-grid">
         <div class="hero-card">
           <span class="eyebrow" data-i18n="heroBadge">BESPOKE LUXURY PRODUCTION</span>
@@ -494,7 +516,7 @@
     </section>
 
     <!-- CATALOG VIEW -->
-    <section id="view-catalog" class="view-section hidden">
+    <section id="view-catalog" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow">STAR ARTIST STUDIO</span>
         <h2 data-i18n="catalogHeading">Studio Service Catalog</h2>
@@ -522,7 +544,7 @@
     </section>
 
     <!-- SHOOT BOOKING VIEW -->
-    <section id="view-booking" class="view-section hidden">
+    <section id="view-booking" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow">PRODUCTION DESK</span>
         <h2 data-i18n="bookingHeading">Book Your Studio Shoot</h2>
@@ -580,7 +602,7 @@
     </section>
 
     <!-- MODEL REGISTRATION 18+ VIEW -->
-    <section id="view-models" class="view-section hidden">
+    <section id="view-models" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow">18+ ROSTER VERIFICATION</span>
         <h2 data-i18n="modelsHeading">18+ Model &amp; Talent Registration</h2>
@@ -713,7 +735,7 @@
     </section>
 
     <!-- COMPANY / EVENT ORGANIZER REGISTRATION & MODEL BOOKING VIEW -->
-    <section id="view-companies" class="view-section hidden">
+    <section id="view-companies" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow" data-i18n="companyEyebrow">BRANDS • EVENTS • CASTING DESK</span>
         <h2 data-i18n="companyHeading">Company &amp; Event Organizer Model Booking</h2>
@@ -978,7 +1000,7 @@
     </section>
 
     <!-- GALLERY VIEW -->
-    <section id="view-gallery" class="view-section hidden">
+    <section id="view-gallery" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
         <span class="eyebrow">PORTFOLIO &amp; 4K STILLS</span>
         <h2 data-i18n="galleryHeading">Studio Gallery &amp; Showcase</h2>

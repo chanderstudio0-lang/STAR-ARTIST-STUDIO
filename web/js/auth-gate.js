@@ -1,6 +1,6 @@
 import { isAuthorizedAdminUser, resolveSafeRoute, extractRequestedRoute, isAdminUrlAttempt } from "./admin-guard.js";
 
-export const AUTH_ROUTES = ["login", "signup"];
+export const AUTH_ROUTES = ["login", "signup", "reset"];
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
@@ -20,8 +20,8 @@ export function isAuthRoute(route) {
 }
 
 /**
- * Detects explicit Login or Create Account / Sign Up URL targets
- * (#login, #signup, #register, /login, /signup, /register, ?route=login|signup).
+ * Detects explicit Login, Create Account / Sign Up, or Password Reset URL targets
+ * (#login, #signup, #register, #reset, #forgot-password, /login, /signup, /reset, ?route=login|signup|reset).
  */
 export function extractAuthRouteFromUrl({ pathname = "", hash = "", search = "" } = {}) {
   const cleanHash = String(hash || "")
@@ -34,6 +34,9 @@ export function extractAuthRouteFromUrl({ pathname = "", hash = "", search = "" 
   if (cleanHash === "signup" || cleanHash === "register" || cleanHash === "create-account") {
     return "signup";
   }
+  if (cleanHash === "reset" || cleanHash === "forgot" || cleanHash === "forgot-password" || cleanHash === "reset-password") {
+    return "reset";
+  }
 
   const pathSeg = String(pathname || "")
     .replace(/^\/+/, "")
@@ -45,6 +48,9 @@ export function extractAuthRouteFromUrl({ pathname = "", hash = "", search = "" 
   if (pathSeg === "signup" || pathSeg === "register" || pathSeg === "create-account") {
     return "signup";
   }
+  if (pathSeg === "reset" || pathSeg === "forgot" || pathSeg === "forgot-password" || pathSeg === "reset-password") {
+    return "reset";
+  }
 
   if (search) {
     try {
@@ -54,6 +60,7 @@ export function extractAuthRouteFromUrl({ pathname = "", hash = "", search = "" 
         .toLowerCase();
       if (r === "login" || r === "signin") return "login";
       if (r === "signup" || r === "register" || r === "create-account") return "signup";
+      if (r === "reset" || r === "forgot" || r === "forgot-password" || r === "reset-password") return "reset";
     } catch {
       // Ignore malformed query string
     }
@@ -83,6 +90,8 @@ export function resolveAuthenticatedAccess({
       ? "login"
       : normalizedReq === "signup" || normalizedReq === "register"
       ? "signup"
+      : normalizedReq === "reset" || normalizedReq === "forgot" || normalizedReq === "forgot-password"
+      ? "reset"
       : extractAuthRouteFromUrl({ pathname, hash, search });
 
   const authenticated = isAuthenticatedMember(user);
@@ -198,6 +207,20 @@ export function validateLoginInput({ email = "", password = "" } = {}) {
 }
 
 /**
+ * Validates email input before triggering a Firebase Password Reset email.
+ */
+export function validatePasswordResetInput({ email = "" } = {}) {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(cleanEmail) || cleanEmail.length > 128) {
+    return { valid: false, errorKey: "authErrorInvalidEmail" };
+  }
+  return {
+    valid: true,
+    clean: { email: cleanEmail }
+  };
+}
+
+/**
  * Maps Firebase Auth error codes into clear, helpful messages enforcing mandatory registration.
  */
 export function mapFirebaseAuthError(err, { mode = "login", t = (k) => k } = {}) {
@@ -235,7 +258,7 @@ export function syncAuthGateDom(
   { isAuthenticated = false, authMode = "login", authResolved = true } = {}
 ) {
   if (!doc || typeof doc.getElementById !== "function") return;
-  const normalizedMode = authMode === "signup" ? "signup" : "login";
+  const normalizedMode = authMode === "signup" ? "signup" : authMode === "reset" ? "reset" : "login";
 
   if (doc.body && doc.body.classList) {
     doc.body.classList.toggle("auth-gate-active", !isAuthenticated);
@@ -249,8 +272,19 @@ export function syncAuthGateDom(
     authView.setAttribute("aria-hidden", isAuthenticated ? "true" : "false");
   }
 
+  if (!isAuthenticated) {
+    for (const viewId of ["view-home", "view-catalog", "view-booking", "view-models", "view-companies", "view-gallery", "view-admin"]) {
+      const sec = doc.getElementById(viewId);
+      if (!sec) continue;
+      sec.classList?.toggle("hidden", true);
+      sec.hidden = true;
+      sec.setAttribute?.("aria-hidden", "true");
+    }
+  }
+
   const loginPanel = doc.getElementById("authLoginPanel");
   const signupPanel = doc.getElementById("authSignupPanel");
+  const resetPanel = doc.getElementById("authResetPanel");
   const loginTabBtn = doc.getElementById("authTabLoginBtn");
   const signupTabBtn = doc.getElementById("authTabSignupBtn");
 
@@ -264,8 +298,13 @@ export function syncAuthGateDom(
     signupPanel.classList.toggle("hidden", !showSignup);
     signupPanel.hidden = !showSignup;
   }
+  if (resetPanel) {
+    const showReset = normalizedMode === "reset";
+    resetPanel.classList.toggle("hidden", !showReset);
+    resetPanel.hidden = !showReset;
+  }
   if (loginTabBtn) {
-    const active = normalizedMode === "login";
+    const active = normalizedMode === "login" || normalizedMode === "reset";
     loginTabBtn.classList.toggle("active", active);
     loginTabBtn.setAttribute("aria-selected", active ? "true" : "false");
   }

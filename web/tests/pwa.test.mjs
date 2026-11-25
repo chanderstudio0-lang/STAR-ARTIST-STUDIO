@@ -5256,6 +5256,197 @@ test("Admin Models tab supports bulk Approve/Reject actions across multiple sele
   assert.ok(androidAdminModels.includes("admin_model_bulk_reject_btn"), "Android must render Bulk Reject button");
 });
 
+test("Strict authentication access control locks all studio pages and Firestore reads behind verified Firebase Authentication while allowing Login, Sign Up, and Password Reset only", async () => {
+  const {
+    AUTH_ROUTES,
+    extractAuthRouteFromUrl,
+    resolveAuthenticatedAccess,
+    validatePasswordResetInput,
+    syncAuthGateDom
+  } = await import(pathToFileURL(path.join(webDir, "js/auth-gate.js")).href);
+  const { TRANSLATIONS } = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // 1. Auth routes include login, signup, and password reset only
+  assert.deepEqual(AUTH_ROUTES, ["login", "signup", "reset"]);
+  assert.equal(extractAuthRouteFromUrl({ hash: "#reset" }), "reset");
+  assert.equal(extractAuthRouteFromUrl({ hash: "#forgot-password" }), "reset");
+  assert.equal(extractAuthRouteFromUrl({ pathname: "/reset" }), "reset");
+  assert.equal(extractAuthRouteFromUrl({ search: "?route=reset" }), "reset");
+
+  // Password reset input validation
+  assert.equal(validatePasswordResetInput({ email: "invalid-email" }).valid, false);
+  const resetOk = validatePasswordResetInput({ email: "  Artist@Example.com " });
+  assert.equal(resetOk.valid, true);
+  assert.equal(resetOk.clean.email, "artist@example.com");
+
+  // 2. Unauthenticated visitors can access #login, #signup, #reset ONLY; every studio service route is blocked
+  const resetAllowed = resolveAuthenticatedAccess({ requestedRoute: "reset", user: null });
+  assert.equal(resetAllowed.authenticated, false);
+  assert.equal(resetAllowed.route, "reset");
+  assert.equal(resetAllowed.authMode, "reset");
+
+  for (const protectedRoute of ["home", "catalog", "booking", "models", "companies", "gallery", "admin"]) {
+    const blocked = resolveAuthenticatedAccess({
+      requestedRoute: protectedRoute,
+      hash: `#${protectedRoute}`,
+      user: null
+    });
+    assert.equal(blocked.authenticated, false, `Logged-out access to #${protectedRoute} must be blocked`);
+    assert.equal(blocked.route, "login", `Logged-out visitor requesting #${protectedRoute} must land on login`);
+    assert.equal(blocked.redirectedToAuth, true);
+    assert.equal(blocked.postAuthRoute, protectedRoute, `Post-login redirect must preserve #${protectedRoute}`);
+  }
+
+  // Anonymous sessions are rejected even if uid is present
+  const anonBlocked = resolveAuthenticatedAccess({
+    requestedRoute: "gallery",
+    user: { uid: "anon-123", isAnonymous: true }
+  });
+  assert.equal(anonBlocked.authenticated, false, "Anonymous Firebase users must be blocked");
+  assert.equal(anonBlocked.route, "login");
+
+  // Authenticated members coming from #reset redirect straight into the website
+  const afterLoginFromReset = resolveAuthenticatedAccess({
+    requestedRoute: "reset",
+    user: { uid: "member-99", email: "member@example.com", isAnonymous: false },
+    postAuthRoute: "booking"
+  });
+  assert.equal(afterLoginFromReset.authenticated, true);
+  assert.equal(afterLoginFromReset.route, "booking");
+
+  // 3. syncAuthGateDom force-hides all 7 protected service views and toggles #authResetPanel
+  const makeEl = (id) => {
+    const cls = new Set();
+    const attrs = {};
+    return {
+      id,
+      hidden: false,
+      classList: {
+        toggle: (c, force) => (force ? cls.add(c) : cls.delete(c)),
+        has: (c) => cls.has(c)
+      },
+      setAttribute: (k, v) => {
+        attrs[k] = v;
+      },
+      attrs
+    };
+  };
+  const viewIds = [
+    "view-auth",
+    "view-home",
+    "view-catalog",
+    "view-booking",
+    "view-models",
+    "view-companies",
+    "view-gallery",
+    "view-admin",
+    "authLoginPanel",
+    "authSignupPanel",
+    "authResetPanel",
+    "authTabLoginBtn",
+    "authTabSignupBtn"
+  ];
+  const els = Object.fromEntries(viewIds.map((id) => [id, makeEl(id)]));
+  const bodyClasses = new Set();
+  const fakeDoc = {
+    body: {
+      classList: {
+        toggle: (c, force) => (force ? bodyClasses.add(c) : bodyClasses.delete(c)),
+        has: (c) => bodyClasses.has(c)
+      }
+    },
+    getElementById: (id) => els[id] || null
+  };
+
+  syncAuthGateDom(fakeDoc, { isAuthenticated: false, authMode: "reset", authResolved: true });
+  assert.equal(bodyClasses.has("auth-gate-active"), true);
+  assert.equal(els["view-auth"].hidden, false);
+  assert.equal(els.authResetPanel.hidden, false);
+  assert.equal(els.authLoginPanel.hidden, true);
+  assert.equal(els.authSignupPanel.hidden, true);
+  for (const protectedId of ["view-home", "view-catalog", "view-booking", "view-models", "view-companies", "view-gallery", "view-admin"]) {
+    assert.equal(els[protectedId].hidden, true, `#${protectedId} must be hidden when logged out`);
+    assert.equal(els[protectedId].classList.has("hidden"), true);
+    assert.equal(els[protectedId].attrs["aria-hidden"], "true");
+  }
+
+  // 4. Static HTML ships fail-closed: every protected service section has hidden + aria-hidden="true" and Password Reset panel exists
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const protectedId of ["view-home", "view-catalog", "view-booking", "view-models", "view-companies", "view-gallery", "view-admin"]) {
+    const m = html.match(new RegExp(`<section[^>]+id="${protectedId}"[^>]*>`));
+    assert.ok(m, `index.html missing <section id="${protectedId}">`);
+    assert.ok(/\bhidden\b/.test(m[0]), `#${protectedId} must have hidden attribute in initial HTML`);
+    assert.ok(m[0].includes('aria-hidden="true"'), `#${protectedId} must have aria-hidden="true" in initial HTML`);
+  }
+  assert.ok(html.includes('id="forgotPasswordLinkBtn"'), "Login panel must include Forgot Password button");
+  assert.ok(html.includes('id="authResetPanel"'), "Auth gate must include #authResetPanel");
+  assert.ok(html.includes('id="resetPasswordForm"'), "Auth gate must include #resetPasswordForm");
+
+  // 5. Fail-closed CSS hides all non-auth views while body.auth-gate-active is set
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  assert.ok(
+    css.includes("body.auth-gate-active .view-section:not(#view-auth)"),
+    "styles.css must force-hide all non-auth .view-section elements while auth-gate-active is applied"
+  );
+
+  // 6. Client code blocks pre-auth Firestore reads and clears protected views when logged out
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  assert.ok(firebaseJs.includes("function hasVerifiedMemberAuth("), "firebase.js must define hasVerifiedMemberAuth()");
+  assert.ok(firebaseJs.includes("export async function sendPasswordReset("), "firebase.js must export sendPasswordReset()");
+  for (const fnName of [
+    "fetchApprovedGallery",
+    "fetchServiceReviews",
+    "fetchPublicApprovedModels",
+    "fetchWeddingPackageConfigs"
+  ]) {
+    const fnIdx = firebaseJs.indexOf(`export async function ${fnName}`);
+    assert.ok(fnIdx !== -1, `firebase.js missing ${fnName}`);
+    const fnSlice = firebaseJs.slice(fnIdx, fnIdx + 260);
+    assert.ok(
+      fnSlice.includes("hasVerifiedMemberAuth(ctx)"),
+      `${fnName} must block Firestore reads when user is logged out`
+    );
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  assert.ok(
+    appJs.includes("if (!state.firebaseReady || !isAuthenticatedMember(state.user)) return;"),
+    "refreshCloudData() must short-circuit when user is not authenticated"
+  );
+  assert.ok(appJs.includes("function clearProtectedStudioViews()"), "app.js must define clearProtectedStudioViews()");
+  assert.ok(appJs.includes("function renderProtectedStudioViews()"), "app.js must define renderProtectedStudioViews()");
+  assert.ok(appJs.includes('document.getElementById("resetPasswordForm")'), "app.js must handle #resetPasswordForm submissions");
+  assert.ok(TRANSLATIONS.en.authForgotPasswordLink && TRANSLATIONS.hi.authForgotPasswordLink, "EN/HI reset labels must exist");
+
+  // 7. Firestore Security Rules lock ALL collections behind non-anonymous Firebase Authentication (no public reads)
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  assert.ok(
+    rules.includes("request.auth.token.firebase.sign_in_provider != 'anonymous'"),
+    "firestore.rules isSignedIn() must reject anonymous tokens"
+  );
+  assert.equal(
+    /allow\s+(?:read|get|list)[^;]*:\s*if\s+true\s*;/.test(rules),
+    false,
+    "firestore.rules must have ZERO unauthenticated 'if true' read rules"
+  );
+  for (const block of [
+    "match /publicModels/{modelId}",
+    "match /gallery/{itemId}",
+    "match /posts/{postId}",
+    "match /servicePackages/{packageId}"
+  ]) {
+    const idx = rules.indexOf(block);
+    assert.ok(idx !== -1, `firestore.rules missing ${block}`);
+    const slice = rules.slice(idx, idx + 450);
+    assert.ok(slice.includes("isSignedIn()"), `${block} must require isSignedIn() for reads`);
+  }
+  assert.ok(
+    rules.includes("request.auth.token.email.lower() == 'chanderstudio0@gmail.com'") &&
+      rules.includes("request.auth.token.email_verified == true"),
+    "firestore.rules must preserve Admin Dashboard restriction to verified chanderstudio0@gmail.com"
+  );
+});
+
 
 
 

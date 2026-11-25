@@ -30,6 +30,7 @@ import {
   resolveAuthenticatedAccess,
   validateRegistrationInput,
   validateLoginInput,
+  validatePasswordResetInput,
   mapFirebaseAuthError,
   syncAuthGateDom
 } from "./auth-gate.js";
@@ -160,6 +161,7 @@ import {
   signInWithGooglePopup,
   signInWithEmailPassword,
   registerWithEmailPassword,
+  sendPasswordReset,
   signOutFirebase,
   fetchApprovedGallery,
   fetchMyBookings,
@@ -250,14 +252,14 @@ const state = {
       error: ""
     }
   },
-  publicModels: mergePublicModels([]),
+  publicModels: [],
   publicModelFilters: { ...DEFAULT_MODEL_DISCOVERY_FILTERS, skills: [] },
   activeProfileModelId: null,
   pendingSharedModelId: "",
   myCompanyProfile: null,
   myCompanyBookings: [],
   selectedRequestedModels: [],
-  galleryItems: [...SHOWCASE_GALLERY_SEEDS],
+  galleryItems: [],
   myBookings: [],
   queuedOfflineBookings: [],
   myModels: [],
@@ -414,7 +416,7 @@ function setAuthGateAlert(message = "", { isInfo = false } = {}) {
 }
 
 function setAuthMode(mode = "login", { updateUrl = true, clearAlert = true, adminNotice = false } = {}) {
-  const normalized = mode === "signup" ? "signup" : "login";
+  const normalized = mode === "signup" ? "signup" : mode === "reset" ? "reset" : "login";
   state.authMode = normalized;
   if (clearAlert) {
     setAuthGateAlert("");
@@ -469,7 +471,12 @@ function navigateTo(route, { silentBlock = false } = {}) {
   });
 
   if (!access.authenticated) {
-    if (access.postAuthRoute && access.postAuthRoute !== "login" && access.postAuthRoute !== "signup") {
+    if (
+      access.postAuthRoute &&
+      access.postAuthRoute !== "login" &&
+      access.postAuthRoute !== "signup" &&
+      access.postAuthRoute !== "reset"
+    ) {
       state.postAuthRoute = access.postAuthRoute;
     }
     if (access.blockedAdminAttempt) {
@@ -484,9 +491,7 @@ function navigateTo(route, { silentBlock = false } = {}) {
       if (!sec) return;
       sec.classList.add("hidden");
       sec.hidden = true;
-      if (r === "admin") {
-        sec.setAttribute("aria-hidden", "true");
-      }
+      sec.setAttribute("aria-hidden", "true");
     });
 
     syncAuthGateDom(document, {
@@ -505,7 +510,14 @@ function navigateTo(route, { silentBlock = false } = {}) {
       history.replaceState(null, "", `/${authHash}`);
     }
 
-    if (!silentBlock && state.authResolved && route && route !== "login" && route !== "signup") {
+    if (
+      !silentBlock &&
+      state.authResolved &&
+      route &&
+      route !== "login" &&
+      route !== "signup" &&
+      route !== "reset"
+    ) {
       showToast(access.blockedAdminAttempt ? t("adminSignInRequiredToast") : t("authMustSignInToast"));
     }
     return;
@@ -545,9 +557,7 @@ function navigateTo(route, { silentBlock = false } = {}) {
     const show = authenticated && r === target && (r !== "admin" || isAdminNow);
     sec.classList.toggle("hidden", !show);
     sec.hidden = !show;
-    if (r === "admin") {
-      sec.setAttribute("aria-hidden", show ? "false" : "true");
-    }
+    sec.setAttribute("aria-hidden", show ? "false" : "true");
   });
 
   document.querySelectorAll("[data-route]").forEach((btn) => {
@@ -1596,7 +1606,7 @@ function refreshEmailPreviewLiveStage() {
 }
 
 async function refreshCloudData() {
-  if (!state.firebaseReady) return;
+  if (!state.firebaseReady || !isAuthenticatedMember(state.user)) return;
   try {
     const [cloudGalleryRes, publicModelsRes, weddingConfigsRes] = await Promise.allSettled([
       fetchApprovedGallery(),
@@ -3068,13 +3078,15 @@ function wireEvents() {
     state.lang = state.lang === "en" ? "hi" : "en";
     localStorage.setItem("star_artist_lang", state.lang);
     applyTranslations();
-    renderCatalog();
-    renderTestimonialCarousel();
-    renderMyBookings();
-    renderPublicModels();
-    renderSelectedRequestedModels();
-    renderMyCompanyBookings();
-    updateNewsletterRealtimeValidation({ showEmptyError: false });
+    if (isAuthenticatedMember(state.user)) {
+      renderCatalog();
+      renderTestimonialCarousel();
+      renderMyBookings();
+      renderPublicModels();
+      renderSelectedRequestedModels();
+      renderMyCompanyBookings();
+      updateNewsletterRealtimeValidation({ showEmptyError: false });
+    }
   });
 
   const testimonialSec = document.getElementById("homeTestimonialsSection");
@@ -3139,7 +3151,8 @@ function wireEvents() {
 
   document.querySelectorAll("[data-auth-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const nextMode = btn.getAttribute("data-auth-tab") === "signup" ? "signup" : "login";
+      const requested = btn.getAttribute("data-auth-tab");
+      const nextMode = requested === "signup" ? "signup" : requested === "reset" ? "reset" : "login";
       setAuthMode(nextMode, { updateUrl: true, clearAlert: true });
     });
   });
@@ -3810,6 +3823,47 @@ function wireEvents() {
       if (err?.code === "auth/email-already-in-use") {
         setAuthMode("login", { updateUrl: true, clearAlert: false });
       }
+    }
+  });
+
+  document.getElementById("resetPasswordForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setAuthGateAlert("");
+    const email = document.getElementById("resetEmail")?.value || "";
+    const validation = validatePasswordResetInput({ email });
+    if (!validation.valid) {
+      const msg = t(validation.errorKey);
+      setAuthGateAlert(msg);
+      showToast(msg);
+      return;
+    }
+    try {
+      if (!state.firebaseReady) {
+        const ready = await connectFirebaseCloud();
+        if (!ready) {
+          const msg = t("firebaseReconnectingToast");
+          setAuthGateAlert(msg);
+          showToast(msg);
+          return;
+        }
+      }
+      await sendPasswordReset(validation.clean.email);
+      e.target.reset();
+      const successMsg = t("authResetSuccessToast");
+      setAuthGateAlert(successMsg, { isInfo: true });
+      showToast(successMsg);
+    } catch (err) {
+      const code = String(err?.code || "").trim().toLowerCase();
+      if (code === "auth/user-not-found") {
+        e.target.reset();
+        const neutralMsg = t("authResetSuccessToast");
+        setAuthGateAlert(neutralMsg, { isInfo: true });
+        showToast(neutralMsg);
+        return;
+      }
+      const msg = mapFirebaseAuthError(err, { mode: "reset", t });
+      setAuthGateAlert(msg);
+      showToast(msg);
     }
   });
 
@@ -4729,6 +4783,64 @@ function renderSavedNewsletterStatus() {
   }
 }
 
+function clearProtectedStudioViews() {
+  if (state.testimonialTimer) {
+    clearInterval(state.testimonialTimer);
+    state.testimonialTimer = null;
+  }
+  state.galleryItems = [];
+  state.publicModels = [];
+  state.weddingPackageConfigs = [];
+  state.reviews = [];
+  state.myBookings = [];
+  state.myModels = [];
+  state.myNotifications = [];
+  state.editingModelId = null;
+  state.editModelDraftPhotos = [];
+  state.myCompanyProfile = null;
+  state.myCompanyBookings = [];
+  state.selectedRequestedModels = [];
+
+  for (const id of [
+    "homeFeaturedServicesGrid",
+    "homeShowcaseGrid",
+    "homeTestimonialCarousel",
+    "catalogGrid",
+    "galleryGrid",
+    "publicModelsGrid",
+    "myBookingsList",
+    "myModelsList",
+    "myCompanyBookingsList",
+    "selectedRequestedModelsBar",
+    "offlineBookingsQueueBox",
+    "bookingService"
+  ]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
+}
+
+function renderProtectedStudioViews() {
+  if (!isAuthenticatedMember(state.user)) return;
+  if (!state.galleryItems.length) {
+    state.galleryItems = [...SHOWCASE_GALLERY_SEEDS];
+  }
+  if (!state.publicModels.length) {
+    state.publicModels = mergePublicModels([]);
+  }
+  populateBookingServicesDropdown();
+  renderCatalog();
+  renderGallery();
+  renderTestimonialCarousel();
+  syncTestimonialAutoplayTimer();
+  renderMyBookings();
+  renderMyModels();
+  renderPublicModels();
+  renderSelectedRequestedModels();
+  renderMyCompanyBookings();
+  renderSavedNewsletterStatus();
+}
+
 let authSubscriptionAttached = false;
 
 async function connectFirebaseCloud() {
@@ -4754,11 +4866,7 @@ async function connectFirebaseCloud() {
       }
 
       if (!authenticated) {
-        state.myBookings = [];
-        state.myModels = [];
-        state.myNotifications = [];
-        state.myCompanyProfile = null;
-        state.myCompanyBookings = [];
+        clearProtectedStudioViews();
         closeModelProfileModal();
         const openLightbox = document.getElementById("lightboxModal");
         if (openLightbox && !openLightbox.classList.contains("hidden")) {
@@ -4777,7 +4885,8 @@ async function connectFirebaseCloud() {
       }
 
       if (!authenticated) {
-        const targetAuthMode = state.authMode === "signup" ? "signup" : "login";
+        const targetAuthMode =
+          state.authMode === "signup" ? "signup" : state.authMode === "reset" ? "reset" : "login";
         navigateTo(targetAuthMode, { silentBlock: true });
         if (state.pendingAdminRoute) {
           const adminGateHint = document.getElementById("authAdminGateHint");
@@ -4788,6 +4897,7 @@ async function connectFirebaseCloud() {
 
       setAuthGateAlert("");
       closeAuthModal();
+      renderProtectedStudioViews();
 
       if (state.pendingAdminRoute) {
         state.pendingAdminRoute = false;
@@ -4799,7 +4909,7 @@ async function connectFirebaseCloud() {
         }
       } else {
         const destination =
-          state.route === "login" || state.route === "signup"
+          state.route === "login" || state.route === "signup" || state.route === "reset"
             ? state.postAuthRoute || "home"
             : state.route === "admin" && !state.isAdmin
             ? "home"
@@ -4807,9 +4917,6 @@ async function connectFirebaseCloud() {
         navigateTo(destination, { silentBlock: true });
       }
 
-      renderMyBookings();
-      renderMyModels();
-      renderMyCompanyBookings();
       await syncQueuedBookings();
       await refreshCloudData();
       tryOpenPendingSharedModelProfile();
@@ -4833,19 +4940,8 @@ async function connectFirebaseCloud() {
 async function bootstrap() {
   applyTheme();
   applyTranslations();
-  populateBookingServicesDropdown();
-  renderCatalog();
-  renderGallery();
-  renderTestimonialCarousel();
-  syncTestimonialAutoplayTimer();
-  renderMyBookings();
-  renderMyModels();
-  renderPublicModels();
-  renderSelectedRequestedModels();
-  renderMyCompanyBookings();
-  renderSavedNewsletterStatus();
+  clearProtectedStudioViews();
   syncAdminUiVisibility(document, { isAdmin: false });
-  await refreshOfflineBookingQueue();
   setupPwaInstall();
   wireEvents();
 
