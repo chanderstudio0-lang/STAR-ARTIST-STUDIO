@@ -222,18 +222,6 @@ fun StudioTopAppBar(
             }
         },
         actions = {
-            // Global Theme Toggle (Black & Gold vs High-Contrast Studio Light)
-            ThemeToggleIconButton(
-                isStudioLight = isStudioLight,
-                onToggle = onToggleTheme
-            )
-
-            // Compact Language Toggle for Top App Bar
-            CompactLanguageToggle(
-                currentLanguage = language,
-                onToggle = onToggleLanguage
-            )
-
             // Real-time Notifications & Announcements Inbox
             IconButton(
                 onClick = onOpenNotifications,

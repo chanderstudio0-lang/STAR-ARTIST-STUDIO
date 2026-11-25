@@ -324,7 +324,17 @@ function applyTranslations() {
   if (newsletterInput) newsletterInput.placeholder = t("newsletterEmailPlaceholder");
 
   const themeBtn = document.getElementById("themeToggleBtn");
-  if (themeBtn) themeBtn.textContent = state.theme === "dark" ? t("themeLight") : t("themeDark");
+  const themeLabel = document.getElementById("themeToggleLabel");
+  const themeIcon = document.getElementById("themeToggleIcon");
+  const nextThemeLabel = state.theme === "dark" ? t("themeLight") : t("themeDark");
+  if (themeLabel) {
+    themeLabel.textContent = nextThemeLabel;
+  } else if (themeBtn) {
+    themeBtn.textContent = nextThemeLabel;
+  }
+  if (themeIcon) {
+    themeIcon.textContent = state.theme === "dark" ? "☀" : "☾";
+  }
 
   const authBtn = document.getElementById("authActionBtn");
   if (authBtn) authBtn.textContent = state.user ? t("signOutBtn") : t("signInBtn");

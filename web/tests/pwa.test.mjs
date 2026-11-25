@@ -4690,6 +4690,90 @@ test("Studio Cloud Sync status banner and connected Gmail badge are completely h
   assert.ok(appJs.includes("syncAdminUiVisibility"), "Admin UI visibility gating must remain intact");
 });
 
+test("Mobile navigation moves EN / HI and Studio Light from top header to bottom nav beside Gallery while keeping Sign In/Out in top header", () => {
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+
+  // 1. Extract top header <header class="topbar">...</header> and verify authActionBtn stays while langToggleBtn & themeToggleBtn are removed
+  const headerMatch = html.match(/<header class="topbar">[\s\S]*?<\/header>/);
+  assert.ok(headerMatch, "index.html must contain <header class=\"topbar\">");
+  const headerHtml = headerMatch[0];
+  assert.ok(headerHtml.includes('id="authActionBtn"'), "Sign In / Sign Out button must stay in top header");
+  assert.equal(headerHtml.includes('id="langToggleBtn"'), false, "EN / HI button must be removed from top header");
+  assert.equal(headerHtml.includes('id="themeToggleBtn"'), false, "Studio Light button must be removed from top header");
+
+  // 2. Extract mobile <nav class="bottom-nav">...</nav> and verify exact placement beside Gallery
+  const bottomNavMatch = html.match(/<nav class="bottom-nav"[\s\S]*?<\/nav>/);
+  assert.ok(bottomNavMatch, "index.html must contain <nav class=\"bottom-nav\">");
+  const bottomNavHtml = bottomNavMatch[0];
+
+  const galleryIdx = bottomNavHtml.indexOf('data-route="gallery"');
+  const langIdx = bottomNavHtml.indexOf('id="langToggleBtn"');
+  const themeIdx = bottomNavHtml.indexOf('id="themeToggleBtn"');
+  const adminIdx = bottomNavHtml.indexOf('id="mobileAdminNavBtn"');
+
+  assert.ok(galleryIdx !== -1, "Gallery button must exist in bottom-nav");
+  assert.ok(langIdx !== -1, "EN / HI button (#langToggleBtn) must exist in bottom-nav");
+  assert.ok(themeIdx !== -1, "Studio Light button (#themeToggleBtn) must exist in bottom-nav");
+  assert.ok(adminIdx !== -1, "Admin button (#mobileAdminNavBtn) must remain in bottom-nav");
+  assert.ok(galleryIdx < langIdx, "EN / HI button must appear immediately after Gallery");
+  assert.ok(langIdx < themeIdx, "Studio Light button must appear right beside EN / HI");
+  assert.ok(themeIdx < adminIdx, "Hidden Admin button must remain after utility toggles");
+  assert.ok(bottomNavHtml.includes("EN / HI"), "Bottom nav language button must display EN / HI");
+  assert.ok(bottomNavHtml.includes('id="themeToggleLabel"'), "Bottom nav theme button must contain #themeToggleLabel");
+
+  // 3. Verify compact Black & Gold bottom-nav CSS rules and preserved JS handlers
+  assert.ok(bottomNavHtml.includes("bottom-nav-theme-btn"), "Studio Light button must use .bottom-nav-theme-btn for crisp non-truncated mobile width");
+  assert.ok(css.includes(".bottom-nav-utility-btn"), "styles.css must style .bottom-nav-utility-btn");
+  assert.ok(css.includes(".bottom-nav-theme-btn"), "styles.css must style .bottom-nav-theme-btn");
+  assert.ok(appJs.includes('document.getElementById("langToggleBtn")?.addEventListener("click"'), "EN / HI click handler must remain wired");
+  assert.ok(appJs.includes('document.getElementById("themeToggleBtn")?.addEventListener("click"'), "Studio Light click handler must remain wired");
+  assert.ok(appJs.includes('document.getElementById("themeToggleLabel")'), "app.js must update #themeToggleLabel cleanly");
+});
+
+test("WhatsApp & social sharing Open Graph metadata serves a valid public 1200x630 PNG with complete absolute HTTPS URL in initial HTML", () => {
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const firebaseJson = JSON.parse(fs.readFileSync(path.join(rootDir, "firebase.json"), "utf8"));
+  const ogImagePath = path.join(webDir, "images/og-star-artist-studio.png");
+  const expectedUrl = "https://gen-lang-client-0548683163.web.app/images/og-star-artist-studio.png";
+
+  // 1. Static PNG asset exists in deployed Firebase Hosting public root ("web")
+  assert.equal(firebaseJson.hosting.public, "web", "Firebase Hosting public directory must be 'web'");
+  assert.ok(fs.existsSync(ogImagePath), "1200x630 OG PNG must exist at web/images/og-star-artist-studio.png");
+
+  // 2. Verify PNG signature, exact 1200x630 IHDR dimensions, and WhatsApp-friendly file size (<= 300 KB)
+  const buf = fs.readFileSync(ogImagePath);
+  assert.equal(buf.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "OG image must be a valid PNG file");
+  assert.equal(buf.subarray(12, 16).toString("ascii"), "IHDR", "PNG must contain IHDR chunk");
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  assert.equal(width, 1200, "OG image width must be exactly 1200px");
+  assert.equal(height, 630, "OG image height must be exactly 630px");
+  assert.ok(buf.length <= 300 * 1024, `OG PNG should stay <= 300 KB for WhatsApp scraper (actual: ${buf.length} bytes)`);
+
+  // 3. Verify static initial-HTML <head> contains complete Open Graph, canonical, and Twitter metadata
+  const headMatch = html.match(/<head>[\s\S]*?<\/head>/);
+  assert.ok(headMatch, "index.html must contain <head>");
+  const headHtml = headMatch[0];
+  assert.ok(headHtml.includes('<link rel="canonical" href="https://gen-lang-client-0548683163.web.app/" />'), "Canonical URL must be present");
+  assert.ok(headHtml.includes('<meta property="og:type" content="website" />'), "og:type must be website");
+  assert.ok(headHtml.includes('<meta property="og:url" content="https://gen-lang-client-0548683163.web.app/" />'), "og:url must match canonical HTTPS URL");
+  assert.ok(headHtml.includes('<meta property="og:title" content="STAR ARTIST STUDIO'), "og:title must be set in initial HTML");
+  assert.ok(headHtml.includes('<meta property="og:description" content="STAR ARTIST STUDIO'), "og:description must be set in initial HTML");
+  assert.ok(headHtml.includes(`<meta property="og:image" content="${expectedUrl}" />`), "og:image must use complete absolute HTTPS URL");
+  assert.ok(headHtml.includes(`<meta property="og:image:secure_url" content="${expectedUrl}" />`), "og:image:secure_url must use complete absolute HTTPS URL");
+  assert.ok(headHtml.includes('<meta property="og:image:type" content="image/png" />'), "og:image:type must be image/png");
+  assert.ok(headHtml.includes('<meta property="og:image:width" content="1200" />'), "og:image:width must be 1200");
+  assert.ok(headHtml.includes('<meta property="og:image:height" content="630" />'), "og:image:height must be 630");
+  assert.ok(headHtml.includes(`<meta name="twitter:image" content="${expectedUrl}" />`), "twitter:image must use complete absolute HTTPS URL");
+
+  // 4. Confirm Hosting config has no ignore or redirect blocking /images/og-star-artist-studio.png
+  const ignored = firebaseJson.hosting.ignore || [];
+  assert.equal(ignored.some((p) => p.includes("images") || p.includes("og-star-artist-studio")), false, "Hosting ignore must not exclude OG image");
+  assert.equal(Boolean(firebaseJson.hosting.redirects && firebaseJson.hosting.redirects.length), false, "Hosting must not redirect static OG image");
+});
+
 
 
 
