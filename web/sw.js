@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v55";
+const CACHE_VERSION = "star-artist-pwa-v56";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -16,8 +16,6 @@ const APP_SHELL_URLS = [
   "/manifest.webmanifest",
   "/manifest.json",
   "/favicon.ico",
-  "/favicon.png",
-  "/apple-touch-icon.png",
   "/firebase-config.json",
   "/js/admin-booking-tracker.js",
   "/js/admin-bookings-export.js",
