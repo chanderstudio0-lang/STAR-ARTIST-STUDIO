@@ -5469,6 +5469,926 @@ test("Strict authentication access control locks all studio pages and Firestore 
   );
 });
 
+test("Automated email notification system in Admin Dashboard triggers on new booking & 18+ model submissions with strict Admin-only security", async () => {
+  const alertsMod = await import(pathToFileURL(path.join(webDir, "js/admin-email-alerts.js")).href);
+  const { TRANSLATIONS } = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  // 1. Settings normalization locks recipient strictly to chanderstudio0@gmail.com
+  const normalized = alertsMod.normalizeAdminEmailAlertSettings({
+    bookingAlertsEnabled: true,
+    modelAlertsEnabled: false,
+    recipientEmail: "attacker@evil.com"
+  });
+  assert.equal(normalized.bookingAlertsEnabled, true);
+  assert.equal(normalized.modelAlertsEnabled, false);
+  assert.equal(normalized.recipientEmail, "chanderstudio0@gmail.com");
+
+  // 2. Real-time new item detection prevents false alerts on initial load and detects subsequent submissions
+  const initDetect = alertsMod.detectNewAdminAlertItems({
+    prevIds: null,
+    items: [{ id: "bk_1" }, { id: "bk_2" }]
+  });
+  assert.equal(initDetect.initialized, true);
+  assert.equal(initDetect.newItems.length, 0);
+
+  const liveDetect = alertsMod.detectNewAdminAlertItems({
+    prevIds: initDetect.nextIds,
+    items: [{ id: "bk_1" }, { id: "bk_2" }, { id: "bk_3", clientName: "Ananya" }]
+  });
+  assert.equal(liveDetect.initialized, false);
+  assert.equal(liveDetect.newItems.length, 1);
+  assert.equal(liveDetect.newItems[0].id, "bk_3");
+
+  // 3. Alert record builder & Spark-compatible mailto fallback lock recipient to authorized admin email
+  const bookingAlert = alertsMod.buildAdminEmailAlertRecord({
+    type: "booking",
+    record: {
+      id: "bk_live_99",
+      clientName: "Riya Sharma",
+      serviceType: "Bridal Royal Shoot",
+      preferredDate: "2026-12-25"
+    },
+    status: "sent",
+    source: "cloud-function"
+  });
+  assert.equal(bookingAlert.type, "booking");
+  assert.equal(bookingAlert.recipientEmail, "chanderstudio0@gmail.com");
+  assert.ok(bookingAlert.summary.includes("Riya Sharma"));
+
+  const modelAlert = alertsMod.buildAdminEmailAlertRecord({
+    type: "model",
+    record: {
+      id: "mdl_live_88",
+      fullName: "Kabir Gill",
+      age: 22,
+      city: "Sirsa"
+    },
+    status: "queued",
+    source: "dashboard-live"
+  });
+  assert.equal(modelAlert.type, "model");
+  assert.equal(modelAlert.recipientEmail, "chanderstudio0@gmail.com");
+  assert.ok(modelAlert.summary.includes("Kabir Gill"));
+
+  const mailtoUrl = alertsMod.buildAdminMailtoFallbackUrl({
+    subject: "New Booking\r\nBcc: evil@example.com",
+    text: "Booking details"
+  });
+  assert.ok(mailtoUrl.startsWith("mailto:chanderstudio0@gmail.com?subject="));
+  assert.equal(mailtoUrl.includes("%0A"), false);
+
+  // 4. Rendered Admin Dashboard Email Alerts panel includes toggles, KPIs, filter bar, resend & mailto actions
+  const htmlPanel = alertsMod.renderAdminEmailAlertsSectionHtml({
+    settings: alertsMod.DEFAULT_ADMIN_EMAIL_ALERT_SETTINGS,
+    alerts: [
+      { id: "al_1", ...bookingAlert, isRead: true },
+      { id: "al_2", ...modelAlert, isRead: false }
+    ],
+    filter: "all",
+    t: (k) => TRANSLATIONS.en[k] || k
+  });
+  for (const token of [
+    'id="adminEmailAlertsPanel"',
+    'id="adminEmailAlertSettingsForm"',
+    'id="adminAlertToggleBooking"',
+    'id="adminAlertToggleModel"',
+    'data-admin-alert-filter="unread"',
+    'data-admin-alert-mark-all-read="true"',
+    'data-admin-alert-resend-type="model"',
+    "mailto:chanderstudio0@gmail.com",
+    "chanderstudio0@gmail.com",
+    "Riya Sharma",
+    "Kabir Gill"
+  ]) {
+    assert.ok(htmlPanel.includes(token), `Rendered Email Alerts panel missing token: ${token}`);
+  }
+
+  // 5. HTML tab, Service Worker precache, Firestore Rules Admin lock, and Android parity
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  assert.ok(indexHtml.includes('data-admin-tab="email-alerts"'), "index.html missing Email Alerts Admin tab");
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes('"/js/admin-email-alerts.js"'), "sw.js must precache /js/admin-email-alerts.js");
+
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  assert.ok(rules.includes("function isValidStudioEmailConfig("), "firestore.rules missing isValidStudioEmailConfig");
+  assert.ok(rules.includes("function isValidAdminEmailAlert("), "firestore.rules missing isValidAdminEmailAlert");
+  assert.ok(rules.includes("match /studioConfig/{configId}"), "firestore.rules missing /studioConfig rule");
+  assert.ok(rules.includes("match /adminEmailAlerts/{alertId}"), "firestore.rules missing /adminEmailAlerts rule");
+  for (const block of ["match /studioConfig/{configId}", "match /adminEmailAlerts/{alertId}"]) {
+    const idx = rules.indexOf(block);
+    const slice = rules.slice(idx, idx + 320);
+    assert.ok(slice.includes("allow get, list: if isAdmin();"), `${block} must be strictly Admin-only`);
+  }
+
+  const androidEmailComp = fs.readFileSync(
+    path.join(rootDir, "app/src/main/java/com/example/ui/components/AdminEmailPreviewComponent.kt"),
+    "utf8"
+  );
+  assert.ok(
+    androidEmailComp.includes("fun AdminAutomatedEmailAlertsCard(") &&
+      androidEmailComp.includes('"studioConfig"') &&
+      androidEmailComp.includes('"emailAlerts"'),
+    "Android AdminEmailPreviewComponent.kt must include AdminAutomatedEmailAlertsCard synced with studioConfig/emailAlerts"
+  );
+});
+
+test("Professional Network registration enforces Pending status, Admin approval, and strict public directory privacy", async () => {
+  const proMod = await import(pathToFileURL(path.join(webDir, "js/pro-network.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // Invalid submission fails cleanly
+  const bad = proMod.validateProfessionalRegistration({ fullName: "A", mobileNumber: "123", email: "bad" });
+  assert.equal(bad.valid, false);
+  assert.ok(bad.errors.length >= 3);
+
+  // Valid submission sanitizes unsafe URLs and enforces safe clean payload
+  const good = proMod.validateProfessionalRegistration({
+    fullName: "Arjun Verma",
+    mobileNumber: "+91 9812800111",
+    email: "Arjun@Example.com",
+    city: "Sirsa",
+    state: "Haryana",
+    category: "Photographer",
+    yearsExperience: 6,
+    skills: "Wedding Candid, Editorial, Lighting",
+    equipmentDetails: "Sony A7IV, 85mm GM, Godox AD600",
+    workingLocations: "Sirsa, Chandigarh, Delhi",
+    expectedCharges: "₹12,000 / day",
+    portfolioPhotos: ["data:image/jpeg;base64,/9j/4AAQ", "javascript:alert(1)"],
+    videoLinks: "https://youtube.com/watch?v=abc\njavascript:evil()",
+    shortIntro: "Experienced wedding & fashion photographer with 4K cinema experience.",
+    availabilityStatus: "Available"
+  });
+  assert.equal(good.valid, true);
+  assert.equal(good.clean.email, "arjun@example.com");
+  assert.equal(good.clean.portfolioPhotos.length, 1);
+  assert.ok(!good.clean.videoLinks.includes("javascript:"));
+
+  // Pending / rejected / suspended profiles must NEVER enter public directory
+  assert.equal(proMod.sanitizePublicProfessionalProfile({ id: "p1", ...good.clean, status: "pending" }), null);
+  assert.equal(proMod.sanitizePublicProfessionalProfile({ id: "p1", ...good.clean, status: "suspended" }), null);
+
+  // Approved public directory record strictly strips mobileNumber, email, userId, adminNotes
+  const pub = proMod.sanitizePublicProfessionalProfile({
+    id: "p1",
+    userId: "uid_pro_1",
+    adminNotes: "Internal secret note",
+    ...good.clean,
+    status: "approved"
+  });
+  assert.ok(pub);
+  assert.equal(pub.fullName, "Arjun Verma");
+  assert.equal("mobileNumber" in pub, false, "Public profile must NEVER expose mobileNumber");
+  assert.equal("email" in pub, false, "Public profile must NEVER expose email");
+  assert.equal("userId" in pub, false, "Public profile must NEVER expose userId");
+  assert.equal("adminNotes" in pub, false, "Public profile must NEVER expose adminNotes");
+
+  const dirHtml = proMod.renderApprovedProfessionalsDirectoryHtml({
+    professionals: [pub],
+    categoryFilter: "Photographer",
+    searchQuery: "Sirsa",
+    t: tEn
+  });
+  assert.ok(dirHtml.includes("Arjun Verma"));
+  assert.ok(!dirHtml.includes("9812800111"));
+  assert.ok(!dirHtml.includes("arjun@example.com"));
+});
+
+test("Photographer Hiring workflow enforces Pending Admin Review, customer proposal accept/decline without auto-confirm, and Admin-only final confirmation", async () => {
+  const proMod = await import(pathToFileURL(path.join(webDir, "js/pro-network.js")).href);
+  const adminProMod = await import(pathToFileURL(path.join(webDir, "js/admin-pro-network.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. Customer hiring request starts strictly as Pending Admin Review with no assignment
+  const hireRes = proMod.validateHiringRequest({
+    customerName: "Meera Kapoor",
+    contactNumber: "+91 9812345678",
+    eventType: "Wedding",
+    requiredService: "Both",
+    eventDate: "2026-12-20",
+    eventTime: "06:00 PM",
+    eventLocation: "Sirsa Palace",
+    workingDuration: "2 Days",
+    budgetRange: "₹45,000 - ₹65,000",
+    specialRequirements: "Drone + Candid + Traditional video",
+    referenceLinks: "https://instagram.com/starartiststudio",
+    referencePhotos: []
+  });
+  assert.equal(hireRes.valid, true);
+  assert.equal(hireRes.clean.status, "Pending Admin Review");
+  assert.equal(hireRes.clean.customerAcceptance, "pending");
+  assert.equal(hireRes.clean.assignedProfessionalId, "");
+
+  // 2. Customer CANNOT accept/decline before Admin proposes an assignment
+  const earlyAttempt = proMod.evaluateCustomerProposalAction({
+    request: { id: "h1", userId: "cust_1", status: "Pending Admin Review" },
+    action: "accept",
+    userId: "cust_1"
+  });
+  assert.equal(earlyAttempt.allowed, false);
+
+  // 3. Another customer CANNOT respond to cust_1's hiring proposal
+  const crossUserAttempt = proMod.evaluateCustomerProposalAction({
+    request: { id: "h1", userId: "cust_1", status: "Assignment Proposed", assignedProfessionalId: "pro_1" },
+    action: "accept",
+    userId: "cust_2"
+  });
+  assert.equal(crossUserAttempt.allowed, false);
+
+  // 4. Customer accepting proposal moves status to "Customer Accepted" — NEVER "Confirmed"!
+  const acceptRes = proMod.evaluateCustomerProposalAction({
+    request: { id: "h1", userId: "cust_1", status: "Assignment Proposed", assignedProfessionalId: "pro_1" },
+    action: "accept",
+    userId: "cust_1",
+    note: "Looks great, please finalize."
+  });
+  assert.equal(acceptRes.allowed, true);
+  assert.equal(acceptRes.patch.customerAcceptance, "accepted");
+  assert.equal(acceptRes.patch.status, "Customer Accepted");
+  assert.notEqual(acceptRes.patch.status, "Confirmed", "Customer must NEVER auto-confirm booking");
+
+  // 5. Customer declining proposal moves status to "Proposal Declined"
+  const declineRes = proMod.evaluateCustomerProposalAction({
+    request: { id: "h1", userId: "cust_1", status: "Assignment Proposed", assignedProfessionalId: "pro_1" },
+    action: "decline",
+    userId: "cust_1",
+    note: "Prefer a drone specialist"
+  });
+  assert.equal(declineRes.allowed, true);
+  assert.equal(declineRes.patch.customerAcceptance, "declined");
+  assert.equal(declineRes.patch.status, "Proposal Declined");
+
+  // 6. Admin hiring dashboard renders proposal selector & Final Confirm button when customer accepted
+  const adminHiringHtml = adminProMod.renderAdminHiringRequestsHtml({
+    hiringRequests: [
+      {
+        id: "h1",
+        userId: "cust_1",
+        ...hireRes.clean,
+        status: "Customer Accepted",
+        customerAcceptance: "accepted",
+        assignedProfessionalId: "pro_1",
+        assignedProfessionalName: "Arjun Verma"
+      }
+    ],
+    approvedProfessionals: [{ id: "pro_1", fullName: "Arjun Verma", category: "Photographer", city: "Sirsa", status: "approved" }],
+    filter: "all",
+    t: tEn
+  });
+  assert.ok(adminHiringHtml.includes('data-admin-propose-hiring="h1"'));
+  assert.ok(adminHiringHtml.includes('data-admin-hiring-quick-status="Confirmed"'));
+  assert.ok(adminHiringHtml.includes("Arjun Verma"));
+});
+
+test("Outsourcing system validates studio requests and renders Admin review & assignment controls", async () => {
+  const proMod = await import(pathToFileURL(path.join(webDir, "js/pro-network.js")).href);
+  const adminProMod = await import(pathToFileURL(path.join(webDir, "js/admin-pro-network.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  const invalidOut = proMod.validateOutsourcingRequest({ studioOrName: "X", contactInfo: "1" });
+  assert.equal(invalidOut.valid, false);
+
+  const validOut = proMod.validateOutsourcingRequest({
+    studioOrName: "Royal Lens Productions",
+    contactInfo: "+91 9812300999",
+    city: "Chandigarh",
+    workType: "Video Editing",
+    projectDescription: "4K wedding highlight reel + full documentary cut in DaVinci Resolve.",
+    workDeadline: "2026-12-30",
+    budget: "₹18,000",
+    referenceLinks: "https://drive.google.com/example",
+    referencePhotos: [],
+    additionalMessage: "Need LUT grade matching Sony S-Log3"
+  });
+  assert.equal(validOut.valid, true);
+  assert.equal(validOut.clean.status, "Pending Admin Review");
+
+  const outHtml = adminProMod.renderAdminOutsourcingRequestsHtml({
+    outsourcingRequests: [{ id: "out_1", userId: "uid_studio_1", ...validOut.clean }],
+    approvedProfessionals: [{ id: "pro_2", fullName: "Simran Kaur", category: "Editor", status: "approved" }],
+    t: tEn
+  });
+  assert.ok(outHtml.includes("Royal Lens Productions"));
+  assert.ok(outHtml.includes('data-admin-out-save="out_1"'));
+  assert.ok(outHtml.includes("Simran Kaur"));
+});
+
+test("Private Chat enforces strict user-to-Admin privacy isolation, safe attachments, unread counters, and moderation UI", async () => {
+  const chatMod = await import(pathToFileURL(path.join(webDir, "js/private-chat.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  const threadA = {
+    id: chatMod.buildChatThreadId({ participantUid: "user_A", contextType: "hiring", contextId: "hire_1" }),
+    participantUid: "user_A",
+    participantName: "Customer A",
+    participantRole: "customer",
+    contextType: "hiring",
+    contextId: "hire_1",
+    contextLabel: "Wedding (2026-12-20)",
+    unreadByUser: 2,
+    unreadByAdmin: 1
+  };
+  const threadB = {
+    id: chatMod.buildChatThreadId({ participantUid: "user_B", contextType: "professional", contextId: "pro_9" }),
+    participantUid: "user_B",
+    participantName: "Pro B",
+    participantRole: "professional",
+    contextType: "professional",
+    contextId: "pro_9",
+    contextLabel: "Photographer Profile",
+    unreadByUser: 0,
+    unreadByAdmin: 3
+  };
+
+  // Strict privacy isolation checks
+  assert.equal(chatMod.canUserAccessChatThread(threadA, { uid: "user_A" }, false), true);
+  assert.equal(chatMod.canUserAccessChatThread(threadA, { uid: "user_B" }, false), false, "User B must NEVER access User A's chat");
+  assert.equal(chatMod.canUserAccessChatThread(threadB, { uid: "user_A" }, false), false, "User A must NEVER access Pro B's chat");
+  assert.equal(chatMod.canUserAccessChatThread(threadA, { uid: "admin_uid" }, true), true);
+  assert.equal(chatMod.canUserAccessChatThread(threadB, { uid: "admin_uid" }, true), true);
+  assert.equal(chatMod.canUserAccessChatThread(threadA, null, false), false);
+
+  // Unread counters
+  assert.equal(chatMod.countUnreadChatsForUser([threadA, threadB]), 2);
+  assert.equal(chatMod.countUnreadChatsForAdmin([threadA, threadB]), 4);
+
+  // Message & attachment validation
+  assert.equal(chatMod.validatePrivateChatMessage({ text: "", imageAttachment: "" }).valid, false);
+  assert.equal(chatMod.validatePrivateChatMessage({ text: "Hi", imageAttachment: "javascript:alert(1)" }).valid, false);
+  assert.equal(chatMod.validatePrivateChatMessage({ text: "", imageAttachment: "data:image/jpeg;base64,AAAA" }).valid, true);
+  assert.equal(chatMod.validatePrivateChatMessage({ text: "Hello Admin!", imageAttachment: "" }).valid, true);
+
+  // User UI filters out threads belonging to any other user even if passed by mistake
+  const userChatHtml = chatMod.renderUserPrivateChatHtml({
+    threads: [threadA, threadB],
+    activeChatId: threadA.id,
+    messages: [{ id: "m1", senderUid: "admin_uid", senderRole: "admin", senderName: "Admin", text: "Proposal sent!" }],
+    currentUserUid: "user_A",
+    isBlocked: false,
+    t: tEn
+  });
+  assert.ok(userChatHtml.includes("Wedding (2026-12-20)"));
+  assert.ok(!userChatHtml.includes("Pro B"), "User chat view must never render another user's thread");
+
+  // Blocked user sees suspension banner and no send form
+  const blockedChatHtml = chatMod.renderUserPrivateChatHtml({
+    threads: [threadA],
+    activeChatId: threadA.id,
+    messages: [],
+    currentUserUid: "user_A",
+    isBlocked: true,
+    blockReason: "Abusive language",
+    t: tEn
+  });
+  assert.ok(blockedChatHtml.includes("Abusive language"));
+  assert.ok(!blockedChatHtml.includes('id="userPrivateChatForm"'));
+
+  // Admin UI includes block/unblock moderation control
+  const adminChatHtml = chatMod.renderAdminPrivateMessagesHtml({
+    threads: [threadA, threadB],
+    activeChatId: threadA.id,
+    messages: [],
+    blockedMap: {},
+    t: tEn
+  });
+  assert.ok(adminChatHtml.includes('data-admin-toggle-chat-block-uid="user_A"'));
+  assert.ok(adminChatHtml.includes('id="adminPrivateChatForm"'));
+});
+
+test("Professional Network & Private Chat Firestore Security Rules, HTML routes, SW precache, and auth-gate isolation", () => {
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  const authGateJs = fs.readFileSync(path.join(webDir, "js/auth-gate.js"), "utf8");
+  const adminGuardJs = fs.readFileSync(path.join(webDir, "js/admin-guard.js"), "utf8");
+
+  // 1. All 6 new Firestore collections & helper validators exist and forbid anonymous/public access
+  for (const token of [
+    "function isChatBlocked(",
+    "function isValidProfessionalProfile(",
+    "function isValidPublicProfessionalProfile(",
+    "function isValidProfessionalHiringRequest(",
+    "function isValidOutsourcingRequest(",
+    "function isValidPrivateChatThread(",
+    "function isValidPrivateChatMessage(",
+    "function isValidChatBlockedUser(",
+    "match /professionals/{professionalId}",
+    "match /publicProfessionals/{professionalId}",
+    "match /professionalHiringRequests/{requestId}",
+    "match /outsourcingRequests/{requestId}",
+    "match /privateChats/{chatId}",
+    "match /messages/{messageId}",
+    "match /chatBlockedUsers/{userId}"
+  ]) {
+    assert.ok(rules.includes(token), `firestore.rules missing: ${token}`);
+  }
+
+  // Zero unauthenticated read/write rules anywhere in firestore.rules
+  assert.equal(/allow\s+(?:read|get|list|write|create|update|delete)\s*:\s*if\s+true\b/i.test(rules), false);
+
+  // Hiring rules explicitly prevent customer auto-confirmation (only Customer Accepted / Proposal Declined / Cancelled)
+  const hiringSlice = rules.slice(rules.indexOf("match /professionalHiringRequests/{requestId}"), rules.indexOf("match /outsourcingRequests/{requestId}"));
+  assert.ok(hiringSlice.includes("incoming().status == 'Pending Admin Review'"));
+  assert.ok(hiringSlice.includes("incoming().status == 'Customer Accepted'"));
+  assert.ok(hiringSlice.includes("incoming().status == 'Proposal Declined'"));
+  assert.ok(!hiringSlice.includes("incoming().status == 'Confirmed'"), "Customers must never be allowed to set Confirmed status in rules");
+
+  // Private chat rules enforce participantUid == request.auth.uid and !isChatBlocked
+  const chatSlice = rules.slice(rules.indexOf("match /privateChats/{chatId}"));
+  assert.ok(chatSlice.includes("resource.data.participantUid == request.auth.uid"));
+  assert.ok(chatSlice.includes("!isChatBlocked(request.auth.uid)"));
+  assert.ok(chatSlice.includes("get(/databases/$(database)/documents/privateChats/$(chatId)).data.participantUid == request.auth.uid"));
+
+  // 2. HTML has #view-network, 6 user sub-tabs, and 6 new Admin tabs
+  for (const token of [
+    'id="view-network"',
+    'data-route="network"',
+    'data-pro-tab="join"',
+    'data-pro-tab="hire"',
+    'data-pro-tab="outsourcing"',
+    'data-pro-tab="my-applications"',
+    'data-pro-tab="my-bookings"',
+    'data-pro-tab="messages"',
+    'data-admin-tab="pro-registrations"',
+    'data-admin-tab="pro-hiring"',
+    'data-admin-tab="pro-outsourcing"',
+    'data-admin-tab="pro-assignments"',
+    'data-admin-tab="private-messages"',
+    'data-admin-tab="pro-booking-history"'
+  ]) {
+    assert.ok(indexHtml.includes(token), `index.html missing token: ${token}`);
+  }
+
+  // 3. Auth gate hides view-network when logged out and admin-guard recognizes network route
+  assert.ok(authGateJs.includes('"view-network"'), "auth-gate.js must hide view-network for logged-out visitors");
+  assert.ok(adminGuardJs.includes('"network"'), "admin-guard.js must include network in PUBLIC_ROUTES");
+
+  // 4. Service Worker precaches all 3 new modules
+  for (const asset of ['"/js/pro-network.js"', '"/js/private-chat.js"', '"/js/admin-pro-network.js"']) {
+    assert.ok(swJs.includes(asset), `sw.js must precache ${asset}`);
+  }
+});
+
+test("Private chat visual read receipts render checkmarks, detect unread incoming messages, and enforce Firestore recipient-only read updates", async () => {
+  const chatMod = await import(`../js/private-chat.js?v=${Date.now()}`);
+  const { TRANSLATIONS } = await import(`../js/i18n.js?v=${Date.now()}`);
+  const tEn = (k) => TRANSLATIONS.en[k] || k;
+  const tHi = (k) => TRANSLATIONS.hi[k] || k;
+
+  // 1. Translations exist in both English and Hindi
+  assert.ok(TRANSLATIONS.en.chatReceiptSent && TRANSLATIONS.hi.chatReceiptSent);
+  assert.ok(TRANSLATIONS.en.chatReceiptRead && TRANSLATIONS.hi.chatReceiptRead);
+
+  // 2. Read receipt state helper: outgoing sent vs read vs incoming hidden
+  const userSentUnread = { id: "m1", senderRole: "customer", text: "Hello admin", isRead: false, createdAt: "2026-10-01T10:00:00Z" };
+  const userSentRead = { id: "m2", senderRole: "customer", text: "Any update?", isRead: true, readAt: "2026-10-01T10:05:00Z", createdAt: "2026-10-01T10:02:00Z" };
+  const adminReplyUnread = { id: "m3", senderRole: "admin", text: "Checking now", isRead: false, createdAt: "2026-10-01T10:06:00Z" };
+  const adminReplyRead = { id: "m4", senderRole: "admin", text: "Confirmed!", isRead: true, readAt: "2026-10-01T10:08:00Z", createdAt: "2026-10-01T10:07:00Z" };
+
+  const s1 = chatMod.getMessageReadReceiptState(userSentUnread, { viewerRole: "customer" });
+  assert.equal(s1.show, true);
+  assert.equal(s1.status, "sent");
+  assert.equal(s1.isRead, false);
+  assert.equal(s1.symbol, "✓");
+
+  const s2 = chatMod.getMessageReadReceiptState(userSentRead, { viewerRole: "customer" });
+  assert.equal(s2.show, true);
+  assert.equal(s2.status, "read");
+  assert.equal(s2.isRead, true);
+  assert.equal(s2.symbol, "✓✓");
+
+  const s3 = chatMod.getMessageReadReceiptState(adminReplyUnread, { viewerRole: "customer" });
+  assert.equal(s3.show, false);
+
+  const s4 = chatMod.getMessageReadReceiptState(adminReplyRead, { viewerRole: "admin" });
+  assert.equal(s4.show, true);
+  assert.equal(s4.status, "read");
+  assert.equal(s4.symbol, "✓✓");
+
+  const s5 = chatMod.getMessageReadReceiptState(adminReplyUnread, { viewerRole: "admin" });
+  assert.equal(s5.show, true);
+  assert.equal(s5.status, "sent");
+  assert.equal(s5.symbol, "✓");
+
+  // 3. Unread incoming message ID detection for recipient Firestore updates
+  const allMsgs = [userSentUnread, userSentRead, adminReplyUnread, adminReplyRead];
+  assert.deepEqual(
+    chatMod.getUnreadIncomingMessageIds(allMsgs, { viewerRole: "customer" }),
+    ["m3"],
+    "Customer viewer should only mark unread admin messages as read"
+  );
+  assert.deepEqual(
+    chatMod.getUnreadIncomingMessageIds(allMsgs, { viewerRole: "admin" }),
+    ["m1"],
+    "Admin viewer should only mark unread customer/professional messages as read"
+  );
+
+  // 4. Rendered HTML in .pro-chat-conversation for user and admin views
+  const thread = {
+    id: "chat_receipt_1",
+    participantUid: "user_A",
+    participantName: "Riya",
+    participantRole: "customer",
+    contextType: "hiring",
+    contextLabel: "Wedding Shoot",
+    unreadByUser: 1,
+    unreadByAdmin: 1
+  };
+  const userChatHtml = chatMod.renderUserPrivateChatHtml({
+    threads: [thread],
+    activeChatId: thread.id,
+    messages: allMsgs,
+    isBlocked: false,
+    t: tEn
+  });
+  assert.ok(userChatHtml.includes('class="pro-chat-conversation"'));
+  assert.ok(userChatHtml.includes('data-read-receipt="sent"'), "User view must render single checkmark for unread outgoing message");
+  assert.ok(userChatHtml.includes('data-read-receipt="read"'), "User view must render double checkmark for read outgoing message");
+  assert.ok(userChatHtml.includes('class="chat-read-receipt is-sent"'));
+  assert.ok(userChatHtml.includes('class="chat-read-receipt is-read"'));
+  assert.ok(userChatHtml.includes('class="chat-receipt-svg"'));
+  assert.ok(userChatHtml.includes(`aria-label="${tEn("chatReceiptSent")}"`));
+  assert.ok(userChatHtml.includes(`aria-label="${tEn("chatReceiptRead")} •`));
+
+  const adminChatHtml = chatMod.renderAdminPrivateMessagesHtml({
+    threads: [thread],
+    activeChatId: thread.id,
+    messages: allMsgs,
+    blockedMap: {},
+    t: tHi
+  });
+  assert.ok(adminChatHtml.includes('class="pro-chat-conversation"'));
+  assert.ok(adminChatHtml.includes('data-read-receipt="sent"'), "Admin view must render single checkmark for unread outgoing reply");
+  assert.ok(adminChatHtml.includes('data-read-receipt="read"'), "Admin view must render double checkmark for read outgoing reply");
+  assert.ok(adminChatHtml.includes(`aria-label="${tHi("chatReceiptSent")}"`));
+  assert.ok(adminChatHtml.includes(`aria-label="${tHi("chatReceiptRead")} •`));
+
+  // 5. Firestore Security Rules, firebase.js, app.js, and styles.css wiring checks
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const stylesCss = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+
+  const msgRulesSlice = rules.slice(rules.indexOf("match /messages/{messageId}"));
+  assert.ok(rules.includes("'isRead'"), "firestore.rules must validate isRead field");
+  assert.ok(rules.includes("'readAt'"), "firestore.rules must validate readAt field");
+  assert.ok(rules.includes("'readByUid'"), "firestore.rules must validate readByUid field");
+  assert.ok(rules.includes("'readByRole'"), "firestore.rules must validate readByRole field");
+  assert.ok(msgRulesSlice.includes("incoming().isRead == false"), "Senders must not be allowed to create pre-read messages");
+  assert.ok(msgRulesSlice.includes("existing().senderRole == 'admin'"), "Participants may only mark incoming admin messages as read");
+  assert.ok(
+    msgRulesSlice.includes("affectedKeys().hasOnly(['isRead', 'readAt', 'readByUid', 'readByRole'])"),
+    "Participants must only be able to update read receipt fields and never edit message text/images"
+  );
+  assert.ok(msgRulesSlice.includes("incoming().isRead == true"));
+  assert.ok(msgRulesSlice.includes("incoming().readByUid == request.auth.uid"));
+  assert.equal(/allow\s+(?:read|get|list|write|create|update|delete)\s*:\s*if\s+true\b/i.test(rules), false);
+
+  assert.ok(firebaseJs.includes("export async function markPrivateChatMessagesRead("));
+  assert.ok(firebaseJs.includes("isRead: false"));
+  assert.ok(appJs.includes("async function syncVisibleChatReadReceipts("));
+  assert.ok(appJs.includes('"network"') && appJs.includes('if (target === "network")'));
+  assert.ok(stylesCss.includes(".chat-read-receipt.is-read"));
+});
+
+test("Customer Private Booking Portal enforces strict UID isolation across all 6 sections and blocks cross-customer leaks", async () => {
+  const portalMod = await import(`../js/customer-portal.js?v=${Date.now()}`);
+  const { TRANSLATIONS } = await import(`../js/i18n.js?v=${Date.now()}`);
+  const tEn = (k) => TRANSLATIONS.en[k] || k;
+  const tHi = (k) => TRANSLATIONS.hi[k] || k;
+
+  const customerA = { uid: "uid_customer_A", email: "riya@example.com", displayName: "Riya Sharma", isAnonymous: false };
+  const customerB = { uid: "uid_customer_B", email: "rohit.secret@example.com", displayName: "Rohit Verma", isAnonymous: false };
+
+  // Mixed dataset containing BOTH Customer A and Customer B sensitive records + internal admin fields
+  const allCatalogs = [
+    {
+      id: "cat_A1",
+      customerUid: customerA.uid,
+      bookingId: "bk_A1",
+      title: "Riya Bridal Private Album",
+      category: "Bridal Selection",
+      description: "Curated bridal portrait proofs for Riya.",
+      items: [{ label: "Bridal Set 1", url: "https://example.com/riya-set-1" }],
+      status: "active",
+      sharedByAdminEmail: "chanderstudio0@gmail.com",
+      adminNotes: "INTERNAL_ADMIN_NOTE_SECRET_999"
+    },
+    {
+      id: "cat_B1",
+      customerUid: customerB.uid,
+      bookingId: "bk_B1",
+      title: "Rohit Confidential Corporate Shoot Catalog",
+      category: "Corporate",
+      description: "Private files for Rohit ONLY",
+      items: [{ label: "Rohit Secret Proof", url: "https://example.com/rohit-secret" }],
+      status: "active"
+    }
+  ];
+
+  const allSlots = [
+    {
+      id: "slot_A1",
+      customerUid: customerA.uid,
+      bookingId: "bk_A1",
+      eventTitle: "Riya Bridal Studio Session",
+      eventDate: "2026-12-10",
+      eventTime: "10:30 AM",
+      slotLabel: "Studio Bay A • Morning Gold",
+      location: "Star Artist Studio, Talwara Khurd",
+      approvalStatus: "Confirmed",
+      customerNote: "Please arrive 15 mins early.",
+      adminNotes: "INTERNAL_SLOT_SECRET_XYZ"
+    },
+    {
+      id: "slot_B1",
+      customerUid: customerB.uid,
+      bookingId: "bk_B1",
+      eventTitle: "Rohit VIP Wedding Slot",
+      eventDate: "2026-12-25",
+      eventTime: "07:00 PM",
+      slotLabel: "Private Palace Hall B",
+      location: "Secret Villa Address 42, Chandigarh",
+      approvalStatus: "Approved"
+    }
+  ];
+
+  const allBookings = [
+    {
+      id: "bk_A1",
+      userId: customerA.uid,
+      clientName: "Riya Sharma",
+      contactNumber: "+919811111111",
+      serviceType: "Bridal Couture Shoot",
+      preferredDate: "2026-12-10",
+      preferredTime: "10:30 AM",
+      location: "Star Artist Studio",
+      notes: "Pastel lehenga theme",
+      status: "Confirmed",
+      adminNotes: "INTERNAL_ADMIN_MARGIN_50K",
+      photographerPhone: "+919900000001",
+      totalBookings: 482
+    },
+    {
+      id: "bk_B1",
+      userId: customerB.uid,
+      clientName: "Rohit Verma",
+      contactNumber: "+919822222222",
+      serviceType: "Luxury Wedding Film",
+      preferredDate: "2026-12-25",
+      preferredTime: "07:00 PM",
+      location: "Secret Villa Address 42, Chandigarh",
+      notes: "VIP Guest List",
+      status: "Pending"
+    }
+  ];
+
+  const allThreads = [
+    {
+      id: "chat_A1",
+      participantUid: customerA.uid,
+      participantName: "Riya Sharma",
+      participantRole: "customer",
+      contextType: "hiring",
+      contextLabel: "Riya Bridal Shoot",
+      lastMessageText: "See you at 10:30 AM!",
+      unreadByUser: 1
+    },
+    {
+      id: "chat_B1",
+      participantUid: customerB.uid,
+      participantName: "Rohit Verma",
+      participantRole: "customer",
+      contextType: "hiring",
+      contextLabel: "Rohit Private Chat",
+      lastMessageText: "ROHIT_PRIVATE_SECRET_MESSAGE",
+      unreadByUser: 2
+    }
+  ];
+
+  // Sensitive tokens that MUST NEVER appear in Customer A's rendered portal on any tab
+  const forbiddenForCustomerA = [
+    "Rohit Verma",
+    "+919822222222",
+    "rohit.secret@example.com",
+    "Secret Villa Address 42, Chandigarh",
+    "Rohit Confidential Corporate Shoot Catalog",
+    "Rohit Secret Proof",
+    "Rohit VIP Wedding Slot",
+    "Private Palace Hall B",
+    "ROHIT_PRIVATE_SECRET_MESSAGE",
+    "INTERNAL_ADMIN_NOTE_SECRET_999",
+    "INTERNAL_SLOT_SECRET_XYZ",
+    "INTERNAL_ADMIN_MARGIN_50K",
+    "+919900000001",
+    "482"
+  ];
+
+  // Verify every single one of the 6 customer portal tabs for Customer A
+  for (const tab of portalMod.CUSTOMER_PORTAL_TABS) {
+    const html = portalMod.renderCustomerPortalHtml({
+      user: customerA,
+      userProfile: {
+        id: customerA.uid,
+        userId: customerA.uid,
+        displayName: "Riya Sharma",
+        email: "riya@example.com",
+        createdAt: "2026-10-01T09:00:00Z",
+        adminNotes: "INTERNAL_ADMIN_NOTE_SECRET_999"
+      },
+      catalogs: allCatalogs,
+      slots: allSlots,
+      bookings: allBookings,
+      chatThreads: allThreads,
+      activeChatId: "chat_A1",
+      chatMessages: [
+        { id: "m1", senderRole: "customer", text: "Hello studio", isRead: true, createdAt: "2026-10-01T10:00:00Z" }
+      ],
+      activeTab: tab,
+      t: tEn
+    });
+
+    assert.ok(html.includes(`data-portal-panel="${tab}"`), `Portal must render ${tab} panel`);
+    for (const secret of forbiddenForCustomerA) {
+      assert.equal(
+        html.includes(secret),
+        false,
+        `SECURITY VIOLATION: Customer A portal tab '${tab}' leaked forbidden value: ${secret}`
+      );
+    }
+  }
+
+  // Verify Customer A sees their OWN records on each tab
+  const catalogHtml = portalMod.renderCustomerPortalHtml({ user: customerA, catalogs: allCatalogs, activeTab: "my-catalog", t: tEn });
+  assert.ok(catalogHtml.includes("Riya Bridal Private Album"));
+
+  const slotHtml = portalMod.renderCustomerPortalHtml({ user: customerA, slots: allSlots, bookings: allBookings, activeTab: "my-slot", t: tEn });
+  assert.ok(slotHtml.includes("Studio Bay A • Morning Gold") && slotHtml.includes("2026-12-10"));
+
+  const regHtml = portalMod.renderCustomerPortalHtml({
+    user: customerA,
+    userProfile: { id: customerA.uid, userId: customerA.uid, displayName: "Riya Sharma", email: "riya@example.com", createdAt: "2026-10-01T09:00:00Z" },
+    activeTab: "my-registration",
+    t: tHi
+  });
+  assert.ok(regHtml.includes("Riya Sharma") && regHtml.includes("riya@example.com"));
+
+  const approvalHtml = portalMod.renderCustomerPortalHtml({
+    user: customerA,
+    slots: allSlots,
+    bookings: allBookings,
+    activeTab: "approval-status",
+    t: tEn
+  });
+  assert.ok(approvalHtml.includes("Pending") && approvalHtml.includes("Approved") && approvalHtml.includes("Confirmed") && approvalHtml.includes("Rejected"));
+  assert.ok(approvalHtml.includes('data-portal-approval-status="Confirmed"'));
+
+  const bookingHtml = portalMod.renderCustomerPortalHtml({ user: customerA, bookings: allBookings, activeTab: "my-bookings", t: tEn });
+  assert.ok(bookingHtml.includes("Bridal Couture Shoot"));
+
+  const msgHtml = portalMod.renderCustomerPortalHtml({
+    user: customerA,
+    chatThreads: allThreads,
+    activeChatId: "chat_A1",
+    chatMessages: [{ id: "m1", senderRole: "customer", text: "Hello studio", isRead: true, createdAt: "2026-10-01T10:00:00Z" }],
+    activeTab: "my-messages",
+    t: tEn
+  });
+  assert.ok(msgHtml.includes("Riya Bridal Shoot") && msgHtml.includes("Hello studio"));
+
+  // Anonymous or null user must NEVER see any portal records
+  const anonHtml = portalMod.renderCustomerPortalHtml({
+    user: { uid: "anon_1", isAnonymous: true },
+    catalogs: allCatalogs,
+    bookings: allBookings,
+    activeTab: "my-bookings",
+    t: tEn
+  });
+  assert.equal(anonHtml.includes("Riya Sharma"), false);
+  assert.equal(anonHtml.includes("Rohit Verma"), false);
+});
+
+test("Unauthorized cross-customer URL/ID tampering, Admin route escalation, and Firestore Security Rules are strictly blocked", async () => {
+  const portalMod = await import(`../js/customer-portal.js?v=${Date.now()}`);
+  const guardMod = await import(`../js/admin-guard.js?v=${Date.now()}`);
+  const authGateMod = await import(`../js/auth-gate.js?v=${Date.now()}`);
+
+  const uidA = "uid_customer_A";
+  const uidB = "uid_customer_B";
+
+  // 1. Cross-customer URL / document ID tampering attempts MUST be denied
+  const bookings = [
+    { id: "bk_A1", userId: uidA, clientName: "Riya", adminNotes: "TOP_SECRET_NOTE" },
+    { id: "bk_B1", userId: uidB, clientName: "Rohit" }
+  ];
+  const catalogs = [
+    { id: "cat_A1", customerUid: uidA, title: "Riya Catalog" },
+    { id: "cat_B1", customerUid: uidB, title: "Rohit Catalog" }
+  ];
+  const slots = [
+    { id: "slot_A1", customerUid: uidA, slotLabel: "Slot A" },
+    { id: "slot_B1", customerUid: uidB, slotLabel: "Slot B" }
+  ];
+
+  // Customer A tries changing URL to ?booking=bk_B1, ?catalog=cat_B1, or ?slot=slot_B1
+  const tamperBooking = portalMod.resolvePortalDeepLinkAccess({ requestedId: "bk_B1", ownedRecords: bookings, currentUid: uidA });
+  assert.equal(tamperBooking.allowed, false, "Cross-customer booking ID access MUST be blocked");
+  assert.equal(tamperBooking.denied, true);
+  assert.equal(tamperBooking.record, null);
+
+  const tamperCatalog = portalMod.resolvePortalDeepLinkAccess({ requestedId: "cat_B1", ownedRecords: catalogs, currentUid: uidA });
+  assert.equal(tamperCatalog.allowed, false, "Cross-customer catalog ID access MUST be blocked");
+  assert.equal(tamperCatalog.denied, true);
+  assert.equal(tamperCatalog.record, null);
+
+  const tamperSlot = portalMod.resolvePortalDeepLinkAccess({ requestedId: "slot_B1", ownedRecords: slots, currentUid: uidA });
+  assert.equal(tamperSlot.allowed, false, "Cross-customer slot ID access MUST be blocked");
+  assert.equal(tamperSlot.denied, true);
+  assert.equal(tamperSlot.record, null);
+
+  // Customer A accessing OWN booking ID succeeds and strips adminNotes
+  const ownBooking = portalMod.resolvePortalDeepLinkAccess({ requestedId: "bk_A1", ownedRecords: bookings, currentUid: uidA });
+  assert.equal(ownBooking.allowed, true);
+  assert.equal(ownBooking.denied, false);
+  assert.equal(ownBooking.record.id, "bk_A1");
+  assert.equal("adminNotes" in ownBooking.record, false, "adminNotes must be stripped from customer booking");
+
+  // Query param parser detects tampered hash/search params
+  const parsedTamper = portalMod.extractPortalQueryParams({ hash: "#portal?booking=bk_B1" });
+  assert.equal(parsedTamper.bookingId, "bk_B1");
+
+  // 2. Non-admin customer attempting to access Admin Dashboard is blocked; authorized Admin succeeds
+  const normalUser = { uid: uidA, email: "riya@example.com", emailVerified: true, isAnonymous: false };
+  const adminAttempt = authGateMod.resolveAuthenticatedAccess({
+    requestedRoute: "admin",
+    hash: "#admin",
+    user: normalUser,
+    isAdmin: false
+  });
+  assert.equal(adminAttempt.blockedAdminAttempt, true);
+  assert.equal(adminAttempt.route, "home");
+
+  const verifiedAdmin = { uid: "admin_uid", email: "chanderstudio0@gmail.com", emailVerified: true, isAnonymous: false };
+  assert.equal(guardMod.isAuthorizedAdminUser(verifiedAdmin), true);
+  assert.equal(guardMod.isAuthorizedAdminUser(normalUser), false);
+
+  // Logged-out visitor attempting #portal is blocked and redirected to #login
+  const loggedOutPortal = authGateMod.resolveAuthenticatedAccess({
+    requestedRoute: "portal",
+    hash: "#portal",
+    user: null,
+    isAdmin: false
+  });
+  assert.equal(loggedOutPortal.authenticated, false);
+  assert.equal(loggedOutPortal.redirectedToAuth, true);
+  assert.equal(loggedOutPortal.route, "login");
+
+  // 3. Firestore Security Rules enforce UID ownership on customerCatalogs, customerSlots, bookings, users, and privateChats
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+
+  assert.equal(/allow\s+(?:read|get|list|write|create|update|delete)\s*:\s*if\s+true\b/i.test(rules), false);
+  assert.ok(rules.includes("match /{document=**} {\n      allow read, write: if false;"));
+
+  const catalogsSlice = rules.slice(rules.indexOf("match /customerCatalogs/{catalogId}"), rules.indexOf("match /customerSlots/{slotId}"));
+  assert.ok(catalogsSlice.includes("allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);"));
+  assert.ok(catalogsSlice.includes("allow create, update: if isAdmin() && isValidId(catalogId) && isValidCustomerCatalog(incoming());"));
+  assert.ok(catalogsSlice.includes("allow delete: if isAdmin();"));
+
+  const slotsSlice = rules.slice(rules.indexOf("match /customerSlots/{slotId}"));
+  assert.ok(slotsSlice.includes("allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);"));
+  assert.ok(slotsSlice.includes("allow create, update: if isAdmin() && isValidId(slotId) && isValidCustomerSlot(incoming());"));
+  assert.ok(slotsSlice.includes("allow delete: if isAdmin();"));
+
+  // Bookings rule supports Pending/Approved/Rejected/Confirmed while still preventing customer self-approval
+  assert.ok(rules.includes("data.status in ['Pending', 'Approved', 'Rejected', 'Confirmed', 'Completed', 'Cancelled']"));
+  const bookingsSlice = rules.slice(rules.indexOf("match /bookings/{bookingId}"), rules.indexOf("match /gallery/{itemId}"));
+  assert.ok(bookingsSlice.includes("allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());"));
+  assert.ok(bookingsSlice.includes("allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());"));
+  assert.ok(bookingsSlice.includes("(incoming().status == existing().status || incoming().status == 'Cancelled')"));
+
+  // Client Firebase queries enforce auth.currentUser.uid and refuse spoofed cross-UID arguments
+  assert.ok(firebaseJs.includes("export async function fetchMyUserProfile("));
+  assert.ok(firebaseJs.includes("export async function fetchMyCustomerCatalogs("));
+  assert.ok(firebaseJs.includes("export async function fetchMyCustomerSlots("));
+  assert.ok(firebaseJs.includes('if (uid && uid !== authUid) return [];'));
+
+  // Mobile and Desktop layouts both include My Portal route and hide Admin from non-admins
+  assert.ok(indexHtml.includes('id="view-portal"'));
+  assert.ok(indexHtml.includes('data-route="portal"'));
+  assert.ok(indexHtml.includes('data-admin-tab="customer-portal"'));
+  assert.ok(swJs.includes('"/js/customer-portal.js"'));
+});
+
+
+
 
 
 

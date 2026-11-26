@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
@@ -37,13 +38,17 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +65,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.AppLanguage
 import com.example.data.model.ModelRegistration
 import com.example.data.model.ShootBooking
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import com.example.ui.theme.GoldContainer
 import com.example.ui.theme.GoldDark
 import com.example.ui.theme.GoldLight
@@ -535,6 +545,15 @@ fun AdminEmailPreviewSection(
         contentPadding = PaddingValues(top = 12.dp, bottom = 36.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Automated Email Notification System Controls (synced with studioConfig/emailAlerts)
+        item {
+            AdminAutomatedEmailAlertsCard(
+                pendingBookingsCount = bookings.count { it.status.equals("Pending", ignoreCase = true) },
+                pendingModelsCount = models.count { it.status.equals("pending", ignoreCase = true) },
+                isHindi = isHindi
+            )
+        }
+
         // Header Banner & Safe Preview Badge
         item {
             Card(
@@ -1109,3 +1128,206 @@ private fun BrandedEmailVisualCard(preview: EmailPreviewPayload) {
         }
     }
 }
+
+@Composable
+fun AdminAutomatedEmailAlertsCard(
+    pendingBookingsCount: Int,
+    pendingModelsCount: Int,
+    isHindi: Boolean
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lockedRecipient = "chanderstudio0@gmail.com"
+    var bookingAlertsEnabled by remember { mutableStateOf(true) }
+    var modelAlertsEnabled by remember { mutableStateOf(true) }
+    var isSaving by remember { mutableStateOf(false) }
+
+    val firestore = remember(context) {
+        try {
+            FirebaseFirestore.getInstance(context.applicationContext.getString(R.string.firestore_database_id))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    LaunchedEffect(firestore) {
+        if (firestore == null) return@LaunchedEffect
+        try {
+            val snap = firestore.collection("studioConfig").document("emailAlerts").get().await()
+            if (snap.exists()) {
+                bookingAlertsEnabled = snap.getBoolean("bookingAlertsEnabled") ?: true
+                modelAlertsEnabled = snap.getBoolean("modelAlertsEnabled") ?: true
+            }
+        } catch (_: Exception) {
+            // Keep defaults when offline or uninitialized
+        }
+    }
+
+    fun persistSettings(nextBooking: Boolean, nextModel: Boolean) {
+        bookingAlertsEnabled = nextBooking
+        modelAlertsEnabled = nextModel
+        if (firestore == null) return
+        scope.launch {
+            isSaving = true
+            try {
+                firestore.collection("studioConfig").document("emailAlerts").set(
+                    mapOf(
+                        "bookingAlertsEnabled" to nextBooking,
+                        "modelAlertsEnabled" to nextModel,
+                        "companyAlertsEnabled" to true,
+                        "browserAlertsEnabled" to true,
+                        "recipientEmail" to lockedRecipient,
+                        "updatedByEmail" to lockedRecipient,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                Toast.makeText(
+                    context,
+                    if (isHindi) "ईमेल अलर्ट सेटिंग्स सहेजी गईं" else "Email alert settings saved",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (_: Exception) {
+                Toast.makeText(
+                    context,
+                    if (isHindi) "सेटिंग्स सहेजने में त्रुटि" else "Unable to save alert settings",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } finally {
+                isSaving = false
+            }
+        }
+    }
+
+    val isActive = bookingAlertsEnabled || modelAlertsEnabled
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
+        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.55f)),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("admin_auto_email_alerts_card")
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = if (isHindi) "स्वचालित ईमेल अलर्ट" else "Automated Email Alerts",
+                        tint = GoldPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isHindi) "स्वचालित ईमेल अलर्ट" else "Automated Email Alerts",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = GoldLight
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            if (isActive) SuccessGreen.copy(alpha = 0.16f)
+                            else Color(0xFFF59E0B).copy(alpha = 0.16f)
+                        )
+                        .border(
+                            1.dp,
+                            if (isActive) SuccessGreen.copy(alpha = 0.55f)
+                            else Color(0xFFF59E0B).copy(alpha = 0.55f),
+                            RoundedCornerShape(999.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = if (isActive) {
+                            if (isHindi) "सक्रिय" else "ACTIVE"
+                        } else {
+                            if (isHindi) "रुका हुआ" else "PAUSED"
+                        },
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isActive) Color(0xFF6EE7B7) else Color(0xFFFCD34D)
+                    )
+                }
+            }
+
+            Text(
+                text = if (isHindi)
+                    "प्राप्तकर्ता (सुरक्षित): $lockedRecipient • लंबित बुकिंग: $pendingBookingsCount • लंबित मॉडल: $pendingModelsCount"
+                else
+                    "Locked Recipient: $lockedRecipient • Pending Bookings: $pendingBookingsCount • Pending Models: $pendingModelsCount",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFC9C2B5)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isHindi) "नई बुकिंग अनुरोध अलर्ट" else "New Booking Request Alerts",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White
+                    )
+                    Text(
+                        text = if (isHindi) "नई शूट बुकिंग पर तुरंत ईमेल भेजें" else "Email admin on every new booking submission",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF9E9689)
+                    )
+                }
+                Switch(
+                    checked = bookingAlertsEnabled,
+                    enabled = !isSaving,
+                    onCheckedChange = { checked -> persistSettings(checked, modelAlertsEnabled) },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("admin_alert_toggle_booking"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = GoldPrimary
+                    )
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isHindi) "नया 18+ मॉडल आवेदन अलर्ट" else "New 18+ Model Application Alerts",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White
+                    )
+                    Text(
+                        text = if (isHindi) "नए मॉडल आवेदन पर तुरंत ईमेल भेजें" else "Email admin on every new 18+ model application",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF9E9689)
+                    )
+                }
+                Switch(
+                    checked = modelAlertsEnabled,
+                    enabled = !isSaving,
+                    onCheckedChange = { checked -> persistSettings(bookingAlertsEnabled, checked) },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("admin_alert_toggle_model"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = GoldPrimary
+                    )
+                )
+            }
+        }
+    }
+}
+

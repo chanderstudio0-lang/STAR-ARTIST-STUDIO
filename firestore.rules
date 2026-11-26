@@ -98,7 +98,7 @@ service cloud.firestore {
              (!('preferredTime' in data) || (data.preferredTime is string && data.preferredTime.size() <= 50)) &&
              (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
              (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000)) &&
-             data.status in ['Pending', 'Confirmed', 'Completed', 'Cancelled'] &&
+             data.status in ['Pending', 'Approved', 'Rejected', 'Confirmed', 'Completed', 'Cancelled'] &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
@@ -270,6 +270,263 @@ service cloud.firestore {
              data.turnaroundEn is string && data.turnaroundEn.size() >= 2 && data.turnaroundEn.size() <= 100 &&
              data.includedServices is list && data.includedServices.size() >= 1 && data.includedServices.size() <= 15 &&
              (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.lower() == 'chanderstudio0@gmail.com')) &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidStudioEmailConfig(data, configId) {
+      return configId == 'emailAlerts' &&
+             data.keys().hasOnly([
+               'bookingAlertsEnabled', 'modelAlertsEnabled', 'companyAlertsEnabled',
+               'browserAlertsEnabled', 'recipientEmail', 'updatedByEmail', 'updatedAt'
+             ]) &&
+             data.bookingAlertsEnabled is bool &&
+             data.modelAlertsEnabled is bool &&
+             (!('companyAlertsEnabled' in data) || data.companyAlertsEnabled is bool) &&
+             (!('browserAlertsEnabled' in data) || data.browserAlertsEnabled is bool) &&
+             data.recipientEmail is string &&
+             data.recipientEmail.lower() == 'chanderstudio0@gmail.com' &&
+             (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.lower() == 'chanderstudio0@gmail.com')) &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminEmailAlert(data) {
+      return data.keys().hasOnly([
+               'type', 'recordId', 'recipientEmail', 'subject', 'summary',
+               'status', 'source', 'messageId', 'errorMessage', 'isRead',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.type in ['booking', 'model', 'company'] &&
+             data.recordId is string && data.recordId.size() > 0 && data.recordId.size() <= 128 &&
+             data.recipientEmail is string &&
+             data.recipientEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.subject is string && data.subject.size() > 0 && data.subject.size() <= 200 &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 500)) &&
+             data.status in ['queued', 'sent', 'failed', 'skipped', 'acknowledged'] &&
+             (!('source' in data) || data.source in ['cloud-function', 'dashboard-live', 'manual-resend']) &&
+             (!('messageId' in data) || (data.messageId is string && data.messageId.size() <= 200)) &&
+             (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 300)) &&
+             (!('isRead' in data) || data.isRead is bool) &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isChatBlocked(uid) {
+      return exists(/databases/$(database)/documents/chatBlockedUsers/$(uid)) &&
+             get(/databases/$(database)/documents/chatBlockedUsers/$(uid)).data.isBlocked == true;
+    }
+
+    function isValidProfessionalProfile(data) {
+      return data.keys().hasOnly([
+               'userId', 'fullName', 'mobileNumber', 'email', 'city', 'state',
+               'category', 'yearsExperience', 'skills', 'equipmentDetails',
+               'workingLocations', 'expectedCharges', 'portfolioPhotos',
+               'videoLinks', 'shortIntro', 'availabilityStatus',
+               'status', 'adminNotes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.mobileNumber is string && data.mobileNumber.size() >= 8 && data.mobileNumber.size() <= 20 &&
+             data.email is string && data.email.size() >= 5 && data.email.size() <= 128 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 80 &&
+             data.state is string && data.state.size() >= 2 && data.state.size() <= 80 &&
+             data.category in ['Photographer', 'Videographer', 'Editor', 'Camera Operator', 'Drone Operator', 'Hybrid (Photo + Video)'] &&
+             data.yearsExperience is int && data.yearsExperience >= 0 && data.yearsExperience <= 60 &&
+             data.skills is string && data.skills.size() >= 2 && data.skills.size() <= 500 &&
+             data.equipmentDetails is string && data.equipmentDetails.size() >= 2 && data.equipmentDetails.size() <= 600 &&
+             data.workingLocations is string && data.workingLocations.size() >= 2 && data.workingLocations.size() <= 300 &&
+             (!('expectedCharges' in data) || (data.expectedCharges is string && data.expectedCharges.size() <= 120)) &&
+             (!('portfolioPhotos' in data) || (data.portfolioPhotos is list && data.portfolioPhotos.size() <= 4)) &&
+             (!('videoLinks' in data) || (data.videoLinks is string && data.videoLinks.size() <= 1000)) &&
+             data.shortIntro is string && data.shortIntro.size() >= 10 && data.shortIntro.size() <= 1000 &&
+             data.availabilityStatus in ['Available', 'Limited Availability', 'Busy / Booked'] &&
+             data.status in ['pending', 'approved', 'rejected', 'suspended'] &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPublicProfessionalProfile(data, professionalId) {
+      return data.keys().hasOnly([
+               'professionalId', 'fullName', 'city', 'state', 'category',
+               'yearsExperience', 'skills', 'equipmentDetails', 'workingLocations',
+               'expectedCharges', 'portfolioPhotos', 'videoLinks', 'shortIntro',
+               'availabilityStatus', 'verifiedBadge', 'createdAt', 'updatedAt'
+             ]) &&
+             data.professionalId == professionalId &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 80 &&
+             data.state is string && data.state.size() >= 2 && data.state.size() <= 80 &&
+             data.category in ['Photographer', 'Videographer', 'Editor', 'Camera Operator', 'Drone Operator', 'Hybrid (Photo + Video)'] &&
+             data.yearsExperience is int && data.yearsExperience >= 0 && data.yearsExperience <= 60 &&
+             data.skills is string && data.skills.size() <= 500 &&
+             data.equipmentDetails is string && data.equipmentDetails.size() <= 600 &&
+             data.workingLocations is string && data.workingLocations.size() <= 300 &&
+             (!('expectedCharges' in data) || (data.expectedCharges is string && data.expectedCharges.size() <= 120)) &&
+             (!('portfolioPhotos' in data) || (data.portfolioPhotos is list && data.portfolioPhotos.size() <= 4)) &&
+             (!('videoLinks' in data) || (data.videoLinks is string && data.videoLinks.size() <= 1000)) &&
+             data.shortIntro is string && data.shortIntro.size() <= 1000 &&
+             data.availabilityStatus in ['Available', 'Limited Availability', 'Busy / Booked'] &&
+             data.verifiedBadge == true &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidProfessionalHiringRequest(data) {
+      return data.keys().hasOnly([
+               'userId', 'customerName', 'contactNumber', 'eventType', 'requiredService',
+               'eventDate', 'eventTime', 'eventLocation', 'workingDuration', 'budgetRange',
+               'specialRequirements', 'referenceLinks', 'referencePhotos',
+               'status', 'assignedProfessionalId', 'assignedProfessionalUid',
+               'assignedProfessionalName', 'assignedProfessionalCategory',
+               'proposalMessage', 'customerAcceptance', 'customerResponseNote',
+               'adminNotes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 100 &&
+             data.contactNumber is string && data.contactNumber.size() >= 8 && data.contactNumber.size() <= 20 &&
+             data.eventType in ['Wedding', 'Pre-wedding', 'Birthday', 'Party', 'Corporate', 'Music Video', 'Modeling', 'Other'] &&
+             data.requiredService in ['Photography', 'Videography', 'Both', 'Drone', 'Editing'] &&
+             data.eventDate is string && data.eventDate.size() >= 8 && data.eventDate.size() <= 30 &&
+             data.eventTime is string && data.eventTime.size() >= 2 && data.eventTime.size() <= 30 &&
+             data.eventLocation is string && data.eventLocation.size() >= 2 && data.eventLocation.size() <= 200 &&
+             data.workingDuration is string && data.workingDuration.size() >= 1 && data.workingDuration.size() <= 80 &&
+             data.budgetRange is string && data.budgetRange.size() >= 2 && data.budgetRange.size() <= 100 &&
+             (!('specialRequirements' in data) || (data.specialRequirements is string && data.specialRequirements.size() <= 1500)) &&
+             (!('referenceLinks' in data) || (data.referenceLinks is string && data.referenceLinks.size() <= 1000)) &&
+             (!('referencePhotos' in data) || (data.referencePhotos is list && data.referencePhotos.size() <= 3)) &&
+             data.status in [
+               'Pending Admin Review', 'Assignment Proposed', 'Customer Accepted',
+               'Proposal Declined', 'Confirmed', 'Assigned', 'In Progress',
+               'Completed', 'Cancelled', 'Rejected'
+             ] &&
+             (!('assignedProfessionalId' in data) || (data.assignedProfessionalId is string && data.assignedProfessionalId.size() <= 128)) &&
+             (!('assignedProfessionalUid' in data) || (data.assignedProfessionalUid is string && data.assignedProfessionalUid.size() <= 128)) &&
+             (!('assignedProfessionalName' in data) || (data.assignedProfessionalName is string && data.assignedProfessionalName.size() <= 100)) &&
+             (!('assignedProfessionalCategory' in data) || (data.assignedProfessionalCategory is string && data.assignedProfessionalCategory.size() <= 60)) &&
+             (!('proposalMessage' in data) || (data.proposalMessage is string && data.proposalMessage.size() <= 1000)) &&
+             data.customerAcceptance in ['pending', 'accepted', 'declined'] &&
+             (!('customerResponseNote' in data) || (data.customerResponseNote is string && data.customerResponseNote.size() <= 500)) &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidOutsourcingRequest(data) {
+      return data.keys().hasOnly([
+               'userId', 'studioOrName', 'contactInfo', 'city', 'workType',
+               'projectDescription', 'workDeadline', 'budget', 'referenceLinks',
+               'referencePhotos', 'additionalMessage', 'status',
+               'assignedProfessionalId', 'assignedProfessionalUid',
+               'assignedProfessionalName', 'adminNotes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+             data.studioOrName is string && data.studioOrName.size() >= 2 && data.studioOrName.size() <= 120 &&
+             data.contactInfo is string && data.contactInfo.size() >= 6 && data.contactInfo.size() <= 120 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 80 &&
+             data.workType in ['Photography', 'Videography', 'Video Editing', 'Album Design', 'Drone Shooting', 'Full Production', 'Other'] &&
+             data.projectDescription is string && data.projectDescription.size() >= 10 && data.projectDescription.size() <= 2000 &&
+             data.workDeadline is string && data.workDeadline.size() >= 6 && data.workDeadline.size() <= 40 &&
+             (!('budget' in data) || (data.budget is string && data.budget.size() <= 100)) &&
+             (!('referenceLinks' in data) || (data.referenceLinks is string && data.referenceLinks.size() <= 1000)) &&
+             (!('referencePhotos' in data) || (data.referencePhotos is list && data.referencePhotos.size() <= 3)) &&
+             (!('additionalMessage' in data) || (data.additionalMessage is string && data.additionalMessage.size() <= 1000)) &&
+             data.status in ['Pending Admin Review', 'Approved', 'Assigned', 'In Progress', 'Completed', 'Rejected', 'Cancelled'] &&
+             (!('assignedProfessionalId' in data) || (data.assignedProfessionalId is string && data.assignedProfessionalId.size() <= 128)) &&
+             (!('assignedProfessionalUid' in data) || (data.assignedProfessionalUid is string && data.assignedProfessionalUid.size() <= 128)) &&
+             (!('assignedProfessionalName' in data) || (data.assignedProfessionalName is string && data.assignedProfessionalName.size() <= 100)) &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPrivateChatThread(data) {
+      return data.keys().hasOnly([
+               'participantUid', 'participantName', 'participantEmail', 'participantRole',
+               'contextType', 'contextId', 'contextLabel',
+               'lastMessageText', 'lastMessageAt', 'lastSenderRole',
+               'unreadByAdmin', 'unreadByUser', 'createdAt', 'updatedAt'
+             ]) &&
+             data.participantUid is string && data.participantUid.size() > 0 && data.participantUid.size() <= 128 &&
+             data.participantName is string && data.participantName.size() >= 1 && data.participantName.size() <= 100 &&
+             (!('participantEmail' in data) || (data.participantEmail is string && data.participantEmail.size() <= 128)) &&
+             data.participantRole in ['customer', 'professional'] &&
+             data.contextType in ['hiring', 'professional', 'outsourcing', 'general'] &&
+             (!('contextId' in data) || (data.contextId is string && data.contextId.size() <= 128)) &&
+             data.contextLabel is string && data.contextLabel.size() >= 1 && data.contextLabel.size() <= 160 &&
+             (!('lastMessageText' in data) || (data.lastMessageText is string && data.lastMessageText.size() <= 500)) &&
+             (!('lastMessageAt' in data) || (data.lastMessageAt is timestamp && data.lastMessageAt <= request.time)) &&
+             (!('lastSenderRole' in data) || data.lastSenderRole in ['customer', 'professional', 'admin']) &&
+             data.unreadByAdmin is int && data.unreadByAdmin >= 0 && data.unreadByAdmin <= 10000 &&
+             data.unreadByUser is int && data.unreadByUser >= 0 && data.unreadByUser <= 10000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPrivateChatMessage(data) {
+      return data.keys().hasOnly([
+               'chatId', 'senderUid', 'senderName', 'senderRole',
+               'text', 'imageAttachment', 'createdAt',
+               'isRead', 'readAt', 'readByUid', 'readByRole'
+             ]) &&
+             data.chatId is string && data.chatId.size() > 0 && data.chatId.size() <= 140 &&
+             data.senderUid is string && data.senderUid.size() > 0 && data.senderUid.size() <= 128 &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 100 &&
+             data.senderRole in ['customer', 'professional', 'admin'] &&
+             data.text is string && data.text.size() <= 2000 &&
+             (!('imageAttachment' in data) || (data.imageAttachment is string && data.imageAttachment.size() <= 180000)) &&
+             (data.text.size() > 0 || ('imageAttachment' in data && data.imageAttachment.size() > 0)) &&
+             (!('isRead' in data) || data.isRead is bool) &&
+             (!('readAt' in data) || (data.readAt is timestamp && data.readAt <= request.time)) &&
+             (!('readByUid' in data) || (data.readByUid is string && data.readByUid.size() <= 128)) &&
+             (!('readByRole' in data) || data.readByRole in ['customer', 'professional', 'admin']) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidChatBlockedUser(data, userId) {
+      return data.keys().hasOnly(['userId', 'isBlocked', 'reason', 'updatedByEmail', 'updatedAt']) &&
+             data.userId == userId &&
+             data.isBlocked is bool &&
+             (!('reason' in data) || (data.reason is string && data.reason.size() <= 300)) &&
+             data.updatedByEmail is string && data.updatedByEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomerCatalog(data) {
+      return data.keys().hasOnly([
+               'customerUid', 'bookingId', 'title', 'description', 'category',
+               'items', 'coverImageUrl', 'sharedByAdminEmail', 'status',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.customerUid is string && data.customerUid.size() > 0 && data.customerUid.size() <= 128 &&
+             (!('bookingId' in data) || (data.bookingId is string && data.bookingId.size() <= 128)) &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 140 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 80)) &&
+             (!('items' in data) || (data.items is list && data.items.size() <= 50)) &&
+             (!('coverImageUrl' in data) || (data.coverImageUrl is string && data.coverImageUrl.size() <= 180000)) &&
+             data.sharedByAdminEmail is string && data.sharedByAdminEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.status in ['active', 'archived'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomerSlot(data) {
+      return data.keys().hasOnly([
+               'customerUid', 'bookingId', 'eventTitle', 'eventDate', 'eventTime',
+               'slotLabel', 'location', 'approvalStatus', 'customerNote',
+               'assignedByAdminEmail', 'createdAt', 'updatedAt'
+             ]) &&
+             data.customerUid is string && data.customerUid.size() > 0 && data.customerUid.size() <= 128 &&
+             (!('bookingId' in data) || (data.bookingId is string && data.bookingId.size() <= 128)) &&
+             data.eventTitle is string && data.eventTitle.size() >= 2 && data.eventTitle.size() <= 140 &&
+             data.eventDate is string && data.eventDate.size() >= 6 && data.eventDate.size() <= 50 &&
+             data.eventTime is string && data.eventTime.size() >= 2 && data.eventTime.size() <= 50 &&
+             data.slotLabel is string && data.slotLabel.size() >= 2 && data.slotLabel.size() <= 120 &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
+             data.approvalStatus in ['Pending', 'Approved', 'Rejected', 'Confirmed'] &&
+             (!('customerNote' in data) || (data.customerNote is string && data.customerNote.size() <= 500)) &&
+             data.assignedByAdminEmail is string && data.assignedByAdminEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -483,6 +740,231 @@ service cloud.firestore {
     match /servicePackages/{packageId} {
       allow get, list: if isSignedIn();
       allow create, update: if isAdmin() && isValidServicePackageConfig(incoming(), packageId);
+      allow delete: if isAdmin();
+    }
+
+    // Strictly Admin-only studio automation settings (automated email alert toggles & branding)
+    match /studioConfig/{configId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidStudioEmailConfig(incoming(), configId);
+      allow delete: if isAdmin();
+    }
+
+    // Strictly Admin-only automated email notification delivery & live alert audit log
+    match /adminEmailAlerts/{alertId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(alertId) && isValidAdminEmailAlert(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================================
+    // PROFESSIONAL NETWORK, HIRING, OUTSOURCING & PRIVATE CHAT COLLECTIONS
+    // ========================================================================
+
+    // Private full professional registration profiles (mobile/email hidden from other users)
+    match /professionals/{professionalId} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       isValidId(professionalId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'pending' &&
+                       (!('adminNotes' in incoming()) || incoming().adminNotes == '') &&
+                       isValidProfessionalProfile(incoming());
+      allow update: if ((
+                       isAdmin() &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt
+                     ) || (
+                       isSignedIn() &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().status == existing().status &&
+                       (!('adminNotes' in incoming()) || incoming().adminNotes == existing().adminNotes) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'fullName', 'mobileNumber', 'email', 'city', 'state',
+                         'category', 'yearsExperience', 'skills', 'equipmentDetails',
+                         'workingLocations', 'expectedCharges', 'portfolioPhotos',
+                         'videoLinks', 'shortIntro', 'availabilityStatus', 'updatedAt'
+                       ])
+                     )) && isValidProfessionalProfile(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Privacy-safe approved professional directory (NO mobileNumber/email/userId/adminNotes)
+    match /publicProfessionals/{professionalId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isAdmin() && isValidId(professionalId) && isValidPublicProfessionalProfile(incoming(), professionalId);
+      allow delete: if isAdmin();
+    }
+
+    // Customer Photographer / Videographer Hiring Requests (Admin-only assignment & final confirmation)
+    match /professionalHiringRequests/{requestId} {
+      allow get, list: if isAdmin() || (
+                          isSignedIn() && (
+                            resource.data.userId == request.auth.uid ||
+                            (resource.data.assignedProfessionalUid is string && resource.data.assignedProfessionalUid == request.auth.uid)
+                          )
+                        );
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'Pending Admin Review' &&
+                       incoming().customerAcceptance == 'pending' &&
+                       (!('assignedProfessionalId' in incoming()) || incoming().assignedProfessionalId == '') &&
+                       (!('assignedProfessionalUid' in incoming()) || incoming().assignedProfessionalUid == '') &&
+                       (!('assignedProfessionalName' in incoming()) || incoming().assignedProfessionalName == '') &&
+                       (!('adminNotes' in incoming()) || incoming().adminNotes == '') &&
+                       isValidProfessionalHiringRequest(incoming());
+      allow update: if ((
+                       isAdmin() &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt
+                     ) || (
+                       // Customer may ONLY accept or decline an Admin-proposed assignment (never auto-confirm!)
+                       isSignedIn() &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       existing().status == 'Assignment Proposed' &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'customerAcceptance', 'customerResponseNote', 'status', 'updatedAt'
+                       ]) &&
+                       (
+                         (incoming().customerAcceptance == 'accepted' && incoming().status == 'Customer Accepted') ||
+                         (incoming().customerAcceptance == 'declined' && incoming().status == 'Proposal Declined')
+                       )
+                     ) || (
+                       // Customer may cancel their own unconfirmed hiring request
+                       isSignedIn() &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       existing().status in ['Pending Admin Review', 'Assignment Proposed', 'Proposal Declined'] &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                       incoming().status == 'Cancelled'
+                     )) && isValidProfessionalHiringRequest(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Studio & Professional Outsourcing Requests (Admin-only approval, assignment & status updates)
+    match /outsourcingRequests/{requestId} {
+      allow get, list: if isAdmin() || (
+                          isSignedIn() && (
+                            resource.data.userId == request.auth.uid ||
+                            (resource.data.assignedProfessionalUid is string && resource.data.assignedProfessionalUid == request.auth.uid)
+                          )
+                        );
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'Pending Admin Review' &&
+                       (!('assignedProfessionalId' in incoming()) || incoming().assignedProfessionalId == '') &&
+                       (!('assignedProfessionalUid' in incoming()) || incoming().assignedProfessionalUid == '') &&
+                       (!('assignedProfessionalName' in incoming()) || incoming().assignedProfessionalName == '') &&
+                       (!('adminNotes' in incoming()) || incoming().adminNotes == '') &&
+                       isValidOutsourcingRequest(incoming());
+      allow update: if ((
+                       isAdmin() &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt
+                     ) || (
+                       isSignedIn() &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       existing().status == 'Pending Admin Review' &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                       incoming().status == 'Cancelled'
+                     )) && isValidOutsourcingRequest(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Secure Private Messaging Threads (User <-> Admin only; zero cross-user visibility)
+    match /privateChats/{chatId} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.participantUid == request.auth.uid);
+      allow create: if isValidId(chatId) && isValidPrivateChatThread(incoming()) && (
+                       isAdmin() ||
+                       (isSignedIn() && incoming().participantUid == request.auth.uid && !isChatBlocked(request.auth.uid))
+                     );
+      allow update: if isValidPrivateChatThread(incoming()) && (
+                       isAdmin() || (
+                         isSignedIn() &&
+                         existing().participantUid == request.auth.uid &&
+                         !isChatBlocked(request.auth.uid) &&
+                         incoming().participantUid == existing().participantUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'lastMessageText', 'lastMessageAt', 'lastSenderRole',
+                           'unreadByAdmin', 'unreadByUser', 'updatedAt'
+                         ])
+                       )
+                     );
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if isAdmin() || (
+                            isSignedIn() &&
+                            get(/databases/$(database)/documents/privateChats/$(chatId)).data.participantUid == request.auth.uid
+                          );
+        allow create: if isValidId(messageId) &&
+                         incoming().chatId == chatId &&
+                         (!('isRead' in incoming()) || incoming().isRead == false) &&
+                         !('readAt' in incoming()) &&
+                         isValidPrivateChatMessage(incoming()) && (
+                           (isAdmin() && incoming().senderRole == 'admin' && incoming().senderUid == request.auth.uid) ||
+                           (
+                             isSignedIn() &&
+                             !isChatBlocked(request.auth.uid) &&
+                             get(/databases/$(database)/documents/privateChats/$(chatId)).data.participantUid == request.auth.uid &&
+                             incoming().senderUid == request.auth.uid &&
+                             incoming().senderRole in ['customer', 'professional']
+                           )
+                         );
+        allow update: if isValidPrivateChatMessage(incoming()) && (
+                           isAdmin() || (
+                             // Recipient may ONLY mark incoming Admin messages as read (cannot alter text/image/sender)
+                             isSignedIn() &&
+                             get(/databases/$(database)/documents/privateChats/$(chatId)).data.participantUid == request.auth.uid &&
+                             existing().senderRole == 'admin' &&
+                             incoming().chatId == existing().chatId &&
+                             incoming().senderUid == existing().senderUid &&
+                             incoming().createdAt == existing().createdAt &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readAt', 'readByUid', 'readByRole']) &&
+                             incoming().isRead == true &&
+                             incoming().readByUid == request.auth.uid &&
+                             incoming().readByRole in ['customer', 'professional'] &&
+                             incoming().readAt is timestamp &&
+                             incoming().readAt <= request.time
+                           )
+                         );
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Admin chat moderation list (block / suspend abusive users from private chat)
+    match /chatBlockedUsers/{userId} {
+      allow get: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidChatBlockedUser(incoming(), userId);
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================================
+    // STRICT CUSTOMER PRIVATE BOOKING PORTAL COLLECTIONS (UID-LOCKED)
+    // ========================================================================
+
+    // Private catalogs assigned or shared strictly with one customer UID (zero cross-customer reads)
+    match /customerCatalogs/{catalogId} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
+      allow create, update: if isAdmin() && isValidId(catalogId) && isValidCustomerCatalog(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Private booking slots & approval status assigned strictly to one customer UID (zero cross-customer reads)
+    match /customerSlots/{slotId} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
+      allow create, update: if isAdmin() && isValidId(slotId) && isValidCustomerSlot(incoming());
       allow delete: if isAdmin();
     }
   }

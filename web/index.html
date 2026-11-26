@@ -162,10 +162,15 @@
 
       <nav class="desktop-nav" aria-label="Primary Navigation">
         <button class="nav-pill active" data-route="home" data-i18n="navHome">Home</button>
+        <button class="nav-pill" data-route="portal" data-i18n="navPortal">My Portal</button>
         <button class="nav-pill" data-route="catalog" data-i18n="navCatalog">Catalog</button>
         <button class="nav-pill" data-route="booking" data-i18n="navBooking">Book Shoot</button>
         <button class="nav-pill" data-route="models" data-i18n="navModels">Models 18+</button>
         <button class="nav-pill" data-route="companies" data-i18n="navCompanies">Companies</button>
+        <button class="nav-pill" data-route="network">
+          <span data-i18n="navProNetwork">Pro Network</span>
+          <span id="desktopChatUnreadBadge" class="chat-unread-pill hidden">0</span>
+        </button>
         <button class="nav-pill" data-route="gallery" data-i18n="navGallery">Gallery</button>
         <button class="nav-pill hidden" id="desktopAdminNavBtn" data-route="admin" data-i18n="navAdmin" hidden aria-hidden="true">Admin</button>
       </nav>
@@ -513,6 +518,16 @@
           </a>
         </div>
       </section>
+    </section>
+
+    <!-- CUSTOMER PRIVATE BOOKING PORTAL VIEW -->
+    <section id="view-portal" class="view-section hidden" hidden aria-hidden="true">
+      <div class="section-header">
+        <span class="eyebrow" data-i18n="portalEyebrow">PRIVATE CUSTOMER PORTAL</span>
+        <h2 data-i18n="portalHeading">My Private Booking Portal</h2>
+        <p data-i18n="portalSubheading">View only your own assigned catalogs, booking slots, registration details, approval status, bookings, and private messages with Studio Admin.</p>
+      </div>
+      <div id="customerPortalBody"></div>
     </section>
 
     <!-- CATALOG VIEW -->
@@ -1081,6 +1096,304 @@
       </form>
     </section>
 
+    <!-- PROFESSIONAL NETWORK, OUTSOURCING, HIRING & PRIVATE CHAT VIEW -->
+    <section id="view-network" class="view-section hidden" hidden aria-hidden="true">
+      <div class="section-header">
+        <span class="eyebrow" data-i18n="proNetworkEyebrow">PHOTOGRAPHERS • VIDEOGRAPHERS • OUTSOURCING • PRIVATE CHAT</span>
+        <h2 data-i18n="proNetworkHeading">Professional Network</h2>
+        <p data-i18n="proNetworkSubheading">
+          Join as a verified photographer/videographer, hire approved talent with Admin-supervised booking, outsource studio production work, and chat privately with Studio Admin.
+        </p>
+      </div>
+
+      <div class="filter-bar pro-network-tabs" role="tablist" aria-label="Professional Network Sections">
+        <button type="button" class="chip-btn active" data-pro-tab="join" data-i18n="proTabJoin">1. Join as Photographer / Videographer</button>
+        <button type="button" class="chip-btn" data-pro-tab="hire" data-i18n="proTabHire">2. Hire a Photographer / Videographer</button>
+        <button type="button" class="chip-btn" data-pro-tab="outsourcing" data-i18n="proTabOutsourcing">3. Outsourcing</button>
+        <button type="button" class="chip-btn" data-pro-tab="my-applications">
+          <span data-i18n="proTabMyApps">4. My Applications</span>
+          <span class="filter-count-badge" data-pro-count="my-applications">0</span>
+        </button>
+        <button type="button" class="chip-btn" data-pro-tab="my-bookings">
+          <span data-i18n="proTabMyBookings">5. My Bookings</span>
+          <span class="filter-count-badge" data-pro-count="my-bookings">0</span>
+        </button>
+        <button type="button" class="chip-btn" data-pro-tab="messages">
+          <span data-i18n="proTabMessages">6. Messages / Chat</span>
+          <span class="filter-count-badge" data-pro-count="messages">0</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: JOIN AS A PROFESSIONAL + APPROVED DIRECTORY -->
+      <div id="proPanel-join" class="pro-tab-panel">
+        <form id="proRegistrationForm" class="studio-card form-grid">
+          <div class="field full">
+            <h3 style="margin: 0 0 4px; color: var(--gold);" data-i18n="proJoinFormHeading">Join as a Professional</h3>
+            <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="proJoinFormSubtitle">
+              Photographers, videographers, editors, and camera operators: submit your profile for Admin verification. Profiles remain Pending until approved.
+            </p>
+          </div>
+          <div class="field">
+            <label for="proFullName" data-i18n="proFullNameLabel">Full Name</label>
+            <input id="proFullName" class="input" required minlength="2" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="proMobile" data-i18n="proMobileLabel">Mobile Number (Private • Admin Only)</label>
+            <input id="proMobile" class="input" type="tel" required minlength="8" maxlength="20" />
+          </div>
+          <div class="field">
+            <label for="proEmail" data-i18n="proEmailLabel">Email Address (Private • Admin Only)</label>
+            <input id="proEmail" class="input" type="email" required maxlength="128" />
+          </div>
+          <div class="field">
+            <label for="proCategory" data-i18n="proCategoryLabel">Professional Category</label>
+            <select id="proCategory" class="input">
+              <option value="Photographer">Photographer</option>
+              <option value="Videographer">Videographer</option>
+              <option value="Editor">Editor</option>
+              <option value="Camera Operator">Camera Operator</option>
+              <option value="Drone Operator">Drone Operator</option>
+              <option value="Hybrid (Photo + Video)">Hybrid (Photo + Video)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="proCity" data-i18n="proCityLabel">City</label>
+            <input id="proCity" class="input" required minlength="2" maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="proState" data-i18n="proStateLabel">State</label>
+            <input id="proState" class="input" required minlength="2" maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="proYearsExp" data-i18n="proYearsExpLabel">Years of Experience</label>
+            <input id="proYearsExp" class="input" type="number" min="0" max="60" value="2" required />
+          </div>
+          <div class="field">
+            <label for="proAvailability" data-i18n="proAvailabilityLabel">Availability Status</label>
+            <select id="proAvailability" class="input">
+              <option value="Available">Available</option>
+              <option value="Limited Availability">Limited Availability</option>
+              <option value="Busy / Booked">Busy / Booked</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="proWorkingLocations" data-i18n="proLocationsLabel">Available Working Locations</label>
+            <input id="proWorkingLocations" class="input" required maxlength="300" placeholder="Sirsa, Hisar, Chandigarh, Pan-India" />
+          </div>
+          <div class="field">
+            <label for="proExpectedCharges" data-i18n="proChargesLabel">Expected Charges (Optional)</label>
+            <input id="proExpectedCharges" class="input" maxlength="120" placeholder="e.g. ₹8,000 / day" />
+          </div>
+          <div class="field full">
+            <label for="proSkills" data-i18n="proSkillsLabel">Skills &amp; Services</label>
+            <input id="proSkills" class="input" required maxlength="500" placeholder="Wedding Candid, 4K Cinema, Drone Aerial, DaVinci Resolve..." />
+          </div>
+          <div class="field full">
+            <label for="proEquipment" data-i18n="proEquipmentLabel">Equipment Details</label>
+            <input id="proEquipment" class="input" required maxlength="600" placeholder="Sony FX3, A7IV, 85mm f/1.4 GM, DJI RS4 Pro, Mavic 3..." />
+          </div>
+          <div class="field full">
+            <label for="proVideoLinks" data-i18n="proVideoLinksLabel">Portfolio / Video Links (Optional • one per line)</label>
+            <textarea id="proVideoLinks" class="input" rows="2" maxlength="1000" placeholder="https://instagram.com/...&#10;https://youtube.com/..."></textarea>
+          </div>
+          <div class="field full">
+            <label for="proPortfolioPhotosInput" data-i18n="proPortfolioPhotosLabel">Portfolio Photos (Up to 4 • Auto-compressed)</label>
+            <input id="proPortfolioPhotosInput" type="file" class="input" accept="image/jpeg,image/png,image/webp" multiple />
+            <div id="proPortfolioPhotosPreview" class="portfolio-photo-strip" style="margin-top: 8px;"></div>
+          </div>
+          <div class="field full">
+            <label for="proShortIntro" data-i18n="proIntroLabel">Short Introduction</label>
+            <textarea id="proShortIntro" class="input" rows="3" required minlength="10" maxlength="1000"></textarea>
+          </div>
+          <div class="field full">
+            <button id="submitProRegistrationBtn" type="submit" class="btn-gold" data-i18n="proSubmitJoinBtn">Submit Professional Profile for Admin Approval</button>
+          </div>
+        </form>
+
+        <div class="studio-card" style="margin-top: 16px;">
+          <div class="pro-dir-toolbar">
+            <div>
+              <h3 style="margin: 0 0 4px; color: var(--gold);" data-i18n="proDirHeading">Approved Professional Directory</h3>
+              <p style="margin: 0; font-size: 0.86rem; color: var(--text-secondary);" data-i18n="proDirSubtitle">
+                Only Admin-approved photographers, videographers, and editors appear here. Private phone numbers and emails are strictly hidden.
+              </p>
+            </div>
+            <div class="pro-dir-filters">
+              <select id="proDirCategoryFilter" class="input">
+                <option value="all" data-i18n="filterAll">All</option>
+                <option value="Photographer">Photographer</option>
+                <option value="Videographer">Videographer</option>
+                <option value="Editor">Editor</option>
+                <option value="Camera Operator">Camera Operator</option>
+                <option value="Drone Operator">Drone Operator</option>
+                <option value="Hybrid (Photo + Video)">Hybrid (Photo + Video)</option>
+              </select>
+              <input id="proDirSearchInput" type="search" class="input" data-i18n-placeholder="proDirSearchPlaceholder" placeholder="Search city, skill, category..." />
+            </div>
+          </div>
+          <div id="approvedProfessionalsDirectory" style="margin-top: 14px;"></div>
+        </div>
+      </div>
+
+      <!-- TAB 2: HIRE A PHOTOGRAPHER / VIDEOGRAPHER -->
+      <div id="proPanel-hire" class="pro-tab-panel hidden" hidden>
+        <form id="proHiringForm" class="studio-card form-grid">
+          <div class="field full">
+            <h3 style="margin: 0 0 4px; color: var(--gold);" data-i18n="proHireHeading">Hire a Photographer / Videographer</h3>
+            <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="proHireSubtitle">
+              Submit your event requirement. Studio Admin reviews availability, proposes a verified professional for your acceptance, and issues final confirmation.
+            </p>
+          </div>
+          <div class="field">
+            <label for="hireCustomerName" data-i18n="proHireNameLabel">Customer Full Name</label>
+            <input id="hireCustomerName" class="input" required minlength="2" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="hireContactNumber" data-i18n="phoneLabel">Contact Number (8–20 digits)</label>
+            <input id="hireContactNumber" class="input" type="tel" required minlength="8" maxlength="20" />
+          </div>
+          <div class="field">
+            <label for="hireEventType" data-i18n="proHireEventTypeLabel">Event / Shoot Type</label>
+            <select id="hireEventType" class="input">
+              <option value="Wedding">Wedding</option>
+              <option value="Pre-wedding">Pre-wedding</option>
+              <option value="Birthday">Birthday</option>
+              <option value="Party">Party</option>
+              <option value="Corporate">Corporate</option>
+              <option value="Music Video">Music Video</option>
+              <option value="Modeling">Modeling</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="hireRequiredService" data-i18n="proHireServiceLabel">Required Service</label>
+            <select id="hireRequiredService" class="input">
+              <option value="Photography">Photography</option>
+              <option value="Videography">Videography</option>
+              <option value="Both">Both</option>
+              <option value="Drone">Drone</option>
+              <option value="Editing">Editing</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="hireEventDate" data-i18n="proHireDateLabel">Event Date</label>
+            <input id="hireEventDate" class="input" type="date" required />
+          </div>
+          <div class="field">
+            <label for="hireEventTime" data-i18n="proHireTimeLabel">Event Time</label>
+            <input id="hireEventTime" class="input" type="text" required placeholder="e.g. 10:00 AM" maxlength="30" />
+          </div>
+          <div class="field">
+            <label for="hireEventLocation" data-i18n="proHireLocationLabel">Event Location</label>
+            <input id="hireEventLocation" class="input" required minlength="2" maxlength="200" />
+          </div>
+          <div class="field">
+            <label for="hireWorkingDuration" data-i18n="proHireDurationLabel">Working Hours / Days</label>
+            <input id="hireWorkingDuration" class="input" required maxlength="80" placeholder="e.g. 8 Hours / 2 Days" />
+          </div>
+          <div class="field full">
+            <label for="hireBudgetRange" data-i18n="proBudgetLabel">Budget Range</label>
+            <input id="hireBudgetRange" class="input" required maxlength="100" placeholder="e.g. ₹25,000 – ₹45,000" />
+          </div>
+          <div class="field full">
+            <label for="hireSpecialRequirements" data-i18n="proHireRequirementsLabel">Special Requirements</label>
+            <textarea id="hireSpecialRequirements" class="input" rows="3" maxlength="1500"></textarea>
+          </div>
+          <div class="field full">
+            <label for="hireReferenceLinks" data-i18n="proRefLinksLabel">Reference Links (Optional • one per line)</label>
+            <textarea id="hireReferenceLinks" class="input" rows="2" maxlength="1000" placeholder="https://..."></textarea>
+          </div>
+          <div class="field full">
+            <label for="hireReferencePhotosInput" data-i18n="proRefPhotosLabel">Reference Photos (Optional • Up to 3)</label>
+            <input id="hireReferencePhotosInput" type="file" class="input" accept="image/jpeg,image/png,image/webp" multiple />
+            <div id="hireReferencePhotosPreview" class="portfolio-photo-strip" style="margin-top: 8px;"></div>
+          </div>
+          <div class="field full">
+            <button id="submitProHiringBtn" type="submit" class="btn-gold" data-i18n="proHireSubmitBtn">Submit Hiring Request for Admin Review</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- TAB 3: OUTSOURCING REQUEST SYSTEM -->
+      <div id="proPanel-outsourcing" class="pro-tab-panel hidden" hidden>
+        <form id="proOutsourcingForm" class="studio-card form-grid">
+          <div class="field full">
+            <h3 style="margin: 0 0 4px; color: var(--gold);" data-i18n="proOutHeading">Outsourcing Request</h3>
+            <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary);" data-i18n="proOutSubtitle">
+              For studios and professionals outsourcing photography, videography, video editing, album design, or drone shooting. Reviewed and assigned by Studio Admin.
+            </p>
+          </div>
+          <div class="field">
+            <label for="outStudioName" data-i18n="proOutStudioNameLabel">Name / Studio Name</label>
+            <input id="outStudioName" class="input" required minlength="2" maxlength="120" />
+          </div>
+          <div class="field">
+            <label for="outContactInfo" data-i18n="proOutContactLabel">Contact Information (Phone / Email)</label>
+            <input id="outContactInfo" class="input" required minlength="6" maxlength="120" />
+          </div>
+          <div class="field">
+            <label for="outCity" data-i18n="proCityLabel">City</label>
+            <input id="outCity" class="input" required minlength="2" maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="outWorkType" data-i18n="proOutWorkTypeLabel">Type of Work</label>
+            <select id="outWorkType" class="input">
+              <option value="Photography">Photography</option>
+              <option value="Videography">Videography</option>
+              <option value="Video Editing">Video Editing</option>
+              <option value="Album Design">Album Design</option>
+              <option value="Drone Shooting">Drone Shooting</option>
+              <option value="Full Production">Full Production</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="outDeadline" data-i18n="proOutDeadlineLabel">Work Deadline</label>
+            <input id="outDeadline" class="input" type="date" required />
+          </div>
+          <div class="field">
+            <label for="outBudget" data-i18n="proOutBudgetOptionalLabel">Budget (Optional)</label>
+            <input id="outBudget" class="input" maxlength="100" placeholder="e.g. ₹12,000" />
+          </div>
+          <div class="field full">
+            <label for="outDescription" data-i18n="proOutDescLabel">Project Description</label>
+            <textarea id="outDescription" class="input" rows="3" required minlength="10" maxlength="2000"></textarea>
+          </div>
+          <div class="field full">
+            <label for="outRefLinks" data-i18n="proRefLinksLabel">Reference Links (Optional • one per line)</label>
+            <textarea id="outRefLinks" class="input" rows="2" maxlength="1000" placeholder="https://drive.google.com/..."></textarea>
+          </div>
+          <div class="field full">
+            <label for="outRefPhotosInput" data-i18n="proRefPhotosLabel">Reference Photos (Optional • Up to 3)</label>
+            <input id="outRefPhotosInput" type="file" class="input" accept="image/jpeg,image/png,image/webp" multiple />
+            <div id="outRefPhotosPreview" class="portfolio-photo-strip" style="margin-top: 8px;"></div>
+          </div>
+          <div class="field full">
+            <label for="outAdditionalMsg" data-i18n="proOutMsgLabel">Additional Message</label>
+            <textarea id="outAdditionalMsg" class="input" rows="2" maxlength="1000"></textarea>
+          </div>
+          <div class="field full">
+            <button id="submitProOutsourcingBtn" type="submit" class="btn-gold" data-i18n="proOutSubmitBtn">Submit Outsourcing Request to Admin</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- TAB 4: MY APPLICATIONS -->
+      <div id="proPanel-my-applications" class="pro-tab-panel hidden" hidden>
+        <div id="proMyApplicationsBody"></div>
+      </div>
+
+      <!-- TAB 5: MY BOOKINGS (HIRING REQUESTS & ASSIGNMENTS) -->
+      <div id="proPanel-my-bookings" class="pro-tab-panel hidden" hidden>
+        <div id="proMyBookingsBody"></div>
+      </div>
+
+      <!-- TAB 6: PRIVATE MESSAGES / CHAT -->
+      <div id="proPanel-messages" class="pro-tab-panel hidden" hidden>
+        <div id="proMessagesBody"></div>
+      </div>
+    </section>
+
     <!-- ADMIN DASHBOARD VIEW -->
     <section id="view-admin" class="view-section hidden" hidden aria-hidden="true">
       <div class="section-header">
@@ -1148,9 +1461,41 @@
             <span data-i18n="adminTabWeddingPackages">Wedding Packages</span>
             <span class="filter-count-badge" data-admin-count="wedding-packages">3</span>
           </button>
+          <button type="button" class="chip-btn" data-admin-tab="email-alerts">
+            <span data-i18n="adminTabEmailAlerts">Email Alerts</span>
+            <span class="filter-count-badge" data-admin-count="email-alerts">0</span>
+          </button>
           <button type="button" class="chip-btn" data-admin-tab="email-preview">
             <span data-i18n="adminTabEmailPreview">Email Preview</span>
             <span class="filter-count-badge" data-admin-count="email-preview">3</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="pro-registrations">
+            <span data-i18n="adminTabProRegistrations">Professional Registrations</span>
+            <span class="filter-count-badge" data-admin-count="pro-registrations">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="pro-hiring">
+            <span data-i18n="adminTabProHiring">Photographer Hiring Requests</span>
+            <span class="filter-count-badge" data-admin-count="pro-hiring">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="pro-outsourcing">
+            <span data-i18n="adminTabProOutsourcing">Outsourcing Requests</span>
+            <span class="filter-count-badge" data-admin-count="pro-outsourcing">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="pro-assignments">
+            <span data-i18n="adminTabProAssignments">Professional Assignments</span>
+            <span class="filter-count-badge" data-admin-count="pro-assignments">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="private-messages">
+            <span data-i18n="adminTabPrivateMessages">Private Messages</span>
+            <span class="filter-count-badge" data-admin-count="private-messages">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="pro-booking-history">
+            <span data-i18n="adminTabProHistory">Booking History</span>
+            <span class="filter-count-badge" data-admin-count="pro-booking-history">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="customer-portal">
+            <span data-i18n="adminTabCustomerPortal">Customer Portal</span>
+            <span class="filter-count-badge" data-admin-count="customer-portal">0</span>
           </button>
         </div>
         <div id="adminTabBody" style="display: flex; flex-direction: column; gap: 14px;"></div>
@@ -1232,6 +1577,10 @@
       <span>★</span>
       <span data-i18n="navHome">Home</span>
     </button>
+    <button class="bottom-nav-btn" data-route="portal">
+      <span>🔒</span>
+      <span data-i18n="navPortal">My Portal</span>
+    </button>
     <button class="bottom-nav-btn" data-route="catalog">
       <span>◈</span>
       <span data-i18n="navCatalog">Catalog</span>
@@ -1247,6 +1596,10 @@
     <button class="bottom-nav-btn" data-route="companies">
       <span>✦</span>
       <span data-i18n="navCompanies">Companies</span>
+    </button>
+    <button class="bottom-nav-btn" data-route="network">
+      <span>◎</span>
+      <span data-i18n="navProNetwork">Pro Network</span>
     </button>
     <button class="bottom-nav-btn" data-route="gallery">
       <span>▣</span>

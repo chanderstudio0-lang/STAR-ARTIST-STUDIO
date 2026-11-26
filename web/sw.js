@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v57";
+const CACHE_VERSION = "star-artist-pwa-v61";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -20,16 +20,19 @@ const APP_SHELL_URLS = [
   "/firebase-config.json",
   "/js/admin-booking-tracker.js",
   "/js/admin-bookings-export.js",
+  "/js/admin-email-alerts.js",
   "/js/admin-email-preview.js",
   "/js/admin-guard.js",
   "/js/admin-model-experience.js",
   "/js/admin-model-growth.js",
   "/js/admin-models.js",
+  "/js/admin-pro-network.js",
   "/js/app.js",
   "/js/auth-gate.js",
   "/js/booking-status.js",
   "/js/catalog-reviews.js",
   "/js/company-booking.js",
+  "/js/customer-portal.js",
   "/js/data.js",
   "/js/exif-reader.js",
   "/js/firebase.js",
@@ -41,6 +44,8 @@ const APP_SHELL_URLS = [
   "/js/model-portal.js",
   "/js/newsletter.js",
   "/js/offline-sync.js",
+  "/js/private-chat.js",
+  "/js/pro-network.js",
   "/js/testimonials.js",
   "/js/tier-info.js",
   "/js/wedding-packages.js",

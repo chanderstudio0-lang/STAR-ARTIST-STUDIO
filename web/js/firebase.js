@@ -544,15 +544,21 @@ export async function fetchApprovedGallery() {
 
 export async function fetchMyBookings(uid) {
   const ctx = await initFirebaseClient();
-  if (!ctx.ready || !uid) return [];
+  if (!ctx.ready || !ctx.auth?.currentUser || ctx.auth.currentUser.isAnonymous === true) return [];
+  const authUid = ctx.auth.currentUser.uid;
+  if (uid && uid !== authUid && !isAuthorizedAdminUser(ctx.auth.currentUser)) {
+    return [];
+  }
+  const targetUid = isAuthorizedAdminUser(ctx.auth.currentUser) && uid ? uid : authUid;
   const { fsMod, db } = ctx;
   const q = fsMod.query(
     fsMod.collection(db, "bookings"),
-    fsMod.where("userId", "==", uid)
+    fsMod.where("userId", "==", targetUid)
   );
   const snap = await fsMod.getDocs(q);
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((d) => d.userId === targetUid)
     .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 }
 
@@ -1476,4 +1482,849 @@ export async function adminResetWeddingPackageConfig(tierId) {
   }
   return cleanId;
 }
+
+// --- ADMIN AUTOMATED EMAIL NOTIFICATION SETTINGS & LIVE ALERT LOG ---
+
+const LOCKED_ADMIN_ALERT_EMAIL = String(STUDIO_CONTACT.adminEmail || "chanderstudio0@gmail.com")
+  .trim()
+  .toLowerCase();
+
+export async function adminSubscribeModelsRealtime({ onModels, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.collection(db, "models"),
+    (snap) => {
+      const models = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      if (typeof onModels === "function") {
+        onModels(models);
+      }
+    },
+    (err) => {
+      if (typeof onError === "function") {
+        onError(err);
+      }
+    }
+  );
+}
+
+export async function adminFetchEmailAlertSettings() {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDoc(fsMod.doc(db, "studioConfig", "emailAlerts"));
+    if (!snap.exists()) {
+      return {
+        bookingAlertsEnabled: true,
+        modelAlertsEnabled: true,
+        companyAlertsEnabled: true,
+        browserAlertsEnabled: true,
+        recipientEmail: LOCKED_ADMIN_ALERT_EMAIL
+      };
+    }
+    const data = snap.data() || {};
+    return {
+      bookingAlertsEnabled: data.bookingAlertsEnabled !== false,
+      modelAlertsEnabled: data.modelAlertsEnabled !== false,
+      companyAlertsEnabled: data.companyAlertsEnabled !== false,
+      browserAlertsEnabled: data.browserAlertsEnabled !== false,
+      recipientEmail: LOCKED_ADMIN_ALERT_EMAIL
+    };
+  } catch {
+    return {
+      bookingAlertsEnabled: true,
+      modelAlertsEnabled: true,
+      companyAlertsEnabled: true,
+      browserAlertsEnabled: true,
+      recipientEmail: LOCKED_ADMIN_ALERT_EMAIL
+    };
+  }
+}
+
+export async function adminSaveEmailAlertSettings(settings = {}) {
+  const ctx = await initFirebaseClient();
+  const user = requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const clean = {
+    bookingAlertsEnabled: settings.bookingAlertsEnabled !== false,
+    modelAlertsEnabled: settings.modelAlertsEnabled !== false,
+    companyAlertsEnabled: settings.companyAlertsEnabled !== false,
+    browserAlertsEnabled: settings.browserAlertsEnabled !== false,
+    recipientEmail: LOCKED_ADMIN_ALERT_EMAIL,
+    updatedByEmail: String(user.email || LOCKED_ADMIN_ALERT_EMAIL).trim().toLowerCase(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  await fsMod.setDoc(fsMod.doc(db, "studioConfig", "emailAlerts"), clean);
+  return {
+    bookingAlertsEnabled: clean.bookingAlertsEnabled,
+    modelAlertsEnabled: clean.modelAlertsEnabled,
+    companyAlertsEnabled: clean.companyAlertsEnabled,
+    browserAlertsEnabled: clean.browserAlertsEnabled,
+    recipientEmail: LOCKED_ADMIN_ALERT_EMAIL
+  };
+}
+
+export async function adminFetchEmailAlerts(limitCount = 60) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDocs(fsMod.collection(db, "adminEmailAlerts"));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || b.updatedAt?.seconds || 0) - (a.createdAt?.seconds || a.updatedAt?.seconds || 0))
+      .slice(0, Math.max(1, limitCount));
+  } catch {
+    return [];
+  }
+}
+
+export async function adminSubscribeEmailAlertsRealtime({ onAlerts, onError, limitCount = 60 } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.collection(db, "adminEmailAlerts"),
+    (snap) => {
+      const alerts = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || b.updatedAt?.seconds || 0) - (a.createdAt?.seconds || a.updatedAt?.seconds || 0))
+        .slice(0, Math.max(1, limitCount));
+      if (typeof onAlerts === "function") {
+        onAlerts(alerts);
+      }
+    },
+    (err) => {
+      if (typeof onError === "function") {
+        onError(err);
+      }
+    }
+  );
+}
+
+export async function adminLogEmailAlert(record = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const safeType = record.type === "model" ? "model" : record.type === "company" ? "company" : "booking";
+  const safeRecordId =
+    String(record.recordId || `${safeType}_${Date.now()}`)
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 128) || `${safeType}_item`;
+  const alertId =
+    String(record.id || `${safeType}_${safeRecordId}_${Date.now()}`)
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 120) || `alert_${Date.now()}`;
+  const docData = {
+    type: safeType,
+    recordId: safeRecordId,
+    recipientEmail: LOCKED_ADMIN_ALERT_EMAIL,
+    subject: String(record.subject || "Studio Admin Alert").trim().slice(0, 200),
+    summary: String(record.summary || "").trim().slice(0, 500),
+    status: ["queued", "sent", "failed", "skipped", "acknowledged"].includes(record.status)
+      ? record.status
+      : "queued",
+    source: ["cloud-function", "dashboard-live", "manual-resend"].includes(record.source)
+      ? record.source
+      : "dashboard-live",
+    messageId: String(record.messageId || "").trim().slice(0, 200),
+    errorMessage: String(record.errorMessage || "").trim().slice(0, 300),
+    isRead: Boolean(record.isRead),
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  await fsMod.setDoc(fsMod.doc(db, "adminEmailAlerts", alertId), docData);
+  return { id: alertId, ...docData };
+}
+
+export async function adminMarkEmailAlertRead(alertId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const cleanId = String(alertId || "").trim();
+  if (!cleanId) return;
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "adminEmailAlerts", cleanId), {
+    isRead: true,
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminMarkAllEmailAlertsRead(alertIds = []) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const ids = [...new Set((Array.isArray(alertIds) ? alertIds : []).filter(Boolean))];
+  if (!ids.length) return 0;
+  const { fsMod, db } = ctx;
+  const results = await Promise.allSettled(
+    ids.map((id) =>
+      fsMod.updateDoc(fsMod.doc(db, "adminEmailAlerts", id), {
+        isRead: true,
+        updatedAt: fsMod.serverTimestamp()
+      })
+    )
+  );
+  return results.filter((r) => r.status === "fulfilled").length;
+}
+
+// ============================================================================
+// PROFESSIONAL NETWORK, HIRING, OUTSOURCING & PRIVATE CHAT FIRESTORE LAYER
+// ============================================================================
+
+import {
+  validateProfessionalRegistration,
+  sanitizePublicProfessionalProfile,
+  validateHiringRequest,
+  evaluateCustomerProposalAction,
+  validateOutsourcingRequest
+} from "./pro-network.js";
+import { buildChatThreadId, validatePrivateChatMessage } from "./private-chat.js";
+
+export async function fetchApprovedPublicProfessionals() {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDocs(fsMod.collection(db, "publicProfessionals"));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function submitProfessionalRegistration(payload) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const check = validateProfessionalRegistration(payload);
+  if (!check.valid) throw new Error(check.errors[0] || "Invalid professional registration.");
+  const { fsMod, db, auth } = ctx;
+  const proId = `pro_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const docData = {
+    userId: auth.currentUser.uid,
+    ...check.clean,
+    status: "pending",
+    adminNotes: "",
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  await fsMod.setDoc(fsMod.doc(db, "professionals", proId), docData);
+  return proId;
+}
+
+export async function fetchMyProfessionalProfiles(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const q = fsMod.query(fsMod.collection(db, "professionals"), fsMod.where("userId", "==", uid));
+    const snap = await fsMod.getDocs(q);
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function submitHiringRequest(payload) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const check = validateHiringRequest(payload);
+  if (!check.valid) throw new Error(check.errors[0] || "Invalid hiring request.");
+  const { fsMod, db, auth } = ctx;
+  const reqId = `hire_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  await fsMod.setDoc(fsMod.doc(db, "professionalHiringRequests", reqId), {
+    userId: auth.currentUser.uid,
+    ...check.clean,
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  return reqId;
+}
+
+export async function fetchMyHiringRequests(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const q = fsMod.query(fsMod.collection(db, "professionalHiringRequests"), fsMod.where("userId", "==", uid));
+    const snap = await fsMod.getDocs(q);
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchAssignedJobsForProfessional(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const [hireSnap, outSnap] = await Promise.all([
+      fsMod.getDocs(fsMod.query(fsMod.collection(db, "professionalHiringRequests"), fsMod.where("assignedProfessionalUid", "==", uid))),
+      fsMod.getDocs(fsMod.query(fsMod.collection(db, "outsourcingRequests"), fsMod.where("assignedProfessionalUid", "==", uid)))
+    ]);
+    const hires = hireSnap.docs.map((d) => ({ id: d.id, _assignmentKind: "hiring", ...d.data() }));
+    const outs = outSnap.docs.map((d) => ({ id: d.id, _assignmentKind: "outsourcing", ...d.data() }));
+    return [...hires, ...outs].sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function respondToHiringProposal({ request, action, note = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const uid = ctx.auth.currentUser.uid;
+  const evalRes = evaluateCustomerProposalAction({ request, action, userId: uid, note });
+  if (!evalRes.allowed) throw new Error(evalRes.error);
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "professionalHiringRequests", request.id), {
+    ...evalRes.patch,
+    updatedAt: fsMod.serverTimestamp()
+  });
+  return evalRes.patch;
+}
+
+export async function cancelMyHiringRequest(requestId) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "professionalHiringRequests", requestId), {
+    status: "Cancelled",
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function submitOutsourcingRequest(payload) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const check = validateOutsourcingRequest(payload);
+  if (!check.valid) throw new Error(check.errors[0] || "Invalid outsourcing request.");
+  const { fsMod, db, auth } = ctx;
+  const outId = `out_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  await fsMod.setDoc(fsMod.doc(db, "outsourcingRequests", outId), {
+    userId: auth.currentUser.uid,
+    ...check.clean,
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  return outId;
+}
+
+export async function fetchMyOutsourcingRequests(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const q = fsMod.query(fsMod.collection(db, "outsourcingRequests"), fsMod.where("userId", "==", uid));
+    const snap = await fsMod.getDocs(q);
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function cancelMyOutsourcingRequest(requestId) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "outsourcingRequests", requestId), {
+    status: "Cancelled",
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+// --- ADMIN PROFESSIONAL NETWORK OPERATIONS ---
+
+async function syncPublicProfessionalDoc(ctx, professionalId, { status, proData = null } = {}) {
+  const { fsMod, db } = ctx;
+  const pubRef = fsMod.doc(db, "publicProfessionals", professionalId);
+  if (status === "approved" && proData) {
+    const clean = sanitizePublicProfessionalProfile({ ...proData, id: professionalId, status: "approved" });
+    if (clean) {
+      await fsMod.setDoc(pubRef, {
+        ...clean,
+        createdAt: fsMod.serverTimestamp(),
+        updatedAt: fsMod.serverTimestamp()
+      });
+    }
+  } else {
+    try {
+      await fsMod.deleteDoc(pubRef);
+    } catch {
+      // Directory doc may not exist yet
+    }
+  }
+}
+
+export async function adminFetchProfessionalNetworkData() {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const [prosSnap, hiresSnap, outsSnap, blockedSnap] = await Promise.all([
+    fsMod.getDocs(fsMod.collection(db, "professionals")),
+    fsMod.getDocs(fsMod.collection(db, "professionalHiringRequests")),
+    fsMod.getDocs(fsMod.collection(db, "outsourcingRequests")),
+    fsMod.getDocs(fsMod.collection(db, "chatBlockedUsers"))
+  ]);
+  const mapSorted = (snap) =>
+    snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || b.updatedAt?.seconds || 0) - (a.createdAt?.seconds || a.updatedAt?.seconds || 0));
+  const blockedMap = {};
+  blockedSnap.docs.forEach((d) => {
+    blockedMap[d.id] = { id: d.id, ...d.data() };
+  });
+  return {
+    professionals: mapSorted(prosSnap),
+    hiringRequests: mapSorted(hiresSnap),
+    outsourcingRequests: mapSorted(outsSnap),
+    blockedMap
+  };
+}
+
+export async function adminUpdateProfessionalStatus(professionalId, status, adminNotes = "", proData = null) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const safeStatus = ["pending", "approved", "rejected", "suspended"].includes(status) ? status : "pending";
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "professionals", professionalId), {
+    status: safeStatus,
+    adminNotes: String(adminNotes || "").trim().slice(0, 1000),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  await syncPublicProfessionalDoc(ctx, professionalId, { status: safeStatus, proData });
+}
+
+export async function adminProposeProfessionalForHiring({ requestId, professional, proposalMessage = "", adminNotes = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  if (!requestId || !professional || String(professional.status || "").toLowerCase() !== "approved") {
+    throw new Error("Select an approved professional to propose for this booking.");
+  }
+  const { fsMod, db } = ctx;
+  await fsMod.updateDoc(fsMod.doc(db, "professionalHiringRequests", requestId), {
+    assignedProfessionalId: String(professional.id || ""),
+    assignedProfessionalUid: String(professional.userId || ""),
+    assignedProfessionalName: String(professional.fullName || "").slice(0, 100),
+    assignedProfessionalCategory: String(professional.category || "").slice(0, 60),
+    proposalMessage: String(proposalMessage || "").trim().slice(0, 1000),
+    adminNotes: String(adminNotes || "").trim().slice(0, 1000),
+    customerAcceptance: "pending",
+    customerResponseNote: "",
+    status: "Assignment Proposed",
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminUpdateHiringRequestStatus({ requestId, status, adminNotes } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const patch = {
+    status: String(status || "Pending Admin Review"),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  if (typeof adminNotes === "string") {
+    patch.adminNotes = adminNotes.trim().slice(0, 1000);
+  }
+  await fsMod.updateDoc(fsMod.doc(db, "professionalHiringRequests", requestId), patch);
+}
+
+export async function adminUpdateOutsourcingRequest({ requestId, status, professional = null, adminNotes } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const patch = {
+    status: String(status || "Pending Admin Review"),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  if (professional && String(professional.status || "").toLowerCase() === "approved") {
+    patch.assignedProfessionalId = String(professional.id || "");
+    patch.assignedProfessionalUid = String(professional.userId || "");
+    patch.assignedProfessionalName = String(professional.fullName || "").slice(0, 100);
+  }
+  if (typeof adminNotes === "string") {
+    patch.adminNotes = adminNotes.trim().slice(0, 1000);
+  }
+  await fsMod.updateDoc(fsMod.doc(db, "outsourcingRequests", requestId), patch);
+}
+
+// --- PRIVATE CHAT & MODERATION FIRESTORE HELPERS ---
+
+export async function fetchMyChatBlockStatus(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return { isBlocked: false, reason: "" };
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDoc(fsMod.doc(db, "chatBlockedUsers", uid));
+    if (!snap.exists()) return { isBlocked: false, reason: "" };
+    const data = snap.data() || {};
+    return { isBlocked: data.isBlocked === true, reason: String(data.reason || "") };
+  } catch {
+    return { isBlocked: false, reason: "" };
+  }
+}
+
+export async function adminSetChatUserBlocked({ userId, isBlocked, reason = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  const adminUser = requireAuthorizedAdmin(ctx);
+  if (!userId) throw new Error("User ID required.");
+  const { fsMod, db } = ctx;
+  await fsMod.setDoc(fsMod.doc(db, "chatBlockedUsers", userId), {
+    userId,
+    isBlocked: Boolean(isBlocked),
+    reason: String(reason || (isBlocked ? "Messaging suspended by Studio Admin." : "")).trim().slice(0, 300),
+    updatedByEmail: String(adminUser.email || LOCKED_ADMIN_ALERT_EMAIL).trim().toLowerCase(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function openOrCreatePrivateChatThread({
+  participantUid,
+  participantName,
+  participantEmail = "",
+  participantRole = "customer",
+  contextType = "general",
+  contextId = "studio",
+  contextLabel = "Studio Support"
+} = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const { fsMod, db, auth } = ctx;
+  const uid = participantUid || auth.currentUser.uid;
+  const chatId = buildChatThreadId({ participantUid: uid, contextType, contextId });
+  const chatRef = fsMod.doc(db, "privateChats", chatId);
+  const existing = await fsMod.getDoc(chatRef);
+  if (!existing.exists()) {
+    await fsMod.setDoc(chatRef, {
+      participantUid: uid,
+      participantName: String(participantName || auth.currentUser.displayName || auth.currentUser.email || "Member").trim().slice(0, 100),
+      participantEmail: String(participantEmail || auth.currentUser.email || "").trim().toLowerCase().slice(0, 128),
+      participantRole: participantRole === "professional" ? "professional" : "customer",
+      contextType: ["hiring", "professional", "outsourcing", "general"].includes(contextType) ? contextType : "general",
+      contextId: String(contextId || "studio").trim().slice(0, 128),
+      contextLabel: String(contextLabel || "Studio Support").trim().slice(0, 160),
+      lastMessageText: "",
+      lastSenderRole: participantRole === "professional" ? "professional" : "customer",
+      unreadByAdmin: 0,
+      unreadByUser: 0,
+      createdAt: fsMod.serverTimestamp(),
+      updatedAt: fsMod.serverTimestamp()
+    });
+  }
+  return chatId;
+}
+
+export async function sendPrivateChatMessage({ chatId, text = "", imageAttachment = "", senderRole = "customer" } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const check = validatePrivateChatMessage({ text, imageAttachment });
+  if (!check.valid) throw new Error(check.error);
+  const { fsMod, db, auth } = ctx;
+  const user = auth.currentUser;
+  const isAdminSender = senderRole === "admin" && isAuthorizedAdminUser(user);
+  const effectiveRole = isAdminSender ? "admin" : senderRole === "professional" ? "professional" : "customer";
+  const senderName = isAdminSender
+    ? "STAR ARTIST STUDIO Admin"
+    : String(user.displayName || user.email || "Studio Member").trim().slice(0, 100);
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  const msgPayload = {
+    chatId,
+    senderUid: user.uid,
+    senderName,
+    senderRole: effectiveRole,
+    text: check.clean.text,
+    imageAttachment: check.clean.imageAttachment,
+    isRead: false,
+    createdAt: fsMod.serverTimestamp()
+  };
+
+  await fsMod.setDoc(fsMod.doc(db, "privateChats", chatId, "messages", msgId), msgPayload);
+
+  // Read current thread counters so we increment safely without relying on FieldValue.increment in rules
+  const chatRef = fsMod.doc(db, "privateChats", chatId);
+  const snap = await fsMod.getDoc(chatRef);
+  const cur = snap.exists() ? snap.data() || {} : {};
+  const previewText = check.clean.text || "📷 Photo attachment";
+  await fsMod.updateDoc(chatRef, {
+    lastMessageText: previewText.slice(0, 500),
+    lastMessageAt: fsMod.serverTimestamp(),
+    lastSenderRole: effectiveRole,
+    unreadByAdmin: isAdminSender ? 0 : Math.min(9999, Number(cur.unreadByAdmin || 0) + 1),
+    unreadByUser: isAdminSender ? Math.min(9999, Number(cur.unreadByUser || 0) + 1) : 0,
+    updatedAt: fsMod.serverTimestamp()
+  });
+
+  return msgId;
+}
+
+export async function markPrivateChatRead(chatId, { asAdmin = false } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !chatId) return;
+  const { fsMod, db } = ctx;
+  const patch = asAdmin
+    ? { unreadByAdmin: 0, updatedAt: fsMod.serverTimestamp() }
+    : { unreadByUser: 0, updatedAt: fsMod.serverTimestamp() };
+  try {
+    await fsMod.updateDoc(fsMod.doc(db, "privateChats", chatId), patch);
+  } catch {
+    // Ignore if already read or blocked
+  }
+}
+
+export async function markPrivateChatMessagesRead({
+  chatId,
+  messageIds = [],
+  asAdmin = false,
+  readerRole = "customer"
+} = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !chatId) return 0;
+  const uniqueIds = [...new Set((Array.isArray(messageIds) ? messageIds : []).map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 50);
+  if (!uniqueIds.length) return 0;
+
+  if (asAdmin) {
+    requireAuthorizedAdmin(ctx);
+  }
+  const { fsMod, db, auth } = ctx;
+  const effectiveReaderRole = asAdmin
+    ? "admin"
+    : readerRole === "professional"
+    ? "professional"
+    : "customer";
+  const receiptPatch = {
+    isRead: true,
+    readAt: fsMod.serverTimestamp(),
+    readByUid: auth.currentUser.uid,
+    readByRole: effectiveReaderRole
+  };
+
+  try {
+    if (typeof fsMod.writeBatch === "function") {
+      const batch = fsMod.writeBatch(db);
+      for (const msgId of uniqueIds) {
+        batch.update(fsMod.doc(db, "privateChats", chatId, "messages", msgId), receiptPatch);
+      }
+      await batch.commit();
+      return uniqueIds.length;
+    }
+    await Promise.allSettled(
+      uniqueIds.map((msgId) =>
+        fsMod.updateDoc(fsMod.doc(db, "privateChats", chatId, "messages", msgId), receiptPatch)
+      )
+    );
+    return uniqueIds.length;
+  } catch {
+    return 0;
+  }
+}
+
+export async function subscribeMyPrivateChats(uid, { onThreads, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !uid) return () => {};
+  const { fsMod, db } = ctx;
+  const q = fsMod.query(fsMod.collection(db, "privateChats"), fsMod.where("participantUid", "==", uid));
+  return fsMod.onSnapshot(
+    q,
+    (snap) => {
+      const threads = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.lastMessageAt?.seconds || b.updatedAt?.seconds || 0) - (a.lastMessageAt?.seconds || a.updatedAt?.seconds || 0));
+      if (typeof onThreads === "function") onThreads(threads);
+    },
+    (err) => {
+      if (typeof onError === "function") onError(err);
+    }
+  );
+}
+
+export async function adminSubscribePrivateChats({ onThreads, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.collection(db, "privateChats"),
+    (snap) => {
+      const threads = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.lastMessageAt?.seconds || b.updatedAt?.seconds || 0) - (a.lastMessageAt?.seconds || a.updatedAt?.seconds || 0));
+      if (typeof onThreads === "function") onThreads(threads);
+    },
+    (err) => {
+      if (typeof onError === "function") onError(err);
+    }
+  );
+}
+
+export async function subscribePrivateChatMessages(chatId, { onMessages, onError } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx) || !chatId) return () => {};
+  const { fsMod, db } = ctx;
+  return fsMod.onSnapshot(
+    fsMod.collection(db, "privateChats", chatId, "messages"),
+    (snap) => {
+      const msgs = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      if (typeof onMessages === "function") onMessages(msgs);
+    },
+    (err) => {
+      if (typeof onError === "function") onError(err);
+    }
+  );
+}
+
+// ============================================================================
+// STRICT CUSTOMER PRIVATE BOOKING PORTAL (UID-LOCKED QUERIES & ADMIN ASSIGNMENTS)
+// ============================================================================
+
+export async function fetchMyUserProfile(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return null;
+  const authUid = ctx.auth.currentUser.uid;
+  if (uid && uid !== authUid) return null;
+  const { fsMod, db } = ctx;
+  const snap = await fsMod.getDoc(fsMod.doc(db, "users", authUid));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() };
+}
+
+export async function fetchMyCustomerCatalogs(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return [];
+  const authUid = ctx.auth.currentUser.uid;
+  if (uid && uid !== authUid) return [];
+  const { fsMod, db } = ctx;
+  const q = fsMod.query(
+    fsMod.collection(db, "customerCatalogs"),
+    fsMod.where("customerUid", "==", authUid)
+  );
+  const snap = await fsMod.getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((d) => d.customerUid === authUid)
+    .sort((a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0));
+}
+
+export async function fetchMyCustomerSlots(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return [];
+  const authUid = ctx.auth.currentUser.uid;
+  if (uid && uid !== authUid) return [];
+  const { fsMod, db } = ctx;
+  const q = fsMod.query(
+    fsMod.collection(db, "customerSlots"),
+    fsMod.where("customerUid", "==", authUid)
+  );
+  const snap = await fsMod.getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((d) => d.customerUid === authUid)
+    .sort((a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0));
+}
+
+export async function adminFetchCustomerPortalData() {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const [catSnap, slotSnap] = await Promise.all([
+    fsMod.getDocs(fsMod.collection(db, "customerCatalogs")),
+    fsMod.getDocs(fsMod.collection(db, "customerSlots"))
+  ]);
+  const sortDesc = (snap) =>
+    snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0));
+  return {
+    catalogs: sortDesc(catSnap),
+    slots: sortDesc(slotSnap)
+  };
+}
+
+export async function adminAssignCustomerCatalog(payload) {
+  const ctx = await initFirebaseClient();
+  const adminUser = requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const catalogId = `cat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await fsMod.setDoc(fsMod.doc(db, "customerCatalogs", catalogId), {
+    customerUid: String(payload.customerUid || "").trim(),
+    bookingId: String(payload.bookingId || "").trim().slice(0, 128),
+    title: String(payload.title || "").trim().slice(0, 140),
+    description: String(payload.description || "").trim().slice(0, 1000),
+    category: String(payload.category || "Private Selection").trim().slice(0, 80),
+    items: Array.isArray(payload.items) ? payload.items.slice(0, 50) : [],
+    coverImageUrl: String(payload.coverImageUrl || "").trim().slice(0, 180000),
+    sharedByAdminEmail: String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase(),
+    status: "active",
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  return catalogId;
+}
+
+export async function adminDeleteCustomerCatalog(catalogId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  await fsMod.deleteDoc(fsMod.doc(db, "customerCatalogs", catalogId));
+}
+
+export async function adminAssignCustomerSlot(payload) {
+  const ctx = await initFirebaseClient();
+  const adminUser = requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const slotId = `slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await fsMod.setDoc(fsMod.doc(db, "customerSlots", slotId), {
+    customerUid: String(payload.customerUid || "").trim(),
+    bookingId: String(payload.bookingId || "").trim().slice(0, 128),
+    eventTitle: String(payload.eventTitle || "").trim().slice(0, 140),
+    eventDate: String(payload.eventDate || "").trim().slice(0, 50),
+    eventTime: String(payload.eventTime || "").trim().slice(0, 50),
+    slotLabel: String(payload.slotLabel || "").trim().slice(0, 120),
+    location: String(payload.location || "Star Artist Studio, Talwara Khurd").trim().slice(0, 200),
+    approvalStatus: ["Pending", "Approved", "Rejected", "Confirmed"].includes(payload.approvalStatus)
+      ? payload.approvalStatus
+      : "Pending",
+    customerNote: String(payload.customerNote || "").trim().slice(0, 500),
+    assignedByAdminEmail: String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase(),
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+  return slotId;
+}
+
+export async function adminUpdateCustomerSlotStatus(slotId, approvalStatus) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const safeStatus = ["Pending", "Approved", "Rejected", "Confirmed"].includes(approvalStatus)
+    ? approvalStatus
+    : "Pending";
+  await fsMod.updateDoc(fsMod.doc(db, "customerSlots", slotId), {
+    approvalStatus: safeStatus,
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminDeleteCustomerSlot(slotId) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  await fsMod.deleteDoc(fsMod.doc(db, "customerSlots", slotId));
+}
+
+
+
 

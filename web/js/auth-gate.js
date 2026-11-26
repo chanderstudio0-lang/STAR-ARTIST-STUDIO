@@ -273,7 +273,7 @@ export function syncAuthGateDom(
   }
 
   if (!isAuthenticated) {
-    for (const viewId of ["view-home", "view-catalog", "view-booking", "view-models", "view-companies", "view-gallery", "view-admin"]) {
+    for (const viewId of ["view-home", "view-portal", "view-catalog", "view-booking", "view-models", "view-companies", "view-network", "view-gallery", "view-admin"]) {
       const sec = doc.getElementById(viewId);
       if (!sec) continue;
       sec.classList?.toggle("hidden", true);

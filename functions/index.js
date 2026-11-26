@@ -1,5 +1,5 @@
 import { getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
 import * as logger from "firebase-functions/logger";
@@ -36,6 +36,48 @@ async function loadFirestoreEmailTemplateOverrides() {
 }
 
 /**
+ * Loads Admin Dashboard automated email alert toggle settings from Firestore
+ * (`studioConfig/emailAlerts`). Defaults to enabled when unset.
+ */
+async function loadFirestoreEmailAlertSettings() {
+  try {
+    const db = getFirestore(FIRESTORE_DATABASE_ID);
+    const snap = await db.doc("studioConfig/emailAlerts").get();
+    return snap.exists ? snap.data() || {} : {};
+  } catch (err) {
+    logger.warn("Unable to read studioConfig/emailAlerts; defaulting to alerts enabled.", {
+      error: err?.message || String(err)
+    });
+    return {};
+  }
+}
+
+/**
+ * Writes automated alert delivery status entries into `adminEmailAlerts/{alertId}`
+ * so the Admin Dashboard displays real-time delivery history.
+ */
+async function writeAdminEmailAlertLog(entry) {
+  const db = getFirestore(FIRESTORE_DATABASE_ID);
+  const safeType = ["booking", "model", "company"].includes(entry?.type) ? entry.type : "booking";
+  const safeRecordId = String(entry?.recordId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "item";
+  const alertId = `alert_${safeType}_${safeRecordId}_${Date.now()}`.slice(0, 120);
+  await db.doc(`adminEmailAlerts/${alertId}`).set({
+    type: safeType,
+    recordId: String(entry?.recordId || safeRecordId).slice(0, 128),
+    recipientEmail: String(entry?.recipientEmail || "chanderstudio0@gmail.com").trim().toLowerCase(),
+    subject: String(entry?.subject || "Studio Admin Alert").slice(0, 200),
+    summary: String(entry?.summary || "").slice(0, 500),
+    status: ["queued", "sent", "failed", "skipped", "acknowledged"].includes(entry?.status) ? entry.status : "sent",
+    messageId: String(entry?.messageId || "").slice(0, 200),
+    errorMessage: String(entry?.errorMessage || "").slice(0, 300),
+    source: "cloud-function",
+    isRead: false,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+}
+
+/**
  * Fires automatically when a new shoot booking document is created in Firestore
  * and sends a branded HTML alert to the authorized Studio Administrator (chanderstudio0@gmail.com).
  */
@@ -52,6 +94,8 @@ export const notifyAdminOnNewBooking = onDocumentCreated(
       smtpUser: SMTP_USER.value(),
       smtpPass: SMTP_PASS.value(),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
+      loadAlertSettings: loadFirestoreEmailAlertSettings,
+      recordAlertLog: writeAdminEmailAlertLog,
       logger
     });
   }
@@ -74,6 +118,8 @@ export const notifyAdminOnNewModelApplication = onDocumentCreated(
       smtpUser: SMTP_USER.value(),
       smtpPass: SMTP_PASS.value(),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
+      loadAlertSettings: loadFirestoreEmailAlertSettings,
+      recordAlertLog: writeAdminEmailAlertLog,
       logger
     });
   }
@@ -96,6 +142,8 @@ export const notifyAdminOnNewCompanyBooking = onDocumentCreated(
       smtpUser: SMTP_USER.value(),
       smtpPass: SMTP_PASS.value(),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
+      loadAlertSettings: loadFirestoreEmailAlertSettings,
+      recordAlertLog: writeAdminEmailAlertLog,
       logger
     });
   }

@@ -4,7 +4,7 @@ export const AUTHORIZED_ADMIN_EMAIL = String(STUDIO_CONTACT.adminEmail || "chand
   .trim()
   .toLowerCase();
 
-export const PUBLIC_ROUTES = ["home", "catalog", "booking", "models", "companies", "gallery"];
+export const PUBLIC_ROUTES = ["home", "portal", "catalog", "booking", "models", "companies", "network", "gallery"];
 export const ALL_ROUTES = [...PUBLIC_ROUTES, "admin"];
 
 /**

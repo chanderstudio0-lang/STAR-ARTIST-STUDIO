@@ -59,6 +59,14 @@ import {
   getPreviewRecordsForType,
   renderAdminEmailPreviewSectionHtml
 } from "./admin-email-preview.js";
+import {
+  DEFAULT_ADMIN_EMAIL_ALERT_SETTINGS,
+  normalizeAdminEmailAlertSettings,
+  detectNewAdminAlertItems,
+  buildAdminEmailAlertRecord,
+  summarizeAdminEmailAlerts,
+  renderAdminEmailAlertsSectionHtml
+} from "./admin-email-alerts.js";
 import { renderCatalogTierSectionHtml } from "./tier-info.js";
 import {
   renderLazyBlurImageHtml,
@@ -198,14 +206,84 @@ import {
   adminPublishAnnouncement,
   adminRequestTestEmail,
   adminSubscribeTestEmailStatus,
+  adminSubscribeModelsRealtime,
+  adminFetchEmailAlertSettings,
+  adminSaveEmailAlertSettings,
+  adminFetchEmailAlerts,
+  adminSubscribeEmailAlertsRealtime,
+  adminLogEmailAlert,
+  adminMarkEmailAlertRead,
+  adminMarkAllEmailAlertsRead,
   fetchWeddingPackageConfigs,
   adminSaveWeddingPackageConfig,
   adminResetWeddingPackageConfig,
   initFirebaseClient,
   shouldShowManualFirebaseSetup,
   saveLocalDevFirebaseConfig,
-  syncWorkshopNewsletterOptIn
+  syncWorkshopNewsletterOptIn,
+  fetchApprovedPublicProfessionals,
+  submitProfessionalRegistration,
+  fetchMyProfessionalProfiles,
+  submitHiringRequest,
+  fetchMyHiringRequests,
+  fetchAssignedJobsForProfessional,
+  respondToHiringProposal,
+  cancelMyHiringRequest,
+  submitOutsourcingRequest,
+  fetchMyOutsourcingRequests,
+  cancelMyOutsourcingRequest,
+  adminFetchProfessionalNetworkData,
+  adminUpdateProfessionalStatus,
+  adminProposeProfessionalForHiring,
+  adminUpdateHiringRequestStatus,
+  adminUpdateOutsourcingRequest,
+  fetchMyChatBlockStatus,
+  adminSetChatUserBlocked,
+  openOrCreatePrivateChatThread,
+  sendPrivateChatMessage,
+  markPrivateChatRead,
+  markPrivateChatMessagesRead,
+  subscribeMyPrivateChats,
+  adminSubscribePrivateChats,
+  subscribePrivateChatMessages,
+  fetchMyUserProfile,
+  fetchMyCustomerCatalogs,
+  fetchMyCustomerSlots,
+  adminFetchCustomerPortalData,
+  adminAssignCustomerCatalog,
+  adminDeleteCustomerCatalog,
+  adminAssignCustomerSlot,
+  adminUpdateCustomerSlotStatus,
+  adminDeleteCustomerSlot
 } from "./firebase.js";
+import {
+  renderApprovedProfessionalsDirectoryHtml,
+  renderMyProApplicationsHtml,
+  renderMyHiringBookingsHtml
+} from "./pro-network.js";
+import {
+  getUnreadIncomingMessageIds,
+  countUnreadChatsForUser,
+  countUnreadChatsForAdmin,
+  renderUserPrivateChatHtml,
+  renderAdminPrivateMessagesHtml
+} from "./private-chat.js";
+import {
+  renderAdminProRegistrationsHtml,
+  renderAdminHiringRequestsHtml,
+  renderAdminOutsourcingRequestsHtml,
+  renderAdminAssignmentsHtml,
+  renderAdminBookingHistoryHtml
+} from "./admin-pro-network.js";
+import {
+  CUSTOMER_PORTAL_TABS,
+  extractPortalQueryParams,
+  resolvePortalDeepLinkAccess,
+  validateCustomerCatalogPayload,
+  validateCustomerSlotPayload,
+  renderCustomerPortalHtml,
+  renderAdminCustomerPortalTabHtml
+} from "./customer-portal.js";
 
 const state = {
   lang: localStorage.getItem("star_artist_lang") === "hi" ? "hi" : "en",
@@ -252,6 +330,13 @@ const state = {
       error: ""
     }
   },
+  adminEmailAlertSettings: { ...DEFAULT_ADMIN_EMAIL_ALERT_SETTINGS },
+  adminEmailAlerts: [],
+  adminEmailAlertFilter: "all",
+  isSavingEmailAlertSettings: false,
+  dispatchingEmailAlertKey: "",
+  _knownBookingIds: null,
+  _knownModelIds: null,
   publicModels: [],
   publicModelFilters: { ...DEFAULT_MODEL_DISCOVERY_FILTERS, skills: [] },
   activeProfileModelId: null,
@@ -264,6 +349,13 @@ const state = {
   queuedOfflineBookings: [],
   myModels: [],
   myNotifications: [],
+  myUserProfile: null,
+  myCustomerCatalogs: [],
+  myCustomerSlots: [],
+  portalTab: "my-catalog",
+  portalDeniedNotice: "",
+  portalHighlightedBookingId: "",
+  adminPortalData: { catalogs: [], slots: [] },
   modelRegPortfolioPhotos: [],
   editingModelId: null,
   editModelDraftPhotos: [],
@@ -289,7 +381,37 @@ const state = {
   uploadedGalleryMedia: null,
   isEncodingGalleryImage: false,
   adminCsvExportStatus: "idle",
-  adminData: { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] }
+  adminData: { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] },
+  proTab: "join",
+  proDirCategory: "all",
+  proDirSearch: "",
+  publicProfessionals: [],
+  myProfessionals: [],
+  myHiringRequests: [],
+  myAssignedJobs: [],
+  myOutsourcingRequests: [],
+  proRegPhotos: [],
+  hireRefPhotos: [],
+  outRefPhotos: [],
+  myChatThreads: [],
+  activeUserChatId: "",
+  activeUserChatMessages: [],
+  userChatDraftText: "",
+  userChatDraftImage: "",
+  userChatSending: false,
+  myChatBlockStatus: { isBlocked: false, reason: "" },
+  _prevUserChatUnread: null,
+  _prevAdminChatUnread: null,
+  adminProData: { professionals: [], hiringRequests: [], outsourcingRequests: [], blockedMap: {} },
+  adminProFilter: "pending",
+  adminProSearch: "",
+  adminHiringFilter: "all",
+  adminChatThreads: [],
+  activeAdminChatId: "",
+  activeAdminChatMessages: [],
+  adminChatDraftText: "",
+  adminChatDraftImage: "",
+  adminChatSending: false
 };
 
 function showToast(msg) {
@@ -320,6 +442,12 @@ function applyTranslations() {
     const key = el.getAttribute("data-i18n");
     if (key && TRANSLATIONS[state.lang]?.[key]) {
       el.textContent = TRANSLATIONS[state.lang][key];
+    }
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (key && TRANSLATIONS[state.lang]?.[key]) {
+      el.placeholder = TRANSLATIONS[state.lang][key];
     }
   });
   const searchInput = document.getElementById("catalogSearchInput");
@@ -379,12 +507,15 @@ function applyTranslations() {
 
   renderBookingWeddingSummary();
 
+  if (isAuthenticatedMember(state.user)) {
+    renderProNetworkView();
+    renderCustomerPortalView();
+  }
+
   if (hasVerifiedAdminSession() && state.route === "admin") {
     renderAdminBookingTracker();
     renderAdminModelGrowthChart();
-    if (state.adminTab === "models") {
-      renderAdminConsole();
-    }
+    renderAdminConsole();
   }
 }
 
@@ -457,7 +588,7 @@ function closeAuthModal() {
 }
 
 function navigateTo(route, { silentBlock = false } = {}) {
-  const validRoutes = ["home", "catalog", "booking", "models", "companies", "gallery", "admin"];
+  const validRoutes = ["home", "portal", "catalog", "booking", "models", "companies", "network", "gallery", "admin"];
   const authenticated = isAuthenticatedMember(state.user);
   const isAdminNow = hasVerifiedAdminSession();
   const access = resolveAuthenticatedAccess({
@@ -564,6 +695,12 @@ function navigateTo(route, { silentBlock = false } = {}) {
     btn.classList.toggle("active", btn.getAttribute("data-route") === target);
   });
 
+  if (target === "portal") {
+    renderCustomerPortalView({ checkUrlDeepLink: true });
+  }
+  if (target === "network") {
+    renderProNetworkView();
+  }
   if (target === "admin" && isAdminNow) {
     loadAdminConsole();
   }
@@ -1305,6 +1442,8 @@ function renderAdminModelExperienceChart() {
 }
 
 let adminBookingsUnsubscribe = null;
+let adminModelsUnsubscribe = null;
+let adminEmailAlertsUnsubscribe = null;
 
 const adminBookingTracker = createRealtimeBookingTracker({
   getBookings: () => state.adminData.bookings,
@@ -1343,7 +1482,60 @@ function stopAdminRealtimeTracker() {
     }
     adminBookingsUnsubscribe = null;
   }
+  if (typeof adminModelsUnsubscribe === "function") {
+    try {
+      adminModelsUnsubscribe();
+    } catch {
+      // Ignore cleanup error
+    }
+    adminModelsUnsubscribe = null;
+  }
+  if (typeof adminEmailAlertsUnsubscribe === "function") {
+    try {
+      adminEmailAlertsUnsubscribe();
+    } catch {
+      // Ignore cleanup error
+    }
+    adminEmailAlertsUnsubscribe = null;
+  }
+  stopAdminChatSubscriptions();
+  state._knownBookingIds = null;
+  state._knownModelIds = null;
+  state._prevAdminChatUnread = null;
   adminBookingTracker.stop();
+}
+
+async function handleLiveAdminSubmissionAlerts(type, newItems = []) {
+  if (!hasVerifiedAdminSession() || !Array.isArray(newItems) || !newItems.length) return;
+  const cfg = normalizeAdminEmailAlertSettings(state.adminEmailAlertSettings);
+  const enabled = type === "model" ? cfg.modelAlertsEnabled : cfg.bookingAlertsEnabled;
+  if (!enabled) return;
+
+  for (const item of newItems) {
+    const recordId = String(item?.id || "").trim();
+    if (!recordId) continue;
+    const alreadyLogged = (state.adminEmailAlerts || []).some(
+      (a) => a?.type === type && String(a?.recordId || "") === recordId
+    );
+    const alertRecord = buildAdminEmailAlertRecord({
+      type,
+      record: item,
+      status: "queued",
+      source: "dashboard-live"
+    });
+    if (!alreadyLogged) {
+      try {
+        await adminLogEmailAlert(alertRecord);
+      } catch (err) {
+        console.warn("Live admin alert log warning:", err?.message || err);
+      }
+    }
+    if (cfg.browserAlertsEnabled) {
+      const displayName = type === "model" ? item.fullName || "Applicant" : item.clientName || "Client";
+      const toastKey = type === "model" ? "adminEmailAlertLiveModelToast" : "adminEmailAlertLiveBookingToast";
+      showToast(t(toastKey).replace("{name}", displayName));
+    }
+  }
 }
 
 async function ensureAdminRealtimeTracker() {
@@ -1360,8 +1552,16 @@ async function ensureAdminRealtimeTracker() {
             stopAdminRealtimeTracker();
             return;
           }
+          const detected = detectNewAdminAlertItems({
+            prevIds: state._knownBookingIds,
+            items: liveBookings
+          });
+          state._knownBookingIds = detected.nextIds;
           state.adminData.bookings = liveBookings;
           adminBookingTracker.setLiveConnected(true);
+          if (!detected.initialized && detected.newItems.length > 0) {
+            handleLiveAdminSubmissionAlerts("booking", detected.newItems);
+          }
           if (state.route === "admin") {
             renderAdminConsole();
           }
@@ -1377,6 +1577,60 @@ async function ensureAdminRealtimeTracker() {
       console.warn("Unable to start real-time bookings listener:", err?.message || err);
     }
   }
+
+  if (!adminModelsUnsubscribe && state.firebaseReady) {
+    try {
+      adminModelsUnsubscribe = await adminSubscribeModelsRealtime({
+        onModels: (liveModels) => {
+          if (!hasVerifiedAdminSession()) {
+            stopAdminRealtimeTracker();
+            return;
+          }
+          const detected = detectNewAdminAlertItems({
+            prevIds: state._knownModelIds,
+            items: liveModels
+          });
+          state._knownModelIds = detected.nextIds;
+          state.adminData.models = liveModels;
+          if (!detected.initialized && detected.newItems.length > 0) {
+            handleLiveAdminSubmissionAlerts("model", detected.newItems);
+          }
+          if (state.route === "admin") {
+            renderAdminConsole();
+          }
+        },
+        onError: (err) => {
+          console.warn("Realtime models alert listener warning:", err?.message || err);
+        }
+      });
+    } catch (err) {
+      console.warn("Unable to start real-time models alert listener:", err?.message || err);
+    }
+  }
+
+  if (!adminEmailAlertsUnsubscribe && state.firebaseReady) {
+    try {
+      adminEmailAlertsUnsubscribe = await adminSubscribeEmailAlertsRealtime({
+        onAlerts: (liveAlerts) => {
+          if (!hasVerifiedAdminSession()) {
+            stopAdminRealtimeTracker();
+            return;
+          }
+          state.adminEmailAlerts = liveAlerts;
+          if (state.route === "admin") {
+            renderAdminConsole();
+          }
+        },
+        onError: (err) => {
+          console.warn("Realtime email alerts listener warning:", err?.message || err);
+        }
+      });
+    } catch (err) {
+      console.warn("Unable to start real-time email alerts listener:", err?.message || err);
+    }
+  }
+
+  await ensureAdminChatSubscription();
 }
 
 function renderAdminBookingTracker() {
@@ -1399,6 +1653,7 @@ async function loadAdminConsole() {
   if (!hasVerifiedAdminSession()) {
     stopAdminRealtimeTracker();
     state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
+    state.adminEmailAlerts = [];
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
     unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
@@ -1410,12 +1665,34 @@ async function loadAdminConsole() {
   syncAdminUiVisibility(document, { isAdmin: true, adminEmail: state.user?.email || "" });
 
   try {
-    const [dashData, weddingConfigs] = await Promise.all([
+    const [dashData, weddingConfigs, alertSettings, alertLogs, proNetData, portalAdminData] = await Promise.all([
       adminFetchDashboardData(),
-      fetchWeddingPackageConfigs()
+      fetchWeddingPackageConfigs(),
+      adminFetchEmailAlertSettings(),
+      adminFetchEmailAlerts(),
+      adminFetchProfessionalNetworkData().catch(() => ({
+        professionals: [],
+        hiringRequests: [],
+        outsourcingRequests: [],
+        blockedMap: {}
+      })),
+      adminFetchCustomerPortalData().catch(() => ({
+        catalogs: [],
+        slots: []
+      }))
     ]);
     state.adminData = dashData;
+    state.adminProData = proNetData;
+    state.adminPortalData = portalAdminData;
     state.weddingPackageConfigs = weddingConfigs;
+    state.adminEmailAlertSettings = normalizeAdminEmailAlertSettings(alertSettings);
+    state.adminEmailAlerts = Array.isArray(alertLogs) ? alertLogs : [];
+    if (!(state._knownBookingIds instanceof Set)) {
+      state._knownBookingIds = new Set((dashData.bookings || []).map((b) => String(b?.id || "")).filter(Boolean));
+    }
+    if (!(state._knownModelIds instanceof Set)) {
+      state._knownModelIds = new Set((dashData.models || []).map((m) => String(m?.id || "")).filter(Boolean));
+    }
     renderCatalog();
     populateBookingServicesDropdown();
     renderAdminConsole();
@@ -1449,13 +1726,34 @@ function renderAdminConsole() {
   renderAdminBookingTracker();
   renderAdminModelGrowthChart();
 
+  const emailAlertSummary = summarizeAdminEmailAlerts({
+    alerts: state.adminEmailAlerts,
+    settings: state.adminEmailAlertSettings
+  });
+  const proList = Array.isArray(state.adminProData?.professionals) ? state.adminProData.professionals : [];
+  const hiringList = Array.isArray(state.adminProData?.hiringRequests) ? state.adminProData.hiringRequests : [];
+  const outsourcingList = Array.isArray(state.adminProData?.outsourcingRequests) ? state.adminProData.outsourcingRequests : [];
+  const assignmentsCount =
+    hiringList.filter((h) => h.assignedProfessionalId || h.assignedProfessionalName).length +
+    outsourcingList.filter((o) => o.assignedProfessionalId || o.assignedProfessionalName).length;
+  const adminChatUnread = countUnreadChatsForAdmin(state.adminChatThreads);
   const adminCounts = {
     bookings: state.adminData.bookings.length,
     models: state.adminData.models.length,
     companies: companyRequests.length,
     gallery: state.adminData.gallery.length,
     announcements: state.adminData.announcements.length,
-    "wedding-packages": 3
+    "wedding-packages": 3,
+    "email-alerts": emailAlertSummary.unread > 0 ? emailAlertSummary.unread : emailAlertSummary.total,
+    "pro-registrations": proList.length,
+    "pro-hiring": hiringList.length,
+    "pro-outsourcing": outsourcingList.length,
+    "pro-assignments": assignmentsCount,
+    "private-messages": adminChatUnread > 0 ? adminChatUnread : state.adminChatThreads.length,
+    "pro-booking-history": state.adminData.bookings.length + hiringList.length + outsourcingList.length,
+    "customer-portal":
+      (Array.isArray(state.adminPortalData?.catalogs) ? state.adminPortalData.catalogs.length : 0) +
+      (Array.isArray(state.adminPortalData?.slots) ? state.adminPortalData.slots.length : 0)
   };
   document.querySelectorAll("[data-admin-count]").forEach((badge) => {
     const key = badge.getAttribute("data-admin-count");
@@ -1492,7 +1790,9 @@ function renderAdminConsole() {
         </div>
         <div style="font-size:0.86rem;color:var(--text-secondary);">${escapeHtml(b.preferredDate)} ${escapeHtml(b.preferredTime || "")} • ${escapeHtml(b.contactNumber)}</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Approved">Approve</button>
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Confirmed">Confirm</button>
+          <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Rejected">Reject</button>
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Completed">Complete</button>
           <button type="button" class="chip-btn" data-adm-bk-id="${escapeHtml(b.id)}" data-adm-bk-st="Cancelled">Cancel</button>
           <button type="button" class="chip-btn" data-open-email-preview-type="booking" data-open-email-preview-id="${escapeHtml(b.id)}">${escapeHtml(t("adminEmailPreviewQuickBtn"))}</button>
@@ -1553,10 +1853,90 @@ function renderAdminConsole() {
       t,
       escapeHtml
     });
+  } else if (state.adminTab === "email-alerts") {
+    body.innerHTML = renderAdminEmailAlertsSectionHtml({
+      settings: state.adminEmailAlertSettings,
+      alerts: state.adminEmailAlerts,
+      recentBookings: state.adminData.bookings,
+      recentModels: state.adminData.models,
+      filter: state.adminEmailAlertFilter,
+      isSavingSettings: state.isSavingEmailAlertSettings,
+      dispatchingKey: state.dispatchingEmailAlertKey,
+      t,
+      escapeHtml
+    });
   } else if (state.adminTab === "email-preview") {
     body.innerHTML = renderAdminEmailPreviewSectionHtml({
       previewState: state.adminEmailPreview,
       adminData: state.adminData,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "pro-registrations") {
+    body.innerHTML = renderAdminProRegistrationsHtml({
+      professionals: proList,
+      filter: state.adminProFilter,
+      search: state.adminProSearch,
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "pro-hiring") {
+    body.innerHTML = renderAdminHiringRequestsHtml({
+      hiringRequests: hiringList,
+      approvedProfessionals: proList.filter((p) => String(p.status || "").toLowerCase() === "approved"),
+      filter: state.adminHiringFilter,
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "pro-outsourcing") {
+    body.innerHTML = renderAdminOutsourcingRequestsHtml({
+      outsourcingRequests: outsourcingList,
+      approvedProfessionals: proList.filter((p) => String(p.status || "").toLowerCase() === "approved"),
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "pro-assignments") {
+    body.innerHTML = renderAdminAssignmentsHtml({
+      hiringRequests: hiringList,
+      outsourcingRequests: outsourcingList,
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "private-messages") {
+    body.innerHTML = renderAdminPrivateMessagesHtml({
+      threads: state.adminChatThreads,
+      activeChatId: state.activeAdminChatId,
+      messages: state.activeAdminChatMessages,
+      blockedMap: state.adminProData?.blockedMap || {},
+      draftText: state.adminChatDraftText,
+      draftImage: state.adminChatDraftImage,
+      isSending: state.adminChatSending,
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+    const adminTimeline = document.getElementById("adminPrivateChatTimeline");
+    if (adminTimeline) adminTimeline.scrollTop = adminTimeline.scrollHeight;
+    syncVisibleChatReadReceipts({ asAdmin: true });
+  } else if (state.adminTab === "pro-booking-history") {
+    body.innerHTML = renderAdminBookingHistoryHtml({
+      studioBookings: state.adminData.bookings,
+      hiringRequests: hiringList,
+      outsourcingRequests: outsourcingList,
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
+  } else if (state.adminTab === "customer-portal") {
+    body.innerHTML = renderAdminCustomerPortalTabHtml({
+      bookings: state.adminData.bookings,
+      catalogs: state.adminPortalData?.catalogs || [],
+      slots: state.adminPortalData?.slots || [],
+      lang: state.lang,
       t,
       escapeHtml
     });
@@ -1634,13 +2014,38 @@ async function refreshCloudData() {
     }
 
     if (state.user) {
-      const [bookingsRes, modelsRes, notifsRes, reviewsRes, companyProfileRes, companyBookingsRes] = await Promise.allSettled([
+      const [
+        bookingsRes,
+        modelsRes,
+        notifsRes,
+        reviewsRes,
+        companyProfileRes,
+        companyBookingsRes,
+        publicProsRes,
+        myProsRes,
+        myHiringRes,
+        myAssignedRes,
+        myOutsRes,
+        myBlockRes,
+        myProfileRes,
+        myCatalogsRes,
+        mySlotsRes
+      ] = await Promise.allSettled([
         fetchMyBookings(state.user.uid),
         fetchMyModels(state.user.uid),
         fetchMyNotifications(state.user.uid),
         fetchServiceReviews(),
         fetchMyCompanyProfile(state.user.uid),
-        fetchMyCompanyBookings(state.user.uid)
+        fetchMyCompanyBookings(state.user.uid),
+        fetchApprovedPublicProfessionals(),
+        fetchMyProfessionalProfiles(state.user.uid),
+        fetchMyHiringRequests(state.user.uid),
+        fetchAssignedJobsForProfessional(state.user.uid),
+        fetchMyOutsourcingRequests(state.user.uid),
+        fetchMyChatBlockStatus(state.user.uid),
+        fetchMyUserProfile(state.user.uid),
+        fetchMyCustomerCatalogs(state.user.uid),
+        fetchMyCustomerSlots(state.user.uid)
       ]);
       if (bookingsRes.status === "fulfilled") state.myBookings = bookingsRes.value;
       if (modelsRes.status === "fulfilled") state.myModels = modelsRes.value;
@@ -1653,11 +2058,24 @@ async function refreshCloudData() {
       if (companyBookingsRes.status === "fulfilled") {
         state.myCompanyBookings = companyBookingsRes.value;
       }
+      if (publicProsRes.status === "fulfilled") state.publicProfessionals = publicProsRes.value;
+      if (myProsRes.status === "fulfilled") state.myProfessionals = myProsRes.value;
+      if (myHiringRes.status === "fulfilled") state.myHiringRequests = myHiringRes.value;
+      if (myAssignedRes.status === "fulfilled") state.myAssignedJobs = myAssignedRes.value;
+      if (myOutsRes.status === "fulfilled") state.myOutsourcingRequests = myOutsRes.value;
+      if (myBlockRes.status === "fulfilled") state.myChatBlockStatus = myBlockRes.value;
+      if (myProfileRes.status === "fulfilled") state.myUserProfile = myProfileRes.value;
+      if (myCatalogsRes.status === "fulfilled") state.myCustomerCatalogs = myCatalogsRes.value;
+      if (mySlotsRes.status === "fulfilled") state.myCustomerSlots = mySlotsRes.value;
+
       renderMyBookings();
       renderMyModels();
       renderMyCompanyBookings();
       renderCatalog();
       renderTestimonialCarousel();
+      renderProNetworkView();
+      renderCustomerPortalView({ checkUrlDeepLink: state.route === "portal" });
+      await startUserPrivateChatSubscription();
       if (state.isAdmin && state.route === "admin") {
         await loadAdminConsole();
       }
@@ -1665,10 +2083,24 @@ async function refreshCloudData() {
       state.reviews = [];
       state.myModels = [];
       state.myNotifications = [];
+      state.myUserProfile = null;
+      state.myCustomerCatalogs = [];
+      state.myCustomerSlots = [];
+      state.portalDeniedNotice = "";
+      state.portalHighlightedBookingId = "";
       state.editingModelId = null;
       state.editModelDraftPhotos = [];
       state.myCompanyProfile = null;
       state.myCompanyBookings = [];
+      state.publicProfessionals = [];
+      state.myProfessionals = [];
+      state.myHiringRequests = [];
+      state.myAssignedJobs = [];
+      state.myOutsourcingRequests = [];
+      state.myChatThreads = [];
+      state.activeUserChatId = "";
+      state.activeUserChatMessages = [];
+      stopUserChatSubscriptions();
       prefillCompanyFormsFromProfile(null);
       renderMyModels();
       renderMyCompanyBookings();
@@ -2486,6 +2918,97 @@ function wireEvents() {
         };
         renderAdminConsole();
         showToast(t("adminEmailTestFailedToast").replace("{error}", errText));
+      }
+      return;
+    }
+
+    const alertFilterBtn = e.target.closest("[data-admin-alert-filter]");
+    if (alertFilterBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminEmailAlertFilter = alertFilterBtn.getAttribute("data-admin-alert-filter") || "all";
+      renderAdminConsole();
+      return;
+    }
+
+    const alertMarkReadBtn = e.target.closest("[data-admin-alert-mark-read]");
+    if (alertMarkReadBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const alertId = alertMarkReadBtn.getAttribute("data-admin-alert-mark-read");
+      if (alertId) {
+        try {
+          await adminMarkEmailAlertRead(alertId);
+          state.adminEmailAlerts = (state.adminEmailAlerts || []).map((a) =>
+            a.id === alertId ? { ...a, isRead: true } : a
+          );
+          renderAdminConsole();
+        } catch (err) {
+          showToast(err.message || "Unable to update alert status.");
+        }
+      }
+      return;
+    }
+
+    const alertMarkAllReadBtn = e.target.closest("[data-admin-alert-mark-all-read]");
+    if (alertMarkAllReadBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const unreadIds = (state.adminEmailAlerts || []).filter((a) => a?.isRead === false && a?.id).map((a) => a.id);
+      if (unreadIds.length) {
+        try {
+          await adminMarkAllEmailAlertsRead(unreadIds);
+          const idSet = new Set(unreadIds);
+          state.adminEmailAlerts = (state.adminEmailAlerts || []).map((a) =>
+            idSet.has(a.id) ? { ...a, isRead: true } : a
+          );
+          showToast(t("adminEmailAlertMarkedAllReadToast"));
+          renderAdminConsole();
+        } catch (err) {
+          showToast(err.message || "Unable to mark alerts as read.");
+        }
+      }
+      return;
+    }
+
+    const alertResendBtn = e.target.closest("[data-admin-alert-resend-type]");
+    if (alertResendBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const alertType = alertResendBtn.getAttribute("data-admin-alert-resend-type") || "booking";
+      const recordId = alertResendBtn.getAttribute("data-admin-alert-resend-id") || "";
+      const dispatchKey = `${alertType}:${recordId}`;
+      if (state.dispatchingEmailAlertKey === dispatchKey) return;
+      state.dispatchingEmailAlertKey = dispatchKey;
+      renderAdminConsole();
+      try {
+        const liveRecords = getPreviewRecordsForType(alertType, state.adminData);
+        const matched = liveRecords.find((r) => String(r?.id || "") === recordId) || null;
+        const requestPayload = buildAdminTestEmailRequestPayload({
+          type: alertType,
+          record: matched,
+          recordId: matched?.id || recordId,
+          brandOverrides: state.adminEmailPreview.overrides || {}
+        });
+        const queued = await adminRequestTestEmail(requestPayload);
+        const logRecord = buildAdminEmailAlertRecord({
+          type: alertType,
+          record: matched || { id: recordId },
+          status: "queued",
+          source: "manual-resend"
+        });
+        await adminLogEmailAlert(logRecord).catch(() => {});
+        showToast(t("adminEmailAlertDispatchedToast").replace("{email}", queued.recipientEmail));
+      } catch (err) {
+        showToast(err.message || "Unable to dispatch email alert.");
+      } finally {
+        state.dispatchingEmailAlertKey = "";
+        renderAdminConsole();
       }
       return;
     }
@@ -4650,6 +5173,36 @@ function wireEvents() {
       return;
     }
 
+    if (e.target.id === "adminEmailAlertSettingsForm") {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      if (state.isSavingEmailAlertSettings) return;
+      state.isSavingEmailAlertSettings = true;
+      renderAdminConsole();
+      try {
+        const bookingEnabled = document.getElementById("adminAlertToggleBooking")?.checked !== false;
+        const modelEnabled = document.getElementById("adminAlertToggleModel")?.checked !== false;
+        const browserEnabled = document.getElementById("adminAlertToggleBrowser")?.checked !== false;
+        const saved = await adminSaveEmailAlertSettings({
+          bookingAlertsEnabled: bookingEnabled,
+          modelAlertsEnabled: modelEnabled,
+          companyAlertsEnabled: true,
+          browserAlertsEnabled: browserEnabled
+        });
+        state.adminEmailAlertSettings = normalizeAdminEmailAlertSettings(saved);
+        showToast(t("adminEmailAlertsSavedToast"));
+      } catch (err) {
+        showToast(err.message || "Unable to save email alert settings.");
+      } finally {
+        state.isSavingEmailAlertSettings = false;
+        renderAdminConsole();
+      }
+      return;
+    }
+
     if (e.target.id === "adminAnnouncementForm") {
       e.preventDefault();
       if (!hasVerifiedAdminSession()) {
@@ -4710,6 +5263,7 @@ function wireEvents() {
   };
   window.addEventListener("hashchange", handleBrowserUrlChange);
   window.addEventListener("popstate", handleBrowserUrlChange);
+  wireProNetworkEvents();
 }
 
 function updateNewsletterRealtimeValidation({ showEmptyError = false } = {}) {
@@ -4795,16 +5349,40 @@ function clearProtectedStudioViews() {
   state.myBookings = [];
   state.myModels = [];
   state.myNotifications = [];
+  state.myUserProfile = null;
+  state.myCustomerCatalogs = [];
+  state.myCustomerSlots = [];
+  state.portalDeniedNotice = "";
+  state.portalHighlightedBookingId = "";
+  state.adminPortalData = { catalogs: [], slots: [] };
   state.editingModelId = null;
   state.editModelDraftPhotos = [];
   state.myCompanyProfile = null;
   state.myCompanyBookings = [];
   state.selectedRequestedModels = [];
+  state.publicProfessionals = [];
+  state.myProfessionals = [];
+  state.myHiringRequests = [];
+  state.myAssignedJobs = [];
+  state.myOutsourcingRequests = [];
+  state.proRegPhotos = [];
+  state.hireRefPhotos = [];
+  state.outRefPhotos = [];
+  state.myChatThreads = [];
+  state.activeUserChatId = "";
+  state.activeUserChatMessages = [];
+  state.userChatDraftText = "";
+  state.userChatDraftImage = "";
+  state.myChatBlockStatus = { isBlocked: false, reason: "" };
+  state._prevUserChatUnread = null;
+  inFlightReadReceiptKeys.clear();
+  stopUserChatSubscriptions();
 
   for (const id of [
     "homeFeaturedServicesGrid",
     "homeShowcaseGrid",
     "homeTestimonialCarousel",
+    "customerPortalBody",
     "catalogGrid",
     "galleryGrid",
     "publicModelsGrid",
@@ -4813,10 +5391,22 @@ function clearProtectedStudioViews() {
     "myCompanyBookingsList",
     "selectedRequestedModelsBar",
     "offlineBookingsQueueBox",
-    "bookingService"
+    "bookingService",
+    "approvedProfessionalsDirectory",
+    "proMyApplicationsBody",
+    "proMyBookingsBody",
+    "proMessagesBody",
+    "proPortfolioPhotosPreview",
+    "hireReferencePhotosPreview",
+    "outRefPhotosPreview"
   ]) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = "";
+  }
+  const desktopChatBadge = document.getElementById("desktopChatUnreadBadge");
+  if (desktopChatBadge) {
+    desktopChatBadge.textContent = "0";
+    desktopChatBadge.classList.add("hidden");
   }
 }
 
@@ -4839,6 +5429,1226 @@ function renderProtectedStudioViews() {
   renderSelectedRequestedModels();
   renderMyCompanyBookings();
   renderSavedNewsletterStatus();
+  renderProNetworkView();
+  renderCustomerPortalView();
+}
+
+// ============================================================================
+// PROFESSIONAL NETWORK, HIRING, OUTSOURCING & PRIVATE CHAT CONTROLLER
+// ============================================================================
+
+let userChatsUnsubscribe = null;
+let userChatMsgsUnsubscribe = null;
+let adminChatsUnsubscribe = null;
+let adminChatMsgsUnsubscribe = null;
+
+function stopUserChatSubscriptions() {
+  if (typeof userChatsUnsubscribe === "function") {
+    try { userChatsUnsubscribe(); } catch { /* ignore */ }
+    userChatsUnsubscribe = null;
+  }
+  if (typeof userChatMsgsUnsubscribe === "function") {
+    try { userChatMsgsUnsubscribe(); } catch { /* ignore */ }
+    userChatMsgsUnsubscribe = null;
+  }
+}
+
+function stopAdminChatSubscriptions() {
+  if (typeof adminChatsUnsubscribe === "function") {
+    try { adminChatsUnsubscribe(); } catch { /* ignore */ }
+    adminChatsUnsubscribe = null;
+  }
+  if (typeof adminChatMsgsUnsubscribe === "function") {
+    try { adminChatMsgsUnsubscribe(); } catch { /* ignore */ }
+    adminChatMsgsUnsubscribe = null;
+  }
+}
+
+function updateChatUnreadBadgesDom() {
+  const unread = countUnreadChatsForUser(state.myChatThreads);
+  const desktopBadge = document.getElementById("desktopChatUnreadBadge");
+  if (desktopBadge) {
+    desktopBadge.textContent = String(unread);
+    desktopBadge.classList.toggle("hidden", unread <= 0);
+  }
+  const proMsgBadge = document.querySelector('[data-pro-count="messages"]');
+  if (proMsgBadge) {
+    proMsgBadge.textContent = String(unread > 0 ? unread : state.myChatThreads.length);
+  }
+}
+
+async function startUserPrivateChatSubscription() {
+  if (!state.firebaseReady || !isAuthenticatedMember(state.user)) return;
+  if (typeof userChatsUnsubscribe === "function") return;
+  try {
+    userChatsUnsubscribe = await subscribeMyPrivateChats(state.user.uid, {
+      onThreads: (threads) => {
+        const nextUnread = countUnreadChatsForUser(threads);
+        if (state._prevUserChatUnread !== null && nextUnread > state._prevUserChatUnread) {
+          showToast(t("proToastNewMessageAlert"));
+        }
+        state._prevUserChatUnread = nextUnread;
+        state.myChatThreads = threads;
+        if (!state.activeUserChatId && threads.length > 0) {
+          selectUserChatThread(threads[0].id);
+        }
+        updateChatUnreadBadgesDom();
+        if (state.route === "network" && state.proTab === "messages") {
+          renderProMessagesSection();
+        }
+        if (state.route === "portal" && state.portalTab === "my-messages") {
+          renderCustomerPortalView();
+        }
+      },
+      onError: (err) => {
+        console.warn("User private chat listener warning:", err?.message || err);
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to start private chat listener:", err?.message || err);
+  }
+}
+
+const inFlightReadReceiptKeys = new Set();
+
+function isUserViewingPrivateChat() {
+  return (
+    (state.route === "network" && state.proTab === "messages") ||
+    (state.route === "portal" && state.portalTab === "my-messages")
+  );
+}
+
+async function syncVisibleChatReadReceipts({ asAdmin = false } = {}) {
+  if (!state.firebaseReady) return;
+  if (asAdmin) {
+    if (!hasVerifiedAdminSession()) return;
+    if (state.route !== "admin" || state.adminTab !== "private-messages" || !state.activeAdminChatId) return;
+    const chatId = state.activeAdminChatId;
+    const unreadIds = getUnreadIncomingMessageIds(state.activeAdminChatMessages, { viewerRole: "admin" });
+    const pendingIds = unreadIds.filter((id) => !inFlightReadReceiptKeys.has(`${chatId}:${id}`));
+    const activeThread = state.adminChatThreads.find((x) => x.id === chatId);
+    if (activeThread && Number(activeThread.unreadByAdmin || 0) > 0) {
+      markPrivateChatRead(chatId, { asAdmin: true });
+    }
+    if (!pendingIds.length) return;
+    pendingIds.forEach((id) => inFlightReadReceiptKeys.add(`${chatId}:${id}`));
+    try {
+      await markPrivateChatMessagesRead({ chatId, messageIds: pendingIds, asAdmin: true, readerRole: "admin" });
+    } finally {
+      pendingIds.forEach((id) => inFlightReadReceiptKeys.delete(`${chatId}:${id}`));
+    }
+    return;
+  }
+
+  if (!isAuthenticatedMember(state.user)) return;
+  if (!isUserViewingPrivateChat() || !state.activeUserChatId) return;
+  const chatId = state.activeUserChatId;
+  const activeThread = state.myChatThreads.find((x) => x.id === chatId);
+  const readerRole = activeThread?.participantRole === "professional" ? "professional" : "customer";
+  const unreadIds = getUnreadIncomingMessageIds(state.activeUserChatMessages, { viewerRole: readerRole });
+  const pendingIds = unreadIds.filter((id) => !inFlightReadReceiptKeys.has(`${chatId}:${id}`));
+  if (activeThread && Number(activeThread.unreadByUser || 0) > 0) {
+    markPrivateChatRead(chatId, { asAdmin: false });
+  }
+  if (!pendingIds.length) return;
+  pendingIds.forEach((id) => inFlightReadReceiptKeys.add(`${chatId}:${id}`));
+  try {
+    await markPrivateChatMessagesRead({ chatId, messageIds: pendingIds, asAdmin: false, readerRole });
+  } finally {
+    pendingIds.forEach((id) => inFlightReadReceiptKeys.delete(`${chatId}:${id}`));
+  }
+}
+
+async function selectUserChatThread(chatId) {
+  state.activeUserChatId = String(chatId || "");
+  if (typeof userChatMsgsUnsubscribe === "function") {
+    try { userChatMsgsUnsubscribe(); } catch { /* ignore */ }
+    userChatMsgsUnsubscribe = null;
+  }
+  state.activeUserChatMessages = [];
+  renderProMessagesSection();
+  if (state.route === "portal" && state.portalTab === "my-messages") {
+    renderCustomerPortalView();
+  }
+  if (!state.activeUserChatId || !state.firebaseReady || !isAuthenticatedMember(state.user)) return;
+  if (isUserViewingPrivateChat()) {
+    markPrivateChatRead(state.activeUserChatId, { asAdmin: false });
+  }
+  try {
+    userChatMsgsUnsubscribe = await subscribePrivateChatMessages(state.activeUserChatId, {
+      onMessages: (msgs) => {
+        state.activeUserChatMessages = msgs;
+        renderProMessagesSection();
+        if (state.route === "portal" && state.portalTab === "my-messages") {
+          renderCustomerPortalView();
+        }
+        syncVisibleChatReadReceipts({ asAdmin: false });
+      },
+      onError: (err) => {
+        console.warn("User chat messages listener warning:", err?.message || err);
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to subscribe to chat messages:", err?.message || err);
+  }
+}
+
+async function ensureAdminChatSubscription() {
+  if (!hasVerifiedAdminSession() || !state.firebaseReady) return;
+  if (typeof adminChatsUnsubscribe === "function") return;
+  try {
+    adminChatsUnsubscribe = await adminSubscribePrivateChats({
+      onThreads: (threads) => {
+        if (!hasVerifiedAdminSession()) {
+          stopAdminChatSubscriptions();
+          return;
+        }
+        const nextUnread = countUnreadChatsForAdmin(threads);
+        if (state._prevAdminChatUnread !== null && nextUnread > state._prevAdminChatUnread) {
+          showToast(t("proToastNewMessageAlert"));
+        }
+        state._prevAdminChatUnread = nextUnread;
+        state.adminChatThreads = threads;
+        if (!state.activeAdminChatId && threads.length > 0) {
+          selectAdminChatThread(threads[0].id);
+        }
+        if (state.route === "admin") {
+          renderAdminConsole();
+        }
+      },
+      onError: (err) => {
+        console.warn("Admin private chat listener warning:", err?.message || err);
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to start admin private chat listener:", err?.message || err);
+  }
+}
+
+async function selectAdminChatThread(chatId) {
+  state.activeAdminChatId = String(chatId || "");
+  if (typeof adminChatMsgsUnsubscribe === "function") {
+    try { adminChatMsgsUnsubscribe(); } catch { /* ignore */ }
+    adminChatMsgsUnsubscribe = null;
+  }
+  state.activeAdminChatMessages = [];
+  if (state.route === "admin" && state.adminTab === "private-messages") {
+    renderAdminConsole();
+  }
+  if (!state.activeAdminChatId || !hasVerifiedAdminSession() || !state.firebaseReady) return;
+  if (state.route === "admin" && state.adminTab === "private-messages") {
+    markPrivateChatRead(state.activeAdminChatId, { asAdmin: true });
+  }
+  try {
+    adminChatMsgsUnsubscribe = await subscribePrivateChatMessages(state.activeAdminChatId, {
+      onMessages: (msgs) => {
+        if (!hasVerifiedAdminSession()) {
+          stopAdminChatSubscriptions();
+          return;
+        }
+        state.activeAdminChatMessages = msgs;
+        if (state.route === "admin" && state.adminTab === "private-messages") {
+          renderAdminConsole();
+        }
+        syncVisibleChatReadReceipts({ asAdmin: true });
+      },
+      onError: (err) => {
+        console.warn("Admin chat messages listener warning:", err?.message || err);
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to subscribe to admin chat messages:", err?.message || err);
+  }
+}
+
+function renderProPhotoStripPreview(containerId, photos, removeAttr) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  if (!Array.isArray(photos) || !photos.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = photos
+    .map(
+      (url, idx) => `
+      <div class="portfolio-photo-thumb">
+        <img src="${escapeHtml(url)}" alt="Upload preview ${idx + 1}" />
+        <button type="button" class="portfolio-photo-remove" ${removeAttr}="${idx}" aria-label="${escapeHtml(t("removePhotoBtn"))}">×</button>
+      </div>`
+    )
+    .join("");
+}
+
+function renderProMessagesSection() {
+  const host = document.getElementById("proMessagesBody");
+  if (state.route === "portal" && state.portalTab === "my-messages") {
+    if (host) host.innerHTML = "";
+    renderCustomerPortalView();
+    return;
+  }
+  if (!host) return;
+  host.innerHTML = renderUserPrivateChatHtml({
+    threads: state.myChatThreads,
+    activeChatId: state.activeUserChatId,
+    messages: state.activeUserChatMessages,
+    currentUserUid: state.user?.uid || "",
+    isBlocked: Boolean(state.myChatBlockStatus?.isBlocked),
+    blockReason: state.myChatBlockStatus?.reason || "",
+    draftText: state.userChatDraftText,
+    draftImage: state.userChatDraftImage,
+    isSending: state.userChatSending,
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+  const timeline = document.getElementById("userPrivateChatTimeline");
+  if (timeline) timeline.scrollTop = timeline.scrollHeight;
+  syncVisibleChatReadReceipts({ asAdmin: false });
+}
+
+function renderProNetworkView() {
+  if (!isAuthenticatedMember(state.user)) return;
+
+  const tabs = ["join", "hire", "outsourcing", "my-applications", "my-bookings", "messages"];
+  const activeTab = tabs.includes(state.proTab) ? state.proTab : "join";
+  state.proTab = activeTab;
+
+  document.querySelectorAll("[data-pro-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-pro-tab") === activeTab);
+  });
+  tabs.forEach((tabKey) => {
+    const panel = document.getElementById(`proPanel-${tabKey}`);
+    if (!panel) return;
+    const isVisible = tabKey === activeTab;
+    panel.classList.toggle("hidden", !isVisible);
+    panel.hidden = !isVisible;
+  });
+
+  const appsCountEl = document.querySelector('[data-pro-count="my-applications"]');
+  if (appsCountEl) {
+    appsCountEl.textContent = String(state.myProfessionals.length + state.myOutsourcingRequests.length);
+  }
+  const bookingsCountEl = document.querySelector('[data-pro-count="my-bookings"]');
+  if (bookingsCountEl) {
+    bookingsCountEl.textContent = String(state.myHiringRequests.length + state.myAssignedJobs.length);
+  }
+  updateChatUnreadBadgesDom();
+
+  const dirHost = document.getElementById("approvedProfessionalsDirectory");
+  if (dirHost) {
+    dirHost.innerHTML = renderApprovedProfessionalsDirectoryHtml({
+      professionals: state.publicProfessionals,
+      categoryFilter: state.proDirCategory,
+      searchQuery: state.proDirSearch,
+      t,
+      escapeHtml
+    });
+  }
+
+  const appsHost = document.getElementById("proMyApplicationsBody");
+  if (appsHost) {
+    appsHost.innerHTML = renderMyProApplicationsHtml({
+      myProfiles: state.myProfessionals,
+      myOutsourcing: state.myOutsourcingRequests,
+      t,
+      escapeHtml
+    });
+  }
+
+  const bookingsHost = document.getElementById("proMyBookingsBody");
+  if (bookingsHost) {
+    bookingsHost.innerHTML = renderMyHiringBookingsHtml({
+      myHiringRequests: state.myHiringRequests,
+      assignedToMeJobs: state.myAssignedJobs,
+      t,
+      escapeHtml
+    });
+  }
+
+  renderProMessagesSection();
+  renderProPhotoStripPreview("proPortfolioPhotosPreview", state.proRegPhotos, "data-remove-pro-photo");
+  renderProPhotoStripPreview("hireReferencePhotosPreview", state.hireRefPhotos, "data-remove-hire-photo");
+  renderProPhotoStripPreview("outRefPhotosPreview", state.outRefPhotos, "data-remove-out-photo");
+
+  // Prefill email/name convenience for logged-in member if fields are empty
+  const proEmail = document.getElementById("proEmail");
+  if (proEmail && !proEmail.value && state.user?.email) proEmail.value = state.user.email;
+  const proFullName = document.getElementById("proFullName");
+  if (proFullName && !proFullName.value && state.user?.displayName) proFullName.value = state.user.displayName;
+  const hireName = document.getElementById("hireCustomerName");
+  if (hireName && !hireName.value && state.user?.displayName) hireName.value = state.user.displayName;
+}
+
+async function handleProMultiPhotoInput(files, targetKey, maxCount) {
+  const existing = Array.isArray(state[targetKey]) ? [...state[targetKey]] : [];
+  for (const file of Array.from(files || [])) {
+    if (existing.length >= maxCount) break;
+    try {
+      const dataUrl = await encodePortfolioPhotoFile(file);
+      if (dataUrl) existing.push(dataUrl);
+    } catch (err) {
+      showToast(err?.message || "Unable to compress photo.");
+    }
+  }
+  state[targetKey] = existing.slice(0, maxCount);
+  renderProNetworkView();
+}
+
+function wireProNetworkEvents() {
+  document.getElementById("proPortfolioPhotosInput")?.addEventListener("change", async (e) => {
+    await handleProMultiPhotoInput(e.target.files, "proRegPhotos", 4);
+    e.target.value = "";
+  });
+
+  document.getElementById("hireReferencePhotosInput")?.addEventListener("change", async (e) => {
+    await handleProMultiPhotoInput(e.target.files, "hireRefPhotos", 3);
+    e.target.value = "";
+  });
+
+  document.getElementById("outRefPhotosInput")?.addEventListener("change", async (e) => {
+    await handleProMultiPhotoInput(e.target.files, "outRefPhotos", 3);
+    e.target.value = "";
+  });
+
+  document.getElementById("proDirCategoryFilter")?.addEventListener("change", (e) => {
+    state.proDirCategory = e.target.value || "all";
+    renderProNetworkView();
+  });
+
+  document.getElementById("proDirSearchInput")?.addEventListener("input", (e) => {
+    state.proDirSearch = e.target.value || "";
+    renderProNetworkView();
+  });
+
+  // Form 1: Join as a Professional
+  document.getElementById("proRegistrationForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!isAuthenticatedMember(state.user)) {
+      showToast(t("authMustSignInToast"));
+      return;
+    }
+    const submitBtn = document.getElementById("submitProRegistrationBtn");
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      await submitProfessionalRegistration({
+        fullName: document.getElementById("proFullName")?.value || "",
+        mobileNumber: document.getElementById("proMobile")?.value || "",
+        email: document.getElementById("proEmail")?.value || "",
+        city: document.getElementById("proCity")?.value || "",
+        state: document.getElementById("proState")?.value || "",
+        category: document.getElementById("proCategory")?.value || "Photographer",
+        yearsExperience: document.getElementById("proYearsExp")?.value || 0,
+        skills: document.getElementById("proSkills")?.value || "",
+        equipmentDetails: document.getElementById("proEquipment")?.value || "",
+        workingLocations: document.getElementById("proWorkingLocations")?.value || "",
+        expectedCharges: document.getElementById("proExpectedCharges")?.value || "",
+        portfolioPhotos: state.proRegPhotos,
+        videoLinks: document.getElementById("proVideoLinks")?.value || "",
+        shortIntro: document.getElementById("proShortIntro")?.value || "",
+        availabilityStatus: document.getElementById("proAvailability")?.value || "Available"
+      });
+      e.target.reset();
+      state.proRegPhotos = [];
+      state.proTab = "my-applications";
+      showToast(t("proToastJoinSuccess"));
+      await refreshCloudData();
+    } catch (err) {
+      showToast(err?.message || "Unable to submit professional profile.");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+
+  // Form 2: Hire a Photographer / Videographer
+  document.getElementById("proHiringForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!isAuthenticatedMember(state.user)) {
+      showToast(t("authMustSignInToast"));
+      return;
+    }
+    const submitBtn = document.getElementById("submitProHiringBtn");
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      await submitHiringRequest({
+        customerName: document.getElementById("hireCustomerName")?.value || "",
+        contactNumber: document.getElementById("hireContactNumber")?.value || "",
+        eventType: document.getElementById("hireEventType")?.value || "Wedding",
+        requiredService: document.getElementById("hireRequiredService")?.value || "Photography",
+        eventDate: document.getElementById("hireEventDate")?.value || "",
+        eventTime: document.getElementById("hireEventTime")?.value || "",
+        eventLocation: document.getElementById("hireEventLocation")?.value || "",
+        workingDuration: document.getElementById("hireWorkingDuration")?.value || "",
+        budgetRange: document.getElementById("hireBudgetRange")?.value || "",
+        specialRequirements: document.getElementById("hireSpecialRequirements")?.value || "",
+        referenceLinks: document.getElementById("hireReferenceLinks")?.value || "",
+        referencePhotos: state.hireRefPhotos
+      });
+      e.target.reset();
+      state.hireRefPhotos = [];
+      state.proTab = "my-bookings";
+      showToast(t("proToastHireSuccess"));
+      await refreshCloudData();
+    } catch (err) {
+      showToast(err?.message || "Unable to submit hiring request.");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+
+  // Form 3: Outsourcing Request
+  document.getElementById("proOutsourcingForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!isAuthenticatedMember(state.user)) {
+      showToast(t("authMustSignInToast"));
+      return;
+    }
+    const submitBtn = document.getElementById("submitProOutsourcingBtn");
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      await submitOutsourcingRequest({
+        studioOrName: document.getElementById("outStudioName")?.value || "",
+        contactInfo: document.getElementById("outContactInfo")?.value || "",
+        city: document.getElementById("outCity")?.value || "",
+        workType: document.getElementById("outWorkType")?.value || "Photography",
+        projectDescription: document.getElementById("outDescription")?.value || "",
+        workDeadline: document.getElementById("outDeadline")?.value || "",
+        budget: document.getElementById("outBudget")?.value || "",
+        referenceLinks: document.getElementById("outRefLinks")?.value || "",
+        referencePhotos: state.outRefPhotos,
+        additionalMessage: document.getElementById("outAdditionalMsg")?.value || ""
+      });
+      e.target.reset();
+      state.outRefPhotos = [];
+      state.proTab = "my-applications";
+      showToast(t("proToastOutSuccess"));
+      await refreshCloudData();
+    } catch (err) {
+      showToast(err?.message || "Unable to submit outsourcing request.");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+
+  // Delegated submit for User & Admin Private Chat Forms
+  document.addEventListener("submit", async (e) => {
+    if (e.target?.id === "userPrivateChatForm") {
+      e.preventDefault();
+      if (!isAuthenticatedMember(state.user) || state.myChatBlockStatus?.isBlocked) return;
+      const chatId = e.target.getAttribute("data-chat-id") || state.activeUserChatId;
+      const inputEl = e.target.querySelector("#userPrivateChatInput");
+      const text = inputEl ? inputEl.value : state.userChatDraftText;
+      const thread = state.myChatThreads.find((x) => x.id === chatId);
+      const role = thread?.participantRole === "professional" ? "professional" : "customer";
+      state.userChatSending = true;
+      renderProMessagesSection();
+      try {
+        await sendPrivateChatMessage({
+          chatId,
+          text,
+          imageAttachment: state.userChatDraftImage,
+          senderRole: role
+        });
+        state.userChatDraftText = "";
+        state.userChatDraftImage = "";
+        showToast(t("proToastChatSent"));
+      } catch (err) {
+        showToast(err?.message || "Unable to send message.");
+      } finally {
+        state.userChatSending = false;
+        renderProMessagesSection();
+      }
+      return;
+    }
+
+    if (e.target?.id === "adminPrivateChatForm") {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const chatId = e.target.getAttribute("data-chat-id") || state.activeAdminChatId;
+      const inputEl = document.getElementById("adminPrivateChatInput");
+      const text = inputEl ? inputEl.value : state.adminChatDraftText;
+      state.adminChatSending = true;
+      renderAdminConsole();
+      try {
+        await sendPrivateChatMessage({
+          chatId,
+          text,
+          imageAttachment: state.adminChatDraftImage,
+          senderRole: "admin"
+        });
+        state.adminChatDraftText = "";
+        state.adminChatDraftImage = "";
+        showToast(t("proToastChatSent"));
+      } catch (err) {
+        showToast(err?.message || "Unable to send reply.");
+      } finally {
+        state.adminChatSending = false;
+        renderAdminConsole();
+      }
+    }
+  });
+
+  // Delegated input/change handlers for Chat drafts, image attachments, and Admin Pro search
+  document.addEventListener("input", (e) => {
+    if (e.target?.id === "userPrivateChatInput") {
+      state.userChatDraftText = e.target.value || "";
+      return;
+    }
+    if (e.target?.id === "adminPrivateChatInput") {
+      state.adminChatDraftText = e.target.value || "";
+      return;
+    }
+    if (e.target?.matches?.("[data-admin-pro-search]")) {
+      state.adminProSearch = e.target.value || "";
+      renderAdminConsole();
+    }
+  });
+
+  document.addEventListener("change", async (e) => {
+    const imgTarget = e.target?.getAttribute?.("data-chat-image-input");
+    if (!imgTarget) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await encodePortfolioPhotoFile(file);
+      if (imgTarget === "admin") {
+        state.adminChatDraftImage = dataUrl;
+        renderAdminConsole();
+      } else {
+        state.userChatDraftImage = dataUrl;
+        renderProMessagesSection();
+      }
+    } catch (err) {
+      showToast(err?.message || "Unable to attach image.");
+    }
+    e.target.value = "";
+  });
+
+  // Delegated click handlers for Professional Network, Customer Proposals, Private Chat & Admin Tabs
+  document.addEventListener("click", async (e) => {
+    const proTabBtn = e.target.closest("[data-pro-tab]");
+    if (proTabBtn) {
+      state.proTab = proTabBtn.getAttribute("data-pro-tab") || "join";
+      renderProNetworkView();
+      return;
+    }
+
+    const remProPhoto = e.target.closest("[data-remove-pro-photo]");
+    if (remProPhoto) {
+      const idx = Number(remProPhoto.getAttribute("data-remove-pro-photo"));
+      state.proRegPhotos = state.proRegPhotos.filter((_, i) => i !== idx);
+      renderProNetworkView();
+      return;
+    }
+    const remHirePhoto = e.target.closest("[data-remove-hire-photo]");
+    if (remHirePhoto) {
+      const idx = Number(remHirePhoto.getAttribute("data-remove-hire-photo"));
+      state.hireRefPhotos = state.hireRefPhotos.filter((_, i) => i !== idx);
+      renderProNetworkView();
+      return;
+    }
+    const remOutPhoto = e.target.closest("[data-remove-out-photo]");
+    if (remOutPhoto) {
+      const idx = Number(remOutPhoto.getAttribute("data-remove-out-photo"));
+      state.outRefPhotos = state.outRefPhotos.filter((_, i) => i !== idx);
+      renderProNetworkView();
+      return;
+    }
+
+    // Customer Accept / Decline Proposed Professional (NEVER auto-confirms)
+    const proposalBtn = e.target.closest("[data-customer-proposal-action]");
+    if (proposalBtn) {
+      if (!isAuthenticatedMember(state.user)) return;
+      const action = proposalBtn.getAttribute("data-customer-proposal-action");
+      const reqId = proposalBtn.getAttribute("data-hiring-id");
+      const req = state.myHiringRequests.find((r) => r.id === reqId);
+      if (!req) return;
+      const noteEl = document.querySelector(`[data-customer-proposal-note="${CSS.escape(reqId)}"]`);
+      proposalBtn.disabled = true;
+      try {
+        await respondToHiringProposal({ request: req, action, note: noteEl?.value || "" });
+        showToast(action === "accept" ? t("proToastProposalAccepted") : t("proToastProposalDeclined"));
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to update proposal.");
+      } finally {
+        proposalBtn.disabled = false;
+      }
+      return;
+    }
+
+    const cancelHireBtn = e.target.closest("[data-cancel-hiring-id]");
+    if (cancelHireBtn) {
+      const reqId = cancelHireBtn.getAttribute("data-cancel-hiring-id");
+      cancelHireBtn.disabled = true;
+      try {
+        await cancelMyHiringRequest(reqId);
+        showToast(t("proToastRequestCancelled"));
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to cancel hiring request.");
+      } finally {
+        cancelHireBtn.disabled = false;
+      }
+      return;
+    }
+
+    const cancelOutBtn = e.target.closest("[data-cancel-outsourcing-id]");
+    if (cancelOutBtn) {
+      const reqId = cancelOutBtn.getAttribute("data-cancel-outsourcing-id");
+      cancelOutBtn.disabled = true;
+      try {
+        await cancelMyOutsourcingRequest(reqId);
+        showToast(t("proToastRequestCancelled"));
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to cancel outsourcing request.");
+      } finally {
+        cancelOutBtn.disabled = false;
+      }
+      return;
+    }
+
+    // Open or start Private Chat with Admin (user side)
+    const openChatBtn = e.target.closest("[data-open-private-chat]");
+    if (openChatBtn) {
+      if (!isAuthenticatedMember(state.user)) {
+        showToast(t("authMustSignInToast"));
+        return;
+      }
+      const contextType = openChatBtn.getAttribute("data-chat-context-type") || "general";
+      const contextId = openChatBtn.getAttribute("data-chat-context-id") || "studio";
+      const contextLabel = openChatBtn.getAttribute("data-chat-context-label") || t("chatGeneralThreadLabel");
+      const participantRole = openChatBtn.getAttribute("data-chat-role") || "customer";
+      try {
+        const chatId = await openOrCreatePrivateChatThread({
+          participantUid: state.user.uid,
+          participantName: state.user.displayName || state.user.email || "Studio Member",
+          participantEmail: state.user.email || "",
+          participantRole,
+          contextType,
+          contextId,
+          contextLabel
+        });
+        state.proTab = "messages";
+        if (state.route !== "network") navigateTo("network");
+        renderProNetworkView();
+        await selectUserChatThread(chatId);
+      } catch (err) {
+        showToast(err?.message || "Unable to open private chat.");
+      }
+      return;
+    }
+
+    const selectChatBtn = e.target.closest("[data-select-chat-id]");
+    if (selectChatBtn) {
+      const chatId = selectChatBtn.getAttribute("data-select-chat-id");
+      await selectUserChatThread(chatId);
+      return;
+    }
+
+    const clearChatImgBtn = e.target.closest("[data-chat-clear-image]");
+    if (clearChatImgBtn) {
+      if (clearChatImgBtn.getAttribute("data-chat-clear-image") === "admin") {
+        state.adminChatDraftImage = "";
+        renderAdminConsole();
+      } else {
+        state.userChatDraftImage = "";
+        renderProMessagesSection();
+      }
+      return;
+    }
+
+    // --- ADMIN PROFESSIONAL NETWORK & CHAT ACTIONS ---
+    const adminProFilterBtn = e.target.closest("[data-admin-pro-filter]");
+    if (adminProFilterBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminProFilter = adminProFilterBtn.getAttribute("data-admin-pro-filter") || "all";
+      renderAdminConsole();
+      return;
+    }
+
+    const adminHireFilterBtn = e.target.closest("[data-admin-hiring-filter]");
+    if (adminHireFilterBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      state.adminHiringFilter = adminHireFilterBtn.getAttribute("data-admin-hiring-filter") || "all";
+      renderAdminConsole();
+      return;
+    }
+
+    const adminProStatusBtn = e.target.closest("[data-admin-pro-status]");
+    if (adminProStatusBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const proId = adminProStatusBtn.getAttribute("data-pro-id");
+      const nextStatus = adminProStatusBtn.getAttribute("data-admin-pro-status");
+      const proObj = (state.adminProData?.professionals || []).find((p) => p.id === proId) || null;
+      const noteEl = document.querySelector(`[data-admin-pro-note="${CSS.escape(proId)}"]`);
+      adminProStatusBtn.disabled = true;
+      try {
+        await adminUpdateProfessionalStatus(proId, nextStatus, noteEl?.value || "", proObj);
+        showToast(t("proToastStatusUpdated"));
+        await loadAdminConsole();
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to update professional status.");
+      } finally {
+        adminProStatusBtn.disabled = false;
+      }
+      return;
+    }
+
+    const proposeHiringBtn = e.target.closest("[data-admin-propose-hiring]");
+    if (proposeHiringBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const reqId = proposeHiringBtn.getAttribute("data-admin-propose-hiring");
+      const proSelect = document.querySelector(`[data-admin-hiring-pro-select="${CSS.escape(reqId)}"]`);
+      const selectedProId = proSelect?.value || "";
+      const proObj = (state.adminProData?.professionals || []).find(
+        (p) => p.id === selectedProId && String(p.status || "").toLowerCase() === "approved"
+      );
+      if (!proObj) {
+        showToast(t("proToastSelectProFirst"));
+        return;
+      }
+      const msgEl = document.querySelector(`[data-admin-hiring-proposal-msg="${CSS.escape(reqId)}"]`);
+      const notesEl = document.querySelector(`[data-admin-hiring-notes="${CSS.escape(reqId)}"]`);
+      proposeHiringBtn.disabled = true;
+      try {
+        await adminProposeProfessionalForHiring({
+          requestId: reqId,
+          professional: proObj,
+          proposalMessage: msgEl?.value || "",
+          adminNotes: notesEl?.value || ""
+        });
+        showToast(t("proToastProposalSent"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to send proposal.");
+      } finally {
+        proposeHiringBtn.disabled = false;
+      }
+      return;
+    }
+
+    const quickHiringStatusBtn = e.target.closest("[data-admin-hiring-quick-status]");
+    if (quickHiringStatusBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const reqId = quickHiringStatusBtn.getAttribute("data-hiring-id");
+      const nextStatus = quickHiringStatusBtn.getAttribute("data-admin-hiring-quick-status");
+      const notesEl = document.querySelector(`[data-admin-hiring-notes="${CSS.escape(reqId)}"]`);
+      quickHiringStatusBtn.disabled = true;
+      try {
+        await adminUpdateHiringRequestStatus({
+          requestId: reqId,
+          status: nextStatus,
+          adminNotes: notesEl?.value || ""
+        });
+        showToast(nextStatus === "Confirmed" ? t("proToastFinalConfirmed") : t("proToastStatusUpdated"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update hiring status.");
+      } finally {
+        quickHiringStatusBtn.disabled = false;
+      }
+      return;
+    }
+
+    const saveHiringStatusBtn = e.target.closest("[data-admin-hiring-save-status]");
+    if (saveHiringStatusBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const reqId = saveHiringStatusBtn.getAttribute("data-admin-hiring-save-status");
+      const statusSel = document.querySelector(`[data-admin-hiring-status-select="${CSS.escape(reqId)}"]`);
+      const notesEl = document.querySelector(`[data-admin-hiring-notes="${CSS.escape(reqId)}"]`);
+      saveHiringStatusBtn.disabled = true;
+      try {
+        await adminUpdateHiringRequestStatus({
+          requestId: reqId,
+          status: statusSel?.value || "Pending Admin Review",
+          adminNotes: notesEl?.value || ""
+        });
+        showToast(statusSel?.value === "Confirmed" ? t("proToastFinalConfirmed") : t("proToastStatusUpdated"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update hiring status.");
+      } finally {
+        saveHiringStatusBtn.disabled = false;
+      }
+      return;
+    }
+
+    const quickOutStatusBtn = e.target.closest("[data-admin-out-quick-status]");
+    if (quickOutStatusBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const reqId = quickOutStatusBtn.getAttribute("data-out-id");
+      const nextStatus = quickOutStatusBtn.getAttribute("data-admin-out-quick-status");
+      const notesEl = document.querySelector(`[data-admin-out-notes="${CSS.escape(reqId)}"]`);
+      quickOutStatusBtn.disabled = true;
+      try {
+        await adminUpdateOutsourcingRequest({
+          requestId: reqId,
+          status: nextStatus,
+          adminNotes: notesEl?.value || ""
+        });
+        showToast(t("proToastOutUpdated"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update outsourcing request.");
+      } finally {
+        quickOutStatusBtn.disabled = false;
+      }
+      return;
+    }
+
+    const saveOutBtn = e.target.closest("[data-admin-out-save]");
+    if (saveOutBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const reqId = saveOutBtn.getAttribute("data-admin-out-save");
+      const statusSel = document.querySelector(`[data-admin-out-status-select="${CSS.escape(reqId)}"]`);
+      const proSel = document.querySelector(`[data-admin-out-pro-select="${CSS.escape(reqId)}"]`);
+      const notesEl = document.querySelector(`[data-admin-out-notes="${CSS.escape(reqId)}"]`);
+      const proObj = (state.adminProData?.professionals || []).find(
+        (p) => p.id === (proSel?.value || "") && String(p.status || "").toLowerCase() === "approved"
+      ) || null;
+      saveOutBtn.disabled = true;
+      try {
+        await adminUpdateOutsourcingRequest({
+          requestId: reqId,
+          status: statusSel?.value || "Pending Admin Review",
+          professional: proObj,
+          adminNotes: notesEl?.value || ""
+        });
+        showToast(t("proToastOutUpdated"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update outsourcing request.");
+      } finally {
+        saveOutBtn.disabled = false;
+      }
+      return;
+    }
+
+    const adminSelectChatBtn = e.target.closest("[data-admin-select-chat-id]");
+    if (adminSelectChatBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      await selectAdminChatThread(adminSelectChatBtn.getAttribute("data-admin-select-chat-id"));
+      return;
+    }
+
+    const adminBlockBtn = e.target.closest("[data-admin-toggle-chat-block-uid]");
+    if (adminBlockBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const targetUid = adminBlockBtn.getAttribute("data-admin-toggle-chat-block-uid");
+      const nextBlocked = adminBlockBtn.getAttribute("data-admin-toggle-chat-block-next") === "true";
+      adminBlockBtn.disabled = true;
+      try {
+        await adminSetChatUserBlocked({ userId: targetUid, isBlocked: nextBlocked });
+        showToast(nextBlocked ? t("proToastUserBlocked") : t("proToastUserUnblocked"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update chat moderation status.");
+      } finally {
+        adminBlockBtn.disabled = false;
+      }
+      return;
+    }
+
+    const adminStartChatBtn = e.target.closest("[data-admin-start-chat-uid]");
+    if (adminStartChatBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const participantUid = adminStartChatBtn.getAttribute("data-admin-start-chat-uid");
+      if (!participantUid) return;
+      try {
+        const chatId = await openOrCreatePrivateChatThread({
+          participantUid,
+          participantName: adminStartChatBtn.getAttribute("data-admin-start-chat-name") || "Studio Member",
+          participantEmail: adminStartChatBtn.getAttribute("data-admin-start-chat-email") || "",
+          participantRole: adminStartChatBtn.getAttribute("data-admin-start-chat-role") || "customer",
+          contextType: adminStartChatBtn.getAttribute("data-admin-start-chat-ctx-type") || "general",
+          contextId: adminStartChatBtn.getAttribute("data-admin-start-chat-ctx-id") || "studio",
+          contextLabel: adminStartChatBtn.getAttribute("data-admin-start-chat-ctx-label") || "Studio Support"
+        });
+        state.adminTab = "private-messages";
+        document
+          .querySelectorAll("[data-admin-tab]")
+          .forEach((b) => b.classList.toggle("active", b.getAttribute("data-admin-tab") === "private-messages"));
+        await selectAdminChatThread(chatId);
+        renderAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to open conversation.");
+      }
+      return;
+    }
+
+    // --- CUSTOMER PRIVATE BOOKING PORTAL ACTIONS ---
+    const portalTabBtn = e.target.closest("[data-portal-tab]");
+    if (portalTabBtn) {
+      const nextTab = portalTabBtn.getAttribute("data-portal-tab") || "my-catalog";
+      if (CUSTOMER_PORTAL_TABS.includes(nextTab)) {
+        state.portalTab = nextTab;
+        state.portalDeniedNotice = "";
+        renderCustomerPortalView();
+      }
+      return;
+    }
+
+    const portalMsgAdminBtn = e.target.closest("[data-portal-message-admin]");
+    if (portalMsgAdminBtn) {
+      if (!isAuthenticatedMember(state.user)) {
+        showToast(t("authMustSignInToast"));
+        return;
+      }
+      try {
+        const chatId = await openOrCreatePrivateChatThread({
+          participantUid: state.user.uid,
+          participantName: state.user.displayName || state.user.email || "Customer",
+          participantEmail: state.user.email || "",
+          participantRole: "customer",
+          contextType: portalMsgAdminBtn.getAttribute("data-chat-context-type") || "hiring",
+          contextId: portalMsgAdminBtn.getAttribute("data-chat-context-id") || "studio",
+          contextLabel: portalMsgAdminBtn.getAttribute("data-chat-context-label") || t("chatGeneralThreadLabel")
+        });
+        state.portalTab = "my-messages";
+        if (state.route !== "portal") navigateTo("portal");
+        await selectUserChatThread(chatId);
+        renderCustomerPortalView();
+      } catch (err) {
+        showToast(err?.message || "Unable to open private message.");
+      }
+      return;
+    }
+
+    // --- ADMIN CUSTOMER PORTAL MANAGEMENT ACTIONS ---
+    const delCatalogBtn = e.target.closest("[data-admin-delete-catalog]");
+    if (delCatalogBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const catalogId = delCatalogBtn.getAttribute("data-admin-delete-catalog");
+      if (!catalogId) return;
+      delCatalogBtn.disabled = true;
+      try {
+        await adminDeleteCustomerCatalog(catalogId);
+        showToast(t("portalToastDeleted"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to delete catalog.");
+      } finally {
+        delCatalogBtn.disabled = false;
+      }
+      return;
+    }
+
+    const delSlotBtn = e.target.closest("[data-admin-delete-slot]");
+    if (delSlotBtn) {
+      if (!hasVerifiedAdminSession()) return;
+      const slotId = delSlotBtn.getAttribute("data-admin-delete-slot");
+      if (!slotId) return;
+      delSlotBtn.disabled = true;
+      try {
+        await adminDeleteCustomerSlot(slotId);
+        showToast(t("portalToastDeleted"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to delete slot.");
+      } finally {
+        delSlotBtn.disabled = false;
+      }
+    }
+  });
+
+  // Quick-pick customer autofill & slot status updates inside Admin Customer Portal tab
+  document.addEventListener("change", async (e) => {
+    const catPick = e.target.closest("#adminCatalogQuickPick");
+    if (catPick && hasVerifiedAdminSession()) {
+      const opt = catPick.selectedOptions?.[0];
+      if (opt && opt.value) {
+        const uidEl = document.getElementById("adminCatalogCustomerUid");
+        const bkEl = document.getElementById("adminCatalogBookingId");
+        const titleEl = document.getElementById("adminCatalogTitle");
+        if (uidEl) uidEl.value = opt.value;
+        if (bkEl) bkEl.value = opt.getAttribute("data-booking-id") || "";
+        if (titleEl && !titleEl.value.trim()) {
+          titleEl.value = `${opt.getAttribute("data-event-title") || "Studio"} — Private Catalog`;
+        }
+      }
+      return;
+    }
+
+    const slotPick = e.target.closest("#adminSlotQuickPick");
+    if (slotPick && hasVerifiedAdminSession()) {
+      const opt = slotPick.selectedOptions?.[0];
+      if (opt && opt.value) {
+        const setVal = (id, v) => {
+          const el = document.getElementById(id);
+          if (el && v) el.value = v;
+        };
+        setVal("adminSlotCustomerUid", opt.value);
+        setVal("adminSlotBookingId", opt.getAttribute("data-booking-id") || "");
+        setVal("adminSlotEventTitle", opt.getAttribute("data-event-title") || "");
+        setVal("adminSlotDate", opt.getAttribute("data-event-date") || "");
+        setVal("adminSlotTime", opt.getAttribute("data-event-time") || "");
+        setVal("adminSlotLocation", opt.getAttribute("data-location") || "");
+      }
+      return;
+    }
+
+    const slotStatusSel = e.target.closest("[data-admin-slot-status]");
+    if (slotStatusSel && hasVerifiedAdminSession()) {
+      const slotId = slotStatusSel.getAttribute("data-admin-slot-status");
+      const nextStatus = slotStatusSel.value;
+      if (!slotId) return;
+      try {
+        await adminUpdateCustomerSlotStatus(slotId, nextStatus);
+        showToast(t("portalToastSlotStatusUpdated"));
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update slot approval status.");
+      }
+    }
+  });
+
+  // Admin Assign Private Catalog & Assign Private Slot form submissions
+  document.addEventListener("submit", async (e) => {
+    const catForm = e.target.closest("#adminAssignCatalogForm");
+    if (catForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const check = validateCustomerCatalogPayload({
+        customerUid: document.getElementById("adminCatalogCustomerUid")?.value || "",
+        bookingId: document.getElementById("adminCatalogBookingId")?.value || "",
+        title: document.getElementById("adminCatalogTitle")?.value || "",
+        category: document.getElementById("adminCatalogCategory")?.value || "",
+        description: document.getElementById("adminCatalogDescription")?.value || "",
+        itemsText: document.getElementById("adminCatalogItems")?.value || ""
+      });
+      if (!check.valid) {
+        showToast(check.error);
+        return;
+      }
+      try {
+        await adminAssignCustomerCatalog(check.clean);
+        showToast(t("portalToastCatalogAssigned"));
+        catForm.reset();
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to assign private catalog.");
+      }
+      return;
+    }
+
+    const slotForm = e.target.closest("#adminAssignSlotForm");
+    if (slotForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const check = validateCustomerSlotPayload({
+        customerUid: document.getElementById("adminSlotCustomerUid")?.value || "",
+        bookingId: document.getElementById("adminSlotBookingId")?.value || "",
+        eventTitle: document.getElementById("adminSlotEventTitle")?.value || "",
+        eventDate: document.getElementById("adminSlotDate")?.value || "",
+        eventTime: document.getElementById("adminSlotTime")?.value || "",
+        slotLabel: document.getElementById("adminSlotLabel")?.value || "",
+        location: document.getElementById("adminSlotLocation")?.value || "",
+        approvalStatus: document.getElementById("adminSlotApprovalStatus")?.value || "Pending",
+        customerNote: document.getElementById("adminSlotCustomerNote")?.value || ""
+      });
+      if (!check.valid) {
+        showToast(check.error);
+        return;
+      }
+      try {
+        await adminAssignCustomerSlot(check.clean);
+        showToast(t("portalToastSlotAssigned"));
+        slotForm.reset();
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to assign booking slot.");
+      }
+    }
+  });
+}
+
+function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
+  const host = document.getElementById("customerPortalBody");
+  if (!host) return;
+  if (!isAuthenticatedMember(state.user)) {
+    host.innerHTML = "";
+    return;
+  }
+
+  const uid = state.user.uid;
+  if (checkUrlDeepLink) {
+    const qp = extractPortalQueryParams({
+      hash: window.location.hash,
+      search: window.location.search
+    });
+    if (qp.tab) {
+      state.portalTab = qp.tab;
+    }
+    state.portalDeniedNotice = "";
+    state.portalHighlightedBookingId = "";
+
+    if (qp.bookingId) {
+      state.portalTab = "my-bookings";
+      const guard = resolvePortalDeepLinkAccess({
+        requestedId: qp.bookingId,
+        ownedRecords: [...state.myBookings, ...state.myHiringRequests, ...state.myCompanyBookings],
+        currentUid: uid
+      });
+      if (guard.denied) {
+        state.portalDeniedNotice = t("portalAccessDeniedDesc");
+      } else {
+        state.portalHighlightedBookingId = qp.bookingId;
+      }
+    } else if (qp.catalogId) {
+      state.portalTab = "my-catalog";
+      const guard = resolvePortalDeepLinkAccess({
+        requestedId: qp.catalogId,
+        ownedRecords: state.myCustomerCatalogs,
+        currentUid: uid
+      });
+      if (guard.denied) {
+        state.portalDeniedNotice = t("portalAccessDeniedDesc");
+      }
+    } else if (qp.slotId) {
+      state.portalTab = "my-slot";
+      const guard = resolvePortalDeepLinkAccess({
+        requestedId: qp.slotId,
+        ownedRecords: state.myCustomerSlots,
+        currentUid: uid
+      });
+      if (guard.denied) {
+        state.portalDeniedNotice = t("portalAccessDeniedDesc");
+      }
+    }
+  }
+
+  host.innerHTML = renderCustomerPortalHtml({
+    user: state.user,
+    userProfile: state.myUserProfile,
+    catalogs: state.myCustomerCatalogs,
+    slots: state.myCustomerSlots,
+    bookings: state.myBookings,
+    hiringRequests: state.myHiringRequests,
+    models: state.myModels,
+    companyBookings: state.myCompanyBookings,
+    chatThreads: state.myChatThreads,
+    activeChatId: state.activeUserChatId,
+    chatMessages: state.activeUserChatMessages,
+    isChatBlocked: Boolean(state.myChatBlockStatus?.isBlocked),
+    chatBlockReason: state.myChatBlockStatus?.reason || "",
+    chatDraftText: state.userChatDraftText,
+    chatDraftImage: state.userChatDraftImage,
+    isChatSending: state.userChatSending,
+    activeTab: state.portalTab,
+    deniedResourceNotice: state.portalDeniedNotice,
+    highlightedBookingId: state.portalHighlightedBookingId,
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+
+  if (state.portalTab === "my-messages") {
+    const timeline = document.getElementById("userPrivateChatTimeline");
+    if (timeline) timeline.scrollTop = timeline.scrollHeight;
+    syncVisibleChatReadReceipts({ asAdmin: false });
+  }
 }
 
 let authSubscriptionAttached = false;

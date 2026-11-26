@@ -529,4 +529,125 @@ test("handleAdminTestEmailRequested verifies SMTP, sends branded [TEST] HTML ema
   assert.ok(indexSrc.includes('document: "adminEmailTests/{testId}"'));
 });
 
+test("Automated email alert handlers honor Admin Dashboard studioConfig/emailAlerts toggles and write adminEmailAlerts audit logs", async () => {
+  const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
+  const sentMessages = [];
+  const auditLogs = [];
+
+  const fakeTransporter = {
+    async sendMail(msg) {
+      sentMessages.push(msg);
+      return { messageId: `auto_msg_${sentMessages.length}` };
+    }
+  };
+
+  // 1. Booking alert paused by Admin Dashboard -> skipped, no SMTP mail sent, audit log recorded
+  const skippedRes = await handleNewBookingCreated(
+    {
+      params: { bookingId: "bk_paused_1" },
+      data: {
+        id: "bk_paused_1",
+        data: () => ({
+          clientName: "Karan Gill",
+          contactNumber: "+91 9812890081",
+          serviceType: "Fashion Portfolio",
+          preferredDate: "2026-12-18",
+          status: "Pending"
+        })
+      }
+    },
+    {
+      smtpUser: "chanderstudio0@gmail.com",
+      smtpPass: "secret-pass-token",
+      loadAlertSettings: async () => ({ bookingAlertsEnabled: false, modelAlertsEnabled: true }),
+      recordAlertLog: async (entry) => auditLogs.push(entry),
+      transporter: fakeTransporter,
+      logger: silentLogger
+    }
+  );
+  assert.equal(skippedRes.sent, false);
+  assert.equal(skippedRes.reason, "disabled_by_admin");
+  assert.equal(sentMessages.length, 0);
+  assert.equal(auditLogs.length, 1);
+  assert.equal(auditLogs[0].type, "booking");
+  assert.equal(auditLogs[0].status, "skipped");
+  assert.equal(auditLogs[0].recipientEmail, "chanderstudio0@gmail.com");
+
+  // 2. 18+ Model alert enabled -> sends SMTP email and records 'sent' audit log
+  const sentModelRes = await handleNewModelApplicationCreated(
+    {
+      params: { modelId: "mdl_enabled_1" },
+      data: {
+        id: "mdl_enabled_1",
+        data: () => ({
+          fullName: "Nisha Sharma",
+          age: 23,
+          city: "Sirsa",
+          phoneNumber: "9812890089",
+          consentGiven: true,
+          status: "pending"
+        })
+      }
+    },
+    {
+      smtpUser: "chanderstudio0@gmail.com",
+      smtpPass: "secret-pass-token",
+      loadAlertSettings: async () => ({ bookingAlertsEnabled: false, modelAlertsEnabled: true }),
+      recordAlertLog: async (entry) => auditLogs.push(entry),
+      transporter: fakeTransporter,
+      logger: silentLogger
+    }
+  );
+  assert.equal(sentModelRes.sent, true);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(auditLogs.length, 2);
+  assert.equal(auditLogs[1].type, "model");
+  assert.equal(auditLogs[1].status, "sent");
+  assert.equal(auditLogs[1].messageId, "auto_msg_1");
+  assert.equal(auditLogs[1].recipientEmail, "chanderstudio0@gmail.com");
+
+  // 3. SMTP transport failure records 'failed' audit log with SMTP_PASS redacted
+  await assert.rejects(
+    () =>
+      handleNewBookingCreated(
+        {
+          params: { bookingId: "bk_fail_1" },
+          data: {
+            id: "bk_fail_1",
+            data: () => ({
+              clientName: "Rohan Verma",
+              contactNumber: "+91 9812890081",
+              serviceType: "Bridal Shoot",
+              preferredDate: "2026-12-20",
+              status: "Pending"
+            })
+          }
+        },
+        {
+          smtpUser: "chanderstudio0@gmail.com",
+          smtpPass: "ultra-secret-smtp-pass",
+          loadAlertSettings: async () => ({ bookingAlertsEnabled: true }),
+          recordAlertLog: async (entry) => auditLogs.push(entry),
+          transporter: {
+            async sendMail() {
+              throw new Error("Auth failed for ultra-secret-smtp-pass");
+            }
+          },
+          logger: silentLogger
+        }
+      ),
+    /Auth failed/
+  );
+  assert.equal(auditLogs.length, 3);
+  assert.equal(auditLogs[2].status, "failed");
+  assert.equal(auditLogs[2].errorMessage.includes("ultra-secret-smtp-pass"), false);
+  assert.ok(auditLogs[2].errorMessage.includes("[REDACTED]"));
+
+  // 4. functions/index.js connects studioConfig/emailAlerts and adminEmailAlerts
+  const indexSrc = fs.readFileSync(path.join(functionsDir, "index.js"), "utf8");
+  assert.ok(indexSrc.includes('doc("studioConfig/emailAlerts")'));
+  assert.ok(indexSrc.includes("doc(`adminEmailAlerts/${alertId}`)"));
+});
+
+
 
