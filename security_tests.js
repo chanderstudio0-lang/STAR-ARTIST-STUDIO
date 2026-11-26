@@ -922,3 +922,863 @@ test("10. Admin authorization: ONLY verified chanderstudio0@gmail.com can access
     aliceDb.collection("internalReports").doc("secret_1").set({ total: 99 })
   );
 });
+
+// ============================================================================
+// 7. ADMIN RECIPIENT VIEW TRIGGER: MESSAGE READ RECEIPT UPDATE
+// ============================================================================
+
+test("11. Message read receipts: Admin recipient view trigger updates isRead=true on a specific customer message doc in Firestore while non-admins cannot forge read receipts", async () => {
+  const assert = require("node:assert/strict");
+  const createdAt = pastDate(8000);
+  const aliceDb = getCustomerAContext().firestore();
+  const bobDb = getCustomerBContext().firestore();
+  const adminDb = getAdminContext().firestore();
+
+  // Customer A opens a private chat thread and sends an unread message (isRead: false)
+  await assertSucceeds(
+    aliceDb.collection("privateChats").doc("chat_receipt_a1").set({
+      participantUid: CUSTOMER_A_UID,
+      participantName: "Aarav Sharma",
+      participantEmail: "customer.a@gmail.com",
+      participantRole: "customer",
+      contextType: "general",
+      contextLabel: "Wedding Shoot Inquiry",
+      lastMessageText: "Please confirm my morning slot",
+      lastMessageAt: createdAt,
+      lastSenderRole: "customer",
+      unreadByAdmin: 1,
+      unreadByUser: 0,
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+
+  const msgRefForAlice = aliceDb
+    .collection("privateChats")
+    .doc("chat_receipt_a1")
+    .collection("messages")
+    .doc("msg_specific_01");
+
+  await assertSucceeds(
+    msgRefForAlice.set({
+      chatId: "chat_receipt_a1",
+      senderUid: CUSTOMER_A_UID,
+      senderName: "Aarav Sharma",
+      senderRole: "customer",
+      text: "Please confirm my morning slot",
+      isRead: false,
+      createdAt,
+    })
+  );
+
+  // Customer A CANNOT forge read status on their own sent message
+  await assertFails(
+    msgRefForAlice.update({
+      isRead: true,
+      readAt: pastDate(1000),
+      readByUid: CUSTOMER_A_UID,
+      readByRole: "customer",
+    })
+  );
+
+  // Customer B CANNOT update read status on Customer A's message
+  await assertFails(
+    bobDb
+      .collection("privateChats")
+      .doc("chat_receipt_a1")
+      .collection("messages")
+      .doc("msg_specific_01")
+      .update({
+        isRead: true,
+        readAt: pastDate(1000),
+        readByUid: CUSTOMER_B_UID,
+        readByRole: "customer",
+      })
+  );
+
+  // Admin opens the thread (recipient view trigger fires) -> updates isRead on that specific message doc
+  const msgRefForAdmin = adminDb
+    .collection("privateChats")
+    .doc("chat_receipt_a1")
+    .collection("messages")
+    .doc("msg_specific_01");
+
+  const readTimestamp = pastDate(500);
+  await assertSucceeds(
+    msgRefForAdmin.update({
+      isRead: true,
+      readAt: readTimestamp,
+      readByUid: ADMIN_UID,
+      readByRole: "admin",
+    })
+  );
+
+  // Verify stored Firestore document reflects updated read receipt fields
+  const updatedSnap = await assertSucceeds(msgRefForAlice.get());
+  const updatedData = updatedSnap.data();
+  assert.equal(updatedData.isRead, true);
+  assert.equal(updatedData.readByRole, "admin");
+  assert.equal(updatedData.readByUid, ADMIN_UID);
+  assert.ok(updatedData.readAt);
+});
+
+// ============================================================================
+// 8. BOOKING SLOT AVAILABILITY & DOUBLE-BOOKING PREVENTION
+// ============================================================================
+
+test("12. Studio bookedSlots: signed-in customers can view privacy-safe availability, reserve an open slot ONLY with an atomic Pending booking, and are blocked from double-booking or slot-squatting", async () => {
+  const createdAt = pastDate();
+  const aliceDb = getCustomerAContext().firestore();
+  const bobDb = getCustomerBContext().firestore();
+  const adminDb = getAdminContext().firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  const slotKey = "2026-12-20__morning_gold";
+  const bookingId = "bk_slot_atomic_a1";
+
+  // Direct slot-squatting WITHOUT a real owned Pending booking is DENIED (Medium #6 fix)
+  await assertFails(
+    aliceDb.collection("bookedSlots").doc(slotKey).set({
+      slotKey,
+      date: "2026-12-20",
+      slotCode: "morning_gold",
+      preferredTime: "10:00 AM",
+      status: "reserved",
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookedSlots").doc(slotKey).set({
+      slotKey,
+      date: "2026-12-20",
+      slotCode: "morning_gold",
+      preferredTime: "10:00 AM",
+      status: "reserved",
+      bookingId: "non_existent_booking_999",
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+
+  // Mismatched slotKey != date__slotCode is DENIED
+  await assertFails(
+    aliceDb.collection("bookedSlots").doc("2026-12-20__wrong_code").set({
+      slotKey: "2026-12-20__wrong_code",
+      date: "2026-12-20",
+      slotCode: "morning_gold",
+      preferredTime: "10:00 AM",
+      status: "reserved",
+      bookingId,
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+
+  // Customer A reserves an open slot atomically alongside a genuine Pending booking -> SUCCEEDS
+  const validBatch = aliceDb.batch();
+  validBatch.set(aliceDb.collection("bookings").doc(bookingId), {
+    userId: CUSTOMER_A_UID,
+    clientName: "Aarav Sharma",
+    contactNumber: "+91 9811100001",
+    serviceType: "Wedding Photography",
+    preferredDate: "2026-12-20",
+    preferredTime: "10:00 AM",
+    location: "Star Artist Studio",
+    status: "Pending",
+    createdAt,
+    updatedAt: createdAt,
+  });
+  validBatch.set(aliceDb.collection("bookedSlots").doc(slotKey), {
+    slotKey,
+    date: "2026-12-20",
+    slotCode: "morning_gold",
+    preferredTime: "10:00 AM",
+    status: "reserved",
+    bookingId,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  await assertSucceeds(validBatch.commit());
+
+  // Customer B can read occupied slots to highlight calendar availability
+  await assertSucceeds(bobDb.collection("bookedSlots").get());
+  await assertSucceeds(bobDb.collection("bookedSlots").doc(slotKey).get());
+
+  // Unauthenticated visitor CANNOT read bookedSlots
+  await assertFails(unauthDb.collection("bookedSlots").get());
+
+  // Double-booking prevention: Customer B CANNOT overwrite/update or delete the already-booked slot
+  await assertFails(
+    bobDb.collection("bookedSlots").doc(slotKey).set({
+      slotKey,
+      date: "2026-12-20",
+      slotCode: "morning_gold",
+      preferredTime: "10:00 AM",
+      status: "reserved",
+      bookingId: "bk_bob_double",
+      createdAt: pastDate(1000),
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertFails(bobDb.collection("bookedSlots").doc(slotKey).delete());
+
+  // Privacy guard: cannot store customer PII (name/phone/userId) inside bookedSlots
+  const piiBatch = aliceDb.batch();
+  piiBatch.set(aliceDb.collection("bookings").doc("bk_slot_pii_a2"), {
+    userId: CUSTOMER_A_UID,
+    clientName: "Aarav Sharma",
+    contactNumber: "+91 9811100001",
+    serviceType: "Portrait",
+    preferredDate: "2026-12-21",
+    preferredTime: "11:30 AM",
+    status: "Pending",
+    createdAt: pastDate(1000),
+    updatedAt: pastDate(1000),
+  });
+  piiBatch.set(aliceDb.collection("bookedSlots").doc("2026-12-21__main_bay"), {
+    slotKey: "2026-12-21__main_bay",
+    date: "2026-12-21",
+    slotCode: "main_bay",
+    preferredTime: "11:30 AM",
+    status: "reserved",
+    bookingId: "bk_slot_pii_a2",
+    clientName: "Leak Name",
+    createdAt: pastDate(1000),
+    updatedAt: pastDate(1000),
+  });
+  await assertFails(piiBatch.commit());
+
+  // Authorized Admin CAN confirm or release a slot
+  await assertSucceeds(
+    adminDb.collection("bookedSlots").doc(slotKey).update({
+      status: "confirmed",
+      updatedAt: pastDate(500),
+    })
+  );
+  await assertSucceeds(adminDb.collection("bookedSlots").doc(slotKey).delete());
+});
+
+// ============================================================================
+// 9. UPI ADVANCE PAYMENT & WEDDING BOOKING PAYMENT SECURITY RULES
+// ============================================================================
+
+test("13. UPI Payment System: official UPI 9812890081@ybl stays disabled until QR is uploaded & verified, ONLY chanderstudio0@gmail.com controls settings/pricing/verification, and strict UID isolation holds", async () => {
+  const createdAt = pastDate(6000);
+  const aliceDb = getCustomerAContext().firestore();
+  const bobDb = getCustomerBContext().firestore();
+  const adminDb = getAdminContext().firestore();
+  const unverifiedAdminDb = getUnverifiedAdminContext().firestore();
+  const otherGmailDb = getOtherGmailContext().firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  const sampleUploadedQr = "data:image/png;base64," + "A".repeat(160);
+
+  // 1a. Admin saves official Studio UPI ID (9812890081@ybl) in DISABLED state before QR upload -> SUCCEEDS
+  const disabledOfficialCfg = {
+    enabled: false,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: "",
+    qrVerified: false,
+    instructions: "Pay advance via official Studio UPI and submit 12-digit UTR.",
+    modelAdvanceMode: "percentage",
+    modelAdvanceValue: 30,
+    weddingChargeMode: "percentage",
+    weddingChargeValue: 25,
+    updatedByEmail: AUTHORIZED_ADMIN_EMAIL,
+    updatedAt: createdAt,
+  };
+
+  // Non-admins, other Gmail accounts, and unverified Admin CANNOT edit UPI settings, QR, Model Advance, or Wedding Charge
+  await assertFails(
+    aliceDb.collection("paymentConfig").doc("paymentSettings").set(disabledOfficialCfg)
+  );
+  await assertFails(
+    otherGmailDb.collection("paymentConfig").doc("paymentSettings").set(disabledOfficialCfg)
+  );
+  await assertFails(
+    unverifiedAdminDb.collection("paymentConfig").doc("paymentSettings").set(disabledOfficialCfg)
+  );
+  await assertSucceeds(
+    adminDb.collection("paymentConfig").doc("paymentSettings").set(disabledOfficialCfg)
+  );
+
+  // 1b. Even Admin CANNOT activate payments without an uploaded QR or without qrVerified=true
+  await assertFails(
+    adminDb.collection("paymentConfig").doc("paymentSettings").set({
+      ...disabledOfficialCfg,
+      enabled: true,
+      qrImageDataUrl: "",
+      qrVerified: false,
+    })
+  );
+  await assertFails(
+    adminDb.collection("paymentConfig").doc("paymentSettings").set({
+      ...disabledOfficialCfg,
+      enabled: true,
+      qrImageDataUrl: sampleUploadedQr,
+      qrVerified: false,
+    })
+  );
+  await assertFails(
+    adminDb.collection("paymentConfig").doc("paymentSettings").set({
+      ...disabledOfficialCfg,
+      enabled: false,
+      qrImageDataUrl: "",
+      qrVerified: true,
+    })
+  );
+
+  // 1c. Once Admin uploads QR and explicitly verifies it matches 9812890081@ybl -> SUCCEEDS
+  const verifiedPaymentCfg = {
+    ...disabledOfficialCfg,
+    enabled: true,
+    qrImageDataUrl: sampleUploadedQr,
+    qrVerified: true,
+  };
+  await assertFails(
+    otherGmailDb.collection("paymentConfig").doc("paymentSettings").set(verifiedPaymentCfg)
+  );
+  await assertSucceeds(
+    adminDb.collection("paymentConfig").doc("paymentSettings").set(verifiedPaymentCfg)
+  );
+
+  // Signed-in customer can GET paymentConfig/paymentSettings (never LIST paymentConfig or read studioConfig)
+  await assertSucceeds(aliceDb.collection("paymentConfig").doc("paymentSettings").get());
+  await assertFails(aliceDb.collection("paymentConfig").get());
+  await assertFails(aliceDb.collection("studioConfig").get());
+  await assertFails(aliceDb.collection("studioConfig").doc("emailAlerts").get());
+  await assertFails(unauthDb.collection("paymentConfig").doc("paymentSettings").get());
+
+  // 2. Customer A submits a Model Advance Payment request (must start Payment Pending, paid=0)
+  const modelPayBase = {
+    customerUid: CUSTOMER_A_UID,
+    customerName: "Aarav Sharma",
+    customerContact: "+91 9811100001",
+    bookingId: "",
+    paymentCategory: "model_advance",
+    modelId: "model_01",
+    modelName: "Ananya Verma",
+    serviceType: "Fashion Editorial Shoot",
+    eventType: "Model Booking",
+    shootDate: "2026-12-22",
+    shootTime: "10:00 AM",
+    eventLocation: "Star Artist Studio",
+    eventDetails: "Editorial portfolio shoot",
+    totalPrice: 0,
+    chargeMode: "percentage",
+    chargeValue: 0,
+    requiredAdvance: 0,
+    paidAmount: 0,
+    remainingBalance: 0,
+    priceSetByAdmin: false,
+    paymentStatus: "Payment Pending",
+    bookingStatus: "Payment Pending",
+    utrNumber: "",
+    screenshotDataUrl: "",
+    verifiedAmount: 0,
+    verifiedByAdminEmail: "",
+    rejectionReason: "",
+    refundAmount: 0,
+    refundReason: "",
+    refundStatus: "",
+    refundReference: "",
+    adminNotes: "",
+    history: [],
+    createdAt,
+    updatedAt: createdAt,
+  };
+
+  await assertSucceeds(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").set(modelPayBase)
+  );
+
+  // Customer A CANNOT forge Payment Verified or non-zero paidAmount on create
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_forged_verified").set({
+      ...modelPayBase,
+      paymentStatus: "Payment Verified",
+      bookingStatus: "Confirmed",
+      paidAmount: 5000,
+      verifiedAmount: 5000,
+    })
+  );
+
+  // Customer B CANNOT read, list, or modify Customer A's payment record
+  await assertFails(bobDb.collection("bookingPayments").doc("pay_model_a1").get());
+  await assertFails(bobDb.collection("bookingPayments").get());
+  await assertFails(unauthDb.collection("bookingPayments").doc("pay_model_a1").get());
+
+  // 3. ONLY verified Admin can set Model Booking Advance / Wedding Booking Charge pricing
+  await assertFails(
+    otherGmailDb.collection("bookingPayments").doc("pay_model_a1").update({
+      totalPrice: 10000,
+      chargeMode: "percentage",
+      chargeValue: 30,
+      requiredAdvance: 3000,
+      remainingBalance: 10000,
+      priceSetByAdmin: true,
+      updatedAt: pastDate(4000),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      totalPrice: 10000,
+      chargeMode: "percentage",
+      chargeValue: 30,
+      requiredAdvance: 3000,
+      remainingBalance: 10000,
+      priceSetByAdmin: true,
+      updatedAt: pastDate(4000),
+    })
+  );
+
+  // Customer A submits UTR (after Admin set pricing) -> status transitions ONLY to "Submitted for Verification" (never touches history)
+  await assertSucceeds(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
+      utrNumber: "432198765432",
+      screenshotDataUrl: "",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(3000),
+      updatedAt: pastDate(3000),
+    })
+  );
+
+  // Customer A CANNOT self-verify, self-confirm, tamper with history, or alter totalPrice/paidAmount/remainingBalance
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Payment Verified",
+      bookingStatus: "Confirmed",
+      paidAmount: 3000,
+      remainingBalance: 7000,
+      updatedAt: pastDate(2000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
+      totalPrice: 100,
+      updatedAt: pastDate(2000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
+      utrNumber: "432198765433",
+      screenshotDataUrl: "",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(2000),
+      history: [{ action: "Forged Admin Verification", status: "Fully Paid" }],
+      updatedAt: pastDate(2000),
+    })
+  );
+
+  // Another Gmail or unverified Admin CANNOT verify or reject customer payments
+  await assertFails(
+    otherGmailDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      paidAmount: 3000,
+      verifiedAmount: 3000,
+      remainingBalance: 7000,
+      updatedAt: pastDate(1500),
+    })
+  );
+  await assertFails(
+    otherGmailDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Payment Rejected",
+      rejectionReason: "Fake rejection",
+      updatedAt: pastDate(1500),
+    })
+  );
+  await assertFails(
+    unverifiedAdminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      paidAmount: 3000,
+      verifiedAmount: 3000,
+      remainingBalance: 7000,
+      updatedAt: pastDate(1500),
+    })
+  );
+
+  // 4. Authorized Admin rejects invalid submission, then verifies valid manual UPI payment -> Partially Paid + Confirmed
+  //    Internal bank check note MUST be stored in strictly Admin-only adminPrivate subcollection (NOT customer-readable root doc)
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Payment Rejected",
+      rejectionReason: "UTR not found in bank statement",
+      updatedAt: pastDate(1400),
+    })
+  );
+  await assertFails(
+    adminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      adminNotes: "Leaked internal note on root doc",
+      updatedAt: pastDate(1300),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paidAmount: 3000,
+      verifiedAmount: 3000,
+      remainingBalance: 7000,
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      verifiedAt: pastDate(1200),
+      verifiedByAdminEmail: AUTHORIZED_ADMIN_EMAIL,
+      rejectionReason: "",
+      adminNotes: "",
+      updatedAt: pastDate(1200),
+    })
+  );
+  await assertSucceeds(
+    adminDb
+      .collection("bookingPayments")
+      .doc("pay_model_a1")
+      .collection("adminPrivate")
+      .doc("notes")
+      .set({
+        note: "Credited in official 9812890081@ybl bank statement",
+        updatedByEmail: AUTHORIZED_ADMIN_EMAIL,
+        updatedAt: pastDate(1200),
+      })
+  );
+  // Customer A & B CANNOT read or write adminPrivate bank notes
+  await assertFails(
+    aliceDb
+      .collection("bookingPayments")
+      .doc("pay_model_a1")
+      .collection("adminPrivate")
+      .doc("notes")
+      .get()
+  );
+  await assertFails(
+    bobDb
+      .collection("bookingPayments")
+      .doc("pay_model_a1")
+      .collection("adminPrivate")
+      .doc("notes")
+      .get()
+  );
+
+  // Customer A can request a refund on verified payment (without touching history), and Admin processes it to Refund Processed
+  await assertSucceeds(
+    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Refund Requested",
+      refundStatus: "Requested",
+      refundReason: "Event postponed by family",
+      refundRequestedAt: pastDate(900),
+      updatedAt: pastDate(900),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_model_a1").update({
+      paymentStatus: "Refund Processed",
+      refundStatus: "Processed",
+      refundAmount: 3000,
+      refundReference: "REFUND987654",
+      refundProcessedAt: pastDate(500),
+      updatedAt: pastDate(500),
+    })
+  );
+
+  // Customer A CANNOT store prohibited credential fields (e.g. upiPin, otp, cardNumber, mpin, accountNumber)
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_bad_secret").set({
+      ...modelPayBase,
+      upiPin: "1234",
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_bad_mpin").set({
+      ...modelPayBase,
+      mpin: "9988",
+    })
+  );
+});
+
+// ============================================================================
+// 10. AUDIT HARDENING VERIFICATION (HIGH #1 + MEDIUM #2, #3, #4, #5)
+// ============================================================================
+
+test("14. Payment Audit Hardening (High #1 & Medium #2): blocks forged create pricing/refunds, pre-pricing UTR submission, invalid screenshot payloads, and history tampering", async () => {
+  const createdAt = pastDate(5000);
+  const aliceDb = getCustomerAContext().firestore();
+  const adminDb = getAdminContext().firestore();
+
+  const validBase = {
+    customerUid: CUSTOMER_A_UID,
+    customerName: "Aarav Sharma",
+    customerContact: "+91 9811100001",
+    bookingId: "",
+    paymentCategory: "wedding_booking",
+    modelId: "",
+    modelName: "",
+    serviceType: "Wedding Photography & Film",
+    eventType: "Wedding",
+    shootDate: "2026-12-28",
+    shootTime: "10:00 AM",
+    eventLocation: "Sirsa Palace",
+    eventDetails: "Two-day wedding coverage",
+    totalPrice: 0,
+    chargeMode: "percentage",
+    chargeValue: 0,
+    requiredAdvance: 0,
+    paidAmount: 0,
+    remainingBalance: 0,
+    priceSetByAdmin: false,
+    paymentStatus: "Payment Pending",
+    bookingStatus: "Pending Admin Pricing",
+    utrNumber: "",
+    screenshotDataUrl: "",
+    verifiedAmount: 0,
+    verifiedByAdminEmail: "",
+    rejectionReason: "",
+    refundAmount: 0,
+    refundReason: "",
+    refundStatus: "",
+    refundReference: "",
+    adminNotes: "",
+    history: [],
+    createdAt,
+    updatedAt: createdAt,
+  };
+
+  // High #1: Customer CANNOT forge non-zero totalPrice, requiredAdvance, refundStatus='Processed', refundAmount, or verifiedAt on create
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_forge_price").set({
+      ...validBase,
+      totalPrice: 1,
+      requiredAdvance: 1,
+      remainingBalance: 0,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_forge_refund").set({
+      ...validBase,
+      refundStatus: "Processed",
+      refundAmount: 25000,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_forge_verifiedAt").set({
+      ...validBase,
+      verifiedAt: pastDate(1000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_forge_receipt").set({
+      ...validBase,
+      receiptNumber: "REC-FAKE-001",
+    })
+  );
+
+  // Valid create succeeds
+  await assertSucceeds(
+    aliceDb.collection("bookingPayments").doc("pay_wed_audit_1").set(validBase)
+  );
+
+  // Medium #2: Customer CANNOT submit UTR before Admin sets price (priceSetByAdmin == false)
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_wed_audit_1").update({
+      utrNumber: "998877665544",
+      screenshotDataUrl: "",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(2000),
+      updatedAt: pastDate(2000),
+    })
+  );
+
+  // Admin sets package price & advance
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_wed_audit_1").update({
+      totalPrice: 80000,
+      chargeMode: "percentage",
+      chargeValue: 25,
+      requiredAdvance: 20000,
+      remainingBalance: 80000,
+      priceSetByAdmin: true,
+      bookingStatus: "Payment Pending",
+      updatedAt: pastDate(1800),
+    })
+  );
+
+  // Medium #2: Customer CANNOT submit non-image screenshotDataUrl (XSS / invalid MIME)
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_wed_audit_1").update({
+      utrNumber: "998877665544",
+      screenshotDataUrl: "javascript:alert(1)",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(1500),
+      updatedAt: pastDate(1500),
+    })
+  );
+
+  // Valid compressed image data URL succeeds
+  const validShot = "data:image/jpeg;base64," + "B".repeat(160);
+  await assertSucceeds(
+    aliceDb.collection("bookingPayments").doc("pay_wed_audit_1").update({
+      utrNumber: "998877665544",
+      screenshotDataUrl: validShot,
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(1400),
+      updatedAt: pastDate(1400),
+    })
+  );
+});
+
+test("15. Audit Hardening (Medium #3, #4 & #5): Admin-only internal notes, professional read lock until Confirmed/Assigned, and Confirmed booking immutability", async () => {
+  const createdAt = pastDate(5000);
+  const aliceDb = getCustomerAContext().firestore();
+  const proDb = getCustomerBContext().firestore(); // Acts as assigned professional
+  const adminDb = getAdminContext().firestore();
+
+  // Medium #3: Strictly Admin-only adminInternalNotes collection
+  await assertSucceeds(
+    adminDb.collection("adminInternalNotes").doc("note_bk_1").set({
+      targetCollection: "bookings",
+      targetId: "bk_conf_1",
+      note: "Private studio margin and staff assignment note",
+      updatedByEmail: AUTHORIZED_ADMIN_EMAIL,
+      createdAt,
+      updatedAt: createdAt,
+    })
+  );
+  await assertFails(aliceDb.collection("adminInternalNotes").doc("note_bk_1").get());
+  await assertFails(aliceDb.collection("adminInternalNotes").get());
+  await assertFails(proDb.collection("adminInternalNotes").doc("note_bk_1").get());
+
+  // Medium #4: Professional CANNOT read hiring request while status is Assignment Proposed / Proposal Declined / Cancelled
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("professionalHiringRequests").doc("hire_proposed_1").set({
+      userId: CUSTOMER_A_UID,
+      customerName: "Aarav Sharma",
+      contactNumber: "+91 9811100001",
+      eventType: "Wedding",
+      requiredService: "Both",
+      eventDate: "2026-12-26",
+      eventTime: "07:00 PM",
+      eventLocation: "Sirsa Royal Lawn",
+      workingDuration: "2 days",
+      budgetRange: "₹60,000",
+      status: "Assignment Proposed",
+      assignedProfessionalId: "pro_b_1",
+      assignedProfessionalUid: CUSTOMER_B_UID,
+      assignedProfessionalName: "Meera Photo",
+      customerAcceptance: "pending",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.collection("outsourcingRequests").doc("out_pending_1").set({
+      userId: CUSTOMER_A_UID,
+      studioOrName: "Aarav Studio",
+      contactInfo: "+91 9811100001",
+      city: "Sirsa",
+      workType: "Videography",
+      projectDescription: "Need two cinematographers for evening wedding coverage.",
+      workDeadline: "2026-12-29",
+      status: "Pending Admin Review",
+      assignedProfessionalId: "pro_b_1",
+      assignedProfessionalUid: CUSTOMER_B_UID,
+      assignedProfessionalName: "Meera Photo",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.collection("bookings").doc("bk_confirmed_a1").set({
+      userId: CUSTOMER_A_UID,
+      clientName: "Aarav Sharma",
+      contactNumber: "+91 9811100001",
+      serviceType: "Wedding Photography",
+      preferredDate: "2026-12-30",
+      preferredTime: "10:00 AM",
+      location: "Sirsa",
+      status: "Confirmed",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.collection("companyBookings").doc("comp_approved_a1").set({
+      userId: CUSTOMER_A_UID,
+      companyName: "Aarav Events",
+      organizationType: "Company",
+      contactPerson: "Aarav Sharma",
+      mobileNumber: "+91 9811100001",
+      email: "aarav@events.in",
+      address: "Sector 10, Sirsa",
+      modelRequirement: "Female Models",
+      modelsCount: 2,
+      eventType: "Fashion Show",
+      eventDate: "2026-12-31",
+      eventLocation: "Sirsa Hall",
+      budget: "₹50,000",
+      detailedRequirements: "Two runway models required for winter fashion evening.",
+      status: "Approved",
+      createdAt,
+      updatedAt: createdAt,
+    });
+  });
+
+  // Customer A can still read their own proposed hiring request, but assigned pro is BLOCKED until Confirmed/Assigned
+  await assertSucceeds(
+    aliceDb.collection("professionalHiringRequests").doc("hire_proposed_1").get()
+  );
+  await assertFails(
+    proDb.collection("professionalHiringRequests").doc("hire_proposed_1").get()
+  );
+  await assertFails(
+    proDb.collection("outsourcingRequests").doc("out_pending_1").get()
+  );
+
+  // Once Admin confirms/assigns the request, the assigned professional CAN read their active assignment
+  await assertSucceeds(
+    adminDb.collection("professionalHiringRequests").doc("hire_proposed_1").update({
+      status: "Confirmed",
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertSucceeds(
+    proDb.collection("professionalHiringRequests").doc("hire_proposed_1").get()
+  );
+  await assertSucceeds(
+    adminDb.collection("outsourcingRequests").doc("out_pending_1").update({
+      status: "Assigned",
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertSucceeds(
+    proDb.collection("outsourcingRequests").doc("out_pending_1").get()
+  );
+
+  // Medium #5: Customer A CANNOT edit, cancel, or delete an already Confirmed booking or Approved companyBooking
+  await assertFails(
+    aliceDb.collection("bookings").doc("bk_confirmed_a1").update({
+      preferredDate: "2027-01-15",
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bookings").doc("bk_confirmed_a1").update({
+      status: "Cancelled",
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertFails(aliceDb.collection("bookings").doc("bk_confirmed_a1").delete());
+  await assertFails(
+    aliceDb.collection("companyBookings").doc("comp_approved_a1").update({
+      status: "Cancelled",
+      updatedAt: pastDate(1000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("companyBookings").doc("comp_approved_a1").delete()
+  );
+
+  // Admin CAN still manage and delete Confirmed bookings
+  await assertSucceeds(
+    adminDb.collection("bookings").doc("bk_confirmed_a1").update({
+      status: "Completed",
+      updatedAt: pastDate(500),
+    })
+  );
+});
+
+

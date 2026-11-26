@@ -6530,31 +6530,74 @@ body.auth-checking .auth-checking-note {
   color: var(--text-muted);
 }
 
+@keyframes chatReceiptFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.84);
+  }
+  100% {
+    opacity: 0.85;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes chatReceiptGrayToGold {
+  0% {
+    color: #9ca3af;
+    opacity: 0.45;
+    transform: scale(0.86);
+    filter: drop-shadow(0 0 0 rgba(212, 175, 55, 0));
+  }
+  55% {
+    color: var(--gold);
+    opacity: 1;
+    transform: scale(1.14);
+    filter: drop-shadow(0 0 6px rgba(243, 207, 122, 0.55));
+  }
+  100% {
+    color: var(--gold-light);
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(243, 207, 122, 0));
+  }
+}
+
 .chat-read-receipt {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   line-height: 1;
   flex-shrink: 0;
-  transition: color 0.18s ease, opacity 0.18s ease;
+  color: #9ca3af;
+  transition: color 0.35s ease, opacity 0.35s ease, transform 0.35s ease;
 }
 
 .chat-read-receipt.is-sent {
-  color: var(--text-muted);
+  color: #9ca3af;
   opacity: 0.85;
+  animation: chatReceiptFadeIn 0.28s ease-out both;
 }
 
 .chat-read-receipt.is-read {
   color: var(--gold-light);
   opacity: 1;
+  animation: chatReceiptGrayToGold 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .chat-receipt-svg {
   display: block;
+  transition: stroke 0.35s ease, transform 0.35s ease;
 }
 
 [data-theme="light"] .chat-read-receipt.is-read {
-  color: #15803d;
+  color: #b47b00;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-read-receipt.is-sent,
+  .chat-read-receipt.is-read {
+    animation: none;
+  }
 }
 
 .pro-chat-composer {
@@ -6869,6 +6912,650 @@ body.auth-checking .auth-checking-note {
   color: #b91c1c;
   background: #fee2e2;
 }
+
+/* ==========================================================================
+   INTERACTIVE BOOKING CALENDAR & STUDIO SLOT PICKER
+   ========================================================================== */
+.booking-calendar-card {
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.booking-cal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.booking-cal-eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.booking-cal-month {
+  font-size: 1.04rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.booking-cal-nav {
+  display: flex;
+  gap: 6px;
+}
+
+.booking-cal-nav-btn {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.booking-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.legend-dot.is-available,
+.booking-cal-day.is-available .booking-cal-dot {
+  background: #22c55e;
+}
+
+.legend-dot.is-partial,
+.booking-cal-day.is-partial .booking-cal-dot {
+  background: #f59e0b;
+}
+
+.legend-dot.is-full,
+.booking-cal-day.is-full .booking-cal-dot {
+  background: #ef4444;
+}
+
+.booking-cal-weekdays,
+.booking-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.booking-cal-weekdays span {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.booking-cal-day {
+  position: relative;
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--outline);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+}
+
+.booking-cal-day:hover:not(:disabled) {
+  border-color: var(--gold);
+  transform: translateY(-1px);
+}
+
+.booking-cal-day.is-selected {
+  border-color: var(--gold);
+  background: rgba(212, 175, 55, 0.2);
+  color: var(--gold-light);
+  font-weight: 700;
+}
+
+.booking-cal-day.is-past {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.booking-cal-day.is-full {
+  opacity: 0.55;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  cursor: not-allowed;
+}
+
+.booking-cal-num {
+  font-size: 0.84rem;
+  line-height: 1;
+}
+
+.booking-cal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.booking-slot-picker {
+  border-top: 1px solid var(--outline);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.booking-slot-picker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+}
+
+.booking-slot-count-badge {
+  font-size: 0.75rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.16);
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.booking-slot-count-badge.is-full {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+}
+
+.booking-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+}
+
+.booking-slot-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--outline);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.booking-slot-chip.is-open:hover {
+  border-color: var(--gold);
+}
+
+.booking-slot-chip.is-selected {
+  border-color: var(--gold);
+  background: rgba(212, 175, 55, 0.2);
+}
+
+.booking-slot-chip.is-booked {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.booking-slot-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.16);
+  color: #4ade80;
+  flex-shrink: 0;
+}
+
+.booking-slot-chip.is-booked .booking-slot-tag {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+}
+
+/* ==========================================================================
+   UPI ADVANCE PAYMENT & WEDDING BOOKING PAYMENT SYSTEM
+   ========================================================================== */
+.customer-payments-portal,
+.admin-payments-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.payment-section-banner {
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  background: rgba(212, 175, 55, 0.08);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.payment-section-banner p {
+  margin: 4px 0 0;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+
+.upi-disabled-box {
+  border: 1px dashed rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: var(--text-primary);
+}
+
+.upi-disabled-box p {
+  margin: 4px 0 0;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.upi-qr-panel {
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  background: linear-gradient(145deg, rgba(212, 175, 55, 0.1), rgba(255, 255, 255, 0.02));
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.upi-qr-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.upi-eyebrow {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.upi-payee-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.upi-id-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.86rem;
+}
+
+.upi-id-code {
+  font-family: monospace;
+  font-size: 0.92rem;
+  color: var(--gold-light);
+}
+
+.upi-copy-btn {
+  padding: 4px 10px;
+  font-size: 0.76rem;
+}
+
+.upi-amount-pill {
+  background: rgba(212, 175, 55, 0.18);
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 12px;
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.upi-amount-pill span {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.upi-amount-pill strong {
+  font-size: 1.12rem;
+  color: var(--gold-light);
+}
+
+.upi-qr-img-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+  background: #ffffff;
+  border-radius: 12px;
+  max-width: 220px;
+}
+
+.upi-qr-img,
+.upi-qr-preview-thumb {
+  max-width: 190px;
+  max-height: 190px;
+  object-fit: contain;
+  border-radius: 8px;
+  display: block;
+}
+
+.upi-instructions,
+.upi-security-note {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.payment-form-switch,
+.admin-pay-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.payment-records-list,
+.admin-payments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.payment-record-card,
+.admin-payment-card {
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.payment-record-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.payment-record-top h4 {
+  margin: 4px 0 2px;
+  color: var(--text-primary);
+}
+
+.payment-cat-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(212, 175, 55, 0.16);
+  color: var(--gold-light);
+}
+
+.payment-meta-line {
+  margin: 2px 0 0;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+}
+
+.payment-status-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.payment-status-pill {
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.pay-status-pending {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.pay-status-submitted {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+}
+
+.pay-status-verified {
+  background: rgba(34, 197, 94, 0.18);
+  color: #4ade80;
+}
+
+.pay-status-partial {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.pay-status-rejected {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
+
+.pay-status-refund-req {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fb923c;
+}
+
+.pay-status-refund-done {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.payment-booking-pill {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.payment-money-grid,
+.admin-pay-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+}
+
+.payment-money-box {
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.payment-money-box span {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.payment-money-box strong {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.payment-money-box.is-paid strong {
+  color: #4ade80;
+}
+
+.payment-money-box.is-balance strong {
+  color: var(--gold-light);
+}
+
+.payment-ref-line {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+}
+
+.payment-reject-note {
+  font-size: 0.84rem;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.payment-utr-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.payment-utr-row,
+.admin-pay-inline-grid,
+.admin-pay-actions-row,
+.admin-pay-mini-form,
+.admin-pay-dual {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.payment-utr-row .input,
+.admin-pay-inline-grid .input,
+.admin-pay-mini-form .input,
+.admin-pay-dual .input {
+  flex: 1 1 150px;
+}
+
+.payment-helper-note,
+.payment-wait-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.payment-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.payment-history-details {
+  border-top: 1px solid var(--outline);
+  padding-top: 8px;
+  font-size: 0.82rem;
+}
+
+.payment-history-details summary {
+  cursor: pointer;
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.payment-history-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.admin-pay-inline-form {
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-pay-form-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.admin-pay-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.admin-pay-shot-thumb {
+  max-width: 140px;
+  max-height: 140px;
+  border-radius: 10px;
+  border: 1px solid var(--outline);
+  object-fit: cover;
+}
+
+[data-theme="light"] .booking-slot-count-badge,
+[data-theme="light"] .booking-slot-tag,
+[data-theme="light"] .pay-status-verified {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+[data-theme="light"] .booking-slot-count-badge.is-full,
+[data-theme="light"] .booking-slot-chip.is-booked .booking-slot-tag,
+[data-theme="light"] .pay-status-rejected {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+[data-theme="light"] .pay-status-pending {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+[data-theme="light"] .pay-status-submitted {
+  color: #0369a1;
+  background: #e0f2fe;
+}
+
+[data-theme="light"] .upi-id-code,
+[data-theme="light"] .upi-amount-pill strong,
+[data-theme="light"] .payment-money-box.is-balance strong {
+  color: #9a6b00;
+}
+
+[data-theme="light"] .payment-money-box.is-paid strong {
+  color: #15803d;
+}
+
 
 
 

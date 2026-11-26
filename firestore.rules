@@ -530,6 +530,130 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidBookedSlot(data, slotKey) {
+      return slotKey is string &&
+             slotKey.size() >= 12 && slotKey.size() <= 80 &&
+             slotKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}__[a-z0-9_]+$') &&
+             data.keys().hasOnly([
+               'slotKey', 'date', 'slotCode', 'preferredTime', 'status', 'bookingId', 'createdAt', 'updatedAt'
+             ]) &&
+             data.slotKey == slotKey &&
+             data.date is string && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+             data.slotCode is string && data.slotCode.size() >= 2 && data.slotCode.size() <= 40 &&
+             data.slotKey == data.date + '__' + data.slotCode &&
+             data.preferredTime is string && data.preferredTime.size() >= 2 && data.preferredTime.size() <= 60 &&
+             data.status in ['reserved', 'confirmed'] &&
+             (!('bookingId' in data) || isValidId(data.bookingId)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminInternalNote(data) {
+      return data.keys().hasOnly([
+               'targetCollection', 'targetId', 'note', 'updatedByEmail', 'createdAt', 'updatedAt'
+             ]) &&
+             data.targetCollection is string && data.targetCollection.size() >= 2 && data.targetCollection.size() <= 60 &&
+             data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+             data.note is string && data.note.size() <= 2000 &&
+             data.updatedByEmail is string && data.updatedByEmail.lower() == 'chanderstudio0@gmail.com' &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentSettingsConfig(data, configId) {
+      return configId == 'paymentSettings' &&
+             data.keys().hasOnly([
+               'enabled', 'upiId', 'payeeName', 'qrImageDataUrl', 'qrVerified',
+               'instructions', 'modelAdvanceMode', 'modelAdvanceValue',
+               'weddingChargeMode', 'weddingChargeValue',
+               'updatedByEmail', 'updatedAt'
+             ]) &&
+             data.enabled is bool &&
+             data.qrVerified is bool &&
+             data.upiId is string && data.upiId.size() <= 120 &&
+             data.payeeName is string && data.payeeName.size() <= 120 &&
+             data.qrImageDataUrl is string && data.qrImageDataUrl.size() <= 180000 &&
+             (data.qrImageDataUrl == '' || (
+               data.qrImageDataUrl.size() >= 100 &&
+               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
+             )) &&
+             (!data.qrVerified || (
+               data.qrImageDataUrl.size() >= 100 &&
+               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
+             )) &&
+             (!data.enabled || (
+               data.upiId.size() >= 5 &&
+               data.upiId.matches('^[a-zA-Z0-9._\\-]{2,}@[a-zA-Z0-9]{2,}$') &&
+               data.payeeName.size() >= 2 &&
+               data.qrVerified == true &&
+               data.qrImageDataUrl.size() >= 100 &&
+               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
+             )) &&
+             (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 1000)) &&
+             data.modelAdvanceMode in ['percentage', 'fixed'] &&
+             data.modelAdvanceValue is number && data.modelAdvanceValue >= 0 && data.modelAdvanceValue <= 10000000 &&
+             (data.modelAdvanceMode != 'percentage' || data.modelAdvanceValue <= 100) &&
+             data.weddingChargeMode in ['percentage', 'fixed'] &&
+             data.weddingChargeValue is number && data.weddingChargeValue >= 0 && data.weddingChargeValue <= 10000000 &&
+             (data.weddingChargeMode != 'percentage' || data.weddingChargeValue <= 100) &&
+             data.updatedByEmail is string &&
+             data.updatedByEmail.lower() == 'chanderstudio0@gmail.com' &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidBookingPayment(data) {
+      return data.keys().size() <= 40 &&
+             !data.keys().hasAny([
+               'upiPin', 'pin', 'mpin', 'otp', 'password', 'upiPassword',
+               'cvv', 'cardNumber', 'debitCard', 'creditCard', 'expiryDate',
+               'bankAccount', 'accountNumber', 'bankPassword', 'ifsc'
+             ]) &&
+             data.customerUid is string && data.customerUid.size() > 0 && data.customerUid.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 100 &&
+             data.paymentCategory in ['model_advance', 'wedding_booking'] &&
+             data.serviceType is string && data.serviceType.size() >= 2 && data.serviceType.size() <= 120 &&
+             data.shootDate is string && data.shootDate.size() >= 6 && data.shootDate.size() <= 50 &&
+             data.totalPrice is number && data.totalPrice >= 0 && data.totalPrice <= 100000000 &&
+             data.requiredAdvance is number && data.requiredAdvance >= 0 && data.requiredAdvance <= 100000000 &&
+             data.paidAmount is number && data.paidAmount >= 0 && data.paidAmount <= 100000000 &&
+             data.remainingBalance is number && data.remainingBalance >= 0 && data.remainingBalance <= 100000000 &&
+             data.verifiedAmount is number && data.verifiedAmount >= 0 && data.verifiedAmount <= 100000000 &&
+             data.priceSetByAdmin is bool &&
+             data.paymentStatus in [
+               'Payment Pending', 'Submitted for Verification', 'Payment Verified',
+               'Payment Rejected', 'Partially Paid', 'Fully Paid',
+               'Refund Requested', 'Refund Processed'
+             ] &&
+             data.bookingStatus in [
+               'Payment Pending', 'Pending Admin Pricing', 'Pending Verification',
+               'Confirmed', 'Cancelled', 'Rejected'
+             ] &&
+             (!('utrNumber' in data) || (data.utrNumber is string && data.utrNumber.size() <= 60)) &&
+             (!('screenshotDataUrl' in data) || (
+               data.screenshotDataUrl is string && (
+                 data.screenshotDataUrl == '' || (
+                   data.screenshotDataUrl.size() >= 100 &&
+                   data.screenshotDataUrl.size() <= 180000 &&
+                   data.screenshotDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
+                 )
+               )
+             )) &&
+             (!('submittedAt' in data) || (data.submittedAt is timestamp && data.submittedAt <= request.time)) &&
+             (!('verifiedAt' in data) || (data.verifiedAt is timestamp && data.verifiedAt <= request.time)) &&
+             (!('verifiedByAdminEmail' in data) || (data.verifiedByAdminEmail is string && (data.verifiedByAdminEmail == '' || data.verifiedByAdminEmail.lower() == 'chanderstudio0@gmail.com'))) &&
+             (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 500)) &&
+             (!('refundStatus' in data) || data.refundStatus in ['', 'Requested', 'Processed', 'Rejected']) &&
+             (!('refundAmount' in data) || (data.refundAmount is number && data.refundAmount >= 0 && data.refundAmount <= 100000000)) &&
+             (!('refundReason' in data) || (data.refundReason is string && data.refundReason.size() <= 500)) &&
+             (!('refundReference' in data) || (data.refundReference is string && data.refundReference.size() <= 80)) &&
+             (!('refundRequestedAt' in data) || (data.refundRequestedAt is timestamp && data.refundRequestedAt <= request.time)) &&
+             (!('refundProcessedAt' in data) || (data.refundProcessedAt is timestamp && data.refundProcessedAt <= request.time)) &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes == '')) &&
+             (!('history' in data) || (data.history is list && data.history.size() <= 40)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
     // Default deny all unknown collections
     match /{document=**} {
       allow read, write: if false;
@@ -605,6 +729,10 @@ service cloud.firestore {
                         ]))
                      ) && isValidModel(incoming());
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     // Privacy-safe member portfolio showcase of approved models (requires Firebase Auth; strictly excludes personal phone/email)
@@ -641,12 +769,17 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
                        isAdmin() ||
                        (resource.data.userId == request.auth.uid &&
+                        existing().status == 'Pending' &&
                         incoming().userId == existing().userId &&
                         incoming().createdAt == existing().createdAt &&
                         (incoming().status == existing().status || incoming().status == 'Cancelled') &&
                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
                      ) && isValidCompanyBooking(incoming());
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid && resource.data.status == 'Pending');
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     match /bookings/{bookingId} {
@@ -659,12 +792,17 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
                        isAdmin() ||
                        (resource.data.userId == request.auth.uid &&
+                        existing().status == 'Pending' &&
                         incoming().userId == existing().userId &&
                         incoming().createdAt == existing().createdAt &&
                         (incoming().status == existing().status || incoming().status == 'Cancelled') &&
                         incoming().diff(existing()).affectedKeys().hasOnly(['clientName', 'contactNumber', 'preferredDate', 'preferredTime', 'location', 'notes', 'status', 'updatedAt']))
                      ) && isValidBooking(incoming());
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid && resource.data.status == 'Pending');
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     match /gallery/{itemId} {
@@ -743,10 +881,18 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Strictly Admin-only studio automation settings (automated email alert toggles & branding)
+    // Strictly Admin-only studio configuration (e.g., emailAlerts notification toggles)
     match /studioConfig/{configId} {
       allow get, list: if isAdmin();
       allow create, update: if isAdmin() && isValidStudioEmailConfig(incoming(), configId);
+      allow delete: if isAdmin();
+    }
+
+    // UPI Payment Configuration: get-only for signed-in members (paymentSettings doc), strictly Admin-only write/list
+    match /paymentConfig/{configId} {
+      allow get: if isAdmin() || (isSignedIn() && configId == 'paymentSettings');
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidPaymentSettingsConfig(incoming(), configId);
       allow delete: if isAdmin();
     }
 
@@ -754,6 +900,13 @@ service cloud.firestore {
     match /adminEmailAlerts/{alertId} {
       allow get, list: if isAdmin();
       allow create, update: if isAdmin() && isValidId(alertId) && isValidAdminEmailAlert(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Strictly Admin-only internal notes (NEVER readable or writable by customers or professionals)
+    match /adminInternalNotes/{noteId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(noteId) && isValidAdminInternalNote(incoming());
       allow delete: if isAdmin();
     }
 
@@ -789,6 +942,10 @@ service cloud.firestore {
                        ])
                      )) && isValidProfessionalProfile(incoming());
       allow delete: if isAdmin();
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     // Privacy-safe approved professional directory (NO mobileNumber/email/userId/adminNotes)
@@ -803,7 +960,11 @@ service cloud.firestore {
       allow get, list: if isAdmin() || (
                           isSignedIn() && (
                             resource.data.userId == request.auth.uid ||
-                            (resource.data.assignedProfessionalUid is string && resource.data.assignedProfessionalUid == request.auth.uid)
+                            (
+                              resource.data.assignedProfessionalUid is string &&
+                              resource.data.assignedProfessionalUid == request.auth.uid &&
+                              resource.data.status in ['Confirmed', 'Assigned', 'In Progress', 'Completed']
+                            )
                           )
                         );
       allow create: if isSignedIn() &&
@@ -845,6 +1006,10 @@ service cloud.firestore {
                        incoming().status == 'Cancelled'
                      )) && isValidProfessionalHiringRequest(incoming());
       allow delete: if isAdmin();
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     // Studio & Professional Outsourcing Requests (Admin-only approval, assignment & status updates)
@@ -852,7 +1017,11 @@ service cloud.firestore {
       allow get, list: if isAdmin() || (
                           isSignedIn() && (
                             resource.data.userId == request.auth.uid ||
-                            (resource.data.assignedProfessionalUid is string && resource.data.assignedProfessionalUid == request.auth.uid)
+                            (
+                              resource.data.assignedProfessionalUid is string &&
+                              resource.data.assignedProfessionalUid == request.auth.uid &&
+                              resource.data.status in ['Approved', 'Assigned', 'In Progress', 'Completed']
+                            )
                           )
                         );
       allow create: if isSignedIn() &&
@@ -878,6 +1047,10 @@ service cloud.firestore {
                        incoming().status == 'Cancelled'
                      )) && isValidOutsourcingRequest(incoming());
       allow delete: if isAdmin();
+
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
 
     // Secure Private Messaging Threads (User <-> Admin only; zero cross-user visibility)
@@ -966,6 +1139,102 @@ service cloud.firestore {
       allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
       allow create, update: if isAdmin() && isValidId(slotId) && isValidCustomerSlot(incoming());
       allow delete: if isAdmin();
+    }
+
+    // Privacy-safe studio slot availability & atomic double-booking lock (ZERO customer PII; requires atomic Pending booking)
+    match /bookedSlots/{slotKey} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() &&
+                       isValidBookedSlot(incoming(), slotKey) && (
+                         isAdmin() || (
+                           incoming().status == 'reserved' &&
+                           'bookingId' in incoming() &&
+                           isValidId(incoming().bookingId) &&
+                           existsAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)) &&
+                           getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.userId == request.auth.uid &&
+                           getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.preferredDate == incoming().date &&
+                           getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.status == 'Pending'
+                         )
+                       );
+      allow update: if isAdmin() && isValidBookedSlot(incoming(), slotKey);
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================================
+    // UPI ADVANCE PAYMENT & WEDDING BOOKING PAYMENT SYSTEM (STRICT UID LOCK)
+    // ========================================================================
+
+    // Strictly UID-locked payment records; customers CANNOT self-verify, self-confirm, forge pricing/refunds, or tamper with history
+    match /bookingPayments/{paymentId} {
+      allow get, list: if isAdmin() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       isValidId(paymentId) &&
+                       isValidBookingPayment(incoming()) && (
+                         isAdmin() || (
+                           incoming().customerUid == request.auth.uid &&
+                           incoming().paymentStatus == 'Payment Pending' &&
+                           incoming().bookingStatus in ['Payment Pending', 'Pending Admin Pricing'] &&
+                           incoming().totalPrice == 0 &&
+                           incoming().requiredAdvance == 0 &&
+                           incoming().paidAmount == 0 &&
+                           incoming().remainingBalance == 0 &&
+                           incoming().verifiedAmount == 0 &&
+                           incoming().priceSetByAdmin == false &&
+                           (!('utrNumber' in incoming()) || incoming().utrNumber == '') &&
+                           (!('screenshotDataUrl' in incoming()) || incoming().screenshotDataUrl == '') &&
+                           (!('verifiedByAdminEmail' in incoming()) || incoming().verifiedByAdminEmail == '') &&
+                           !('verifiedAt' in incoming()) &&
+                           !('submittedAt' in incoming()) &&
+                           !('refundRequestedAt' in incoming()) &&
+                           !('refundProcessedAt' in incoming()) &&
+                           !('receiptNumber' in incoming()) &&
+                           (!('refundStatus' in incoming()) || incoming().refundStatus == '') &&
+                           (!('refundAmount' in incoming()) || incoming().refundAmount == 0) &&
+                           (!('refundReference' in incoming()) || incoming().refundReference == '') &&
+                           (!('rejectionReason' in incoming()) || incoming().rejectionReason == '') &&
+                           (!('adminNotes' in incoming()) || incoming().adminNotes == '') &&
+                           (!('history' in incoming()) || (incoming().history is list && incoming().history.size() <= 1))
+                         )
+                       );
+      allow update: if isValidBookingPayment(incoming()) &&
+                       incoming().customerUid == existing().customerUid &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() || (
+                           isSignedIn() &&
+                           existing().customerUid == request.auth.uid &&
+                           (
+                             (
+                               existing().priceSetByAdmin == true &&
+                               existing().requiredAdvance > 0 &&
+                               existing().remainingBalance > 0 &&
+                               existing().paymentStatus in ['Payment Pending', 'Payment Rejected', 'Partially Paid'] &&
+                               incoming().paymentStatus == 'Submitted for Verification' &&
+                               incoming().utrNumber is string &&
+                               incoming().utrNumber.size() >= 6 &&
+                               incoming().utrNumber.size() <= 60 &&
+                               incoming().diff(existing()).affectedKeys().hasOnly([
+                                 'utrNumber', 'screenshotDataUrl', 'paymentStatus', 'submittedAt', 'updatedAt'
+                               ])
+                             ) || (
+                               existing().paymentStatus in ['Payment Verified', 'Partially Paid', 'Fully Paid'] &&
+                               incoming().paymentStatus == 'Refund Requested' &&
+                               incoming().refundStatus == 'Requested' &&
+                               incoming().refundReason is string &&
+                               incoming().refundReason.size() >= 4 &&
+                               incoming().refundReason.size() <= 500 &&
+                               incoming().diff(existing()).affectedKeys().hasOnly([
+                                 'paymentStatus', 'refundStatus', 'refundReason', 'refundRequestedAt', 'updatedAt'
+                               ])
+                             )
+                           )
+                         )
+                       );
+      allow delete: if isAdmin();
+
+      // Strictly Admin-only internal bank verification notes (ZERO customer read/write access)
+      match /adminPrivate/{noteId} {
+        allow get, list, create, update, delete: if isAdmin();
+      }
     }
   }
 }

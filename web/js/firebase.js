@@ -8,6 +8,21 @@ import {
   validateModelSelfRegistration
 } from "./model-portal.js";
 import { validateWeddingTierConfig, WEDDING_TIER_IDS } from "./wedding-packages.js";
+import {
+  buildStudioSlotKey,
+  normalizeStudioSlotCode,
+  isActiveBlockingBookingStatus
+} from "./booking-calendar.js";
+import {
+  DEFAULT_PAYMENT_CONFIG,
+  calculateAdvanceAndBalance,
+  computeVerifiedPaymentTransition,
+  isAllowedPaymentImageSrc,
+  validateAdminPaymentConfigPayload,
+  validateModelAdvanceRequestPayload,
+  validateUtrReference,
+  validateWeddingPaymentRequestPayload
+} from "./payment-system.js";
 
 const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
 const LOCAL_DEV_SESSION_CONFIG_KEY = "star_artist_local_dev_firebase_config_v1";
@@ -562,6 +577,20 @@ export async function fetchMyBookings(uid) {
     .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 }
 
+export async function fetchStudioBookedSlots() {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return [];
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDocs(fsMod.collection(db, "bookedSlots"));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((s) => isActiveBlockingBookingStatus(s.status || "reserved"));
+  } catch {
+    return [];
+  }
+}
+
 export async function createShootBooking(payload) {
   const ctx = await initFirebaseClient();
   if (!ctx.ready) throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
@@ -569,13 +598,18 @@ export async function createShootBooking(payload) {
   if (!user) throw new Error("Please sign in first to submit a booking.");
 
   const { fsMod, db } = ctx;
+  const cleanDate = String(payload.preferredDate || "").trim();
+  const cleanTime = String(payload.preferredTime || "").trim() || "11:30 AM";
+  const slotKey = buildStudioSlotKey(cleanDate, cleanTime);
+  const slotCode = normalizeStudioSlotCode(cleanTime);
+
   const docData = {
     userId: user.uid,
     clientName: payload.clientName.trim(),
     contactNumber: payload.contactNumber.trim(),
     serviceType: payload.serviceType.trim(),
-    preferredDate: payload.preferredDate.trim(),
-    preferredTime: payload.preferredTime.trim() || "11:00 AM",
+    preferredDate: cleanDate,
+    preferredTime: cleanTime,
     location: payload.location.trim() || "Studio (Talwara Khurd)",
     notes: payload.notes.trim(),
     status: "Pending",
@@ -583,6 +617,40 @@ export async function createShootBooking(payload) {
     createdAt: fsMod.serverTimestamp(),
     updatedAt: fsMod.serverTimestamp()
   };
+
+  if (slotKey) {
+    const slotRef = fsMod.doc(db, "bookedSlots", slotKey);
+    const bookingRef = fsMod.doc(fsMod.collection(db, "bookings"));
+    const slotDocData = {
+      slotKey,
+      date: cleanDate,
+      slotCode,
+      preferredTime: cleanTime.slice(0, 60),
+      status: "reserved",
+      bookingId: bookingRef.id,
+      createdAt: fsMod.serverTimestamp(),
+      updatedAt: fsMod.serverTimestamp()
+    };
+    if (typeof fsMod.runTransaction === "function") {
+      await fsMod.runTransaction(db, async (tx) => {
+        const existingSlot = await tx.get(slotRef);
+        if (existingSlot.exists()) {
+          throw new Error("This studio date and time slot is already booked. Please select another available slot.");
+        }
+        tx.set(bookingRef, docData);
+        tx.set(slotRef, slotDocData);
+      });
+      return bookingRef.id;
+    }
+    const existingSlot = await fsMod.getDoc(slotRef);
+    if (existingSlot.exists()) {
+      throw new Error("This studio date and time slot is already booked. Please select another available slot.");
+    }
+    await fsMod.setDoc(bookingRef, docData);
+    await fsMod.setDoc(slotRef, slotDocData);
+    return bookingRef.id;
+  }
+
   const ref = await fsMod.addDoc(fsMod.collection(db, "bookings"), docData);
   return ref.id;
 }
@@ -1125,10 +1193,42 @@ export async function adminUpdateBookingStatus(bookingId, status) {
   const ctx = await initFirebaseClient();
   requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
-  await fsMod.updateDoc(fsMod.doc(db, "bookings", bookingId), {
+  const bookingRef = fsMod.doc(db, "bookings", bookingId);
+  const existingSnap = await fsMod.getDoc(bookingRef).catch(() => null);
+  const existingData = existingSnap?.exists() ? existingSnap.data() : null;
+
+  await fsMod.updateDoc(bookingRef, {
     status,
     updatedAt: fsMod.serverTimestamp()
   });
+
+  if (existingData?.preferredDate) {
+    const slotKey = buildStudioSlotKey(existingData.preferredDate, existingData.preferredTime || "11:30 AM");
+    if (slotKey) {
+      const slotRef = fsMod.doc(db, "bookedSlots", slotKey);
+      try {
+        if (!isActiveBlockingBookingStatus(status)) {
+          await fsMod.deleteDoc(slotRef);
+        } else {
+          await fsMod.setDoc(
+            slotRef,
+            {
+              slotKey,
+              date: String(existingData.preferredDate).trim(),
+              slotCode: normalizeStudioSlotCode(existingData.preferredTime || "11:30 AM"),
+              preferredTime: String(existingData.preferredTime || "11:30 AM").trim().slice(0, 60),
+              status: status === "Confirmed" || status === "Approved" ? "confirmed" : "reserved",
+              createdAt: existingData.createdAt || fsMod.serverTimestamp(),
+              updatedAt: fsMod.serverTimestamp()
+            },
+            { merge: true }
+          );
+        }
+      } catch {
+        // Non-blocking slot sync cleanup
+      }
+    }
+  }
 }
 
 export async function adminAutoCompleteExpiredBookings(bookingIds = []) {
@@ -1182,7 +1282,16 @@ export async function adminDeleteBooking(bookingId) {
   const ctx = await initFirebaseClient();
   requireAuthorizedAdmin(ctx);
   const { fsMod, db } = ctx;
-  await fsMod.deleteDoc(fsMod.doc(db, "bookings", bookingId));
+  const bookingRef = fsMod.doc(db, "bookings", bookingId);
+  const existingSnap = await fsMod.getDoc(bookingRef).catch(() => null);
+  const existingData = existingSnap?.exists() ? existingSnap.data() : null;
+  await fsMod.deleteDoc(bookingRef);
+  if (existingData?.preferredDate) {
+    const slotKey = buildStudioSlotKey(existingData.preferredDate, existingData.preferredTime || "11:30 AM");
+    if (slotKey) {
+      await fsMod.deleteDoc(fsMod.doc(db, "bookedSlots", slotKey)).catch(() => {});
+    }
+  }
 }
 
 async function writeModelStatusNotification(ctx, { modelId, modelData, status, adminNotes, isDisabled }) {
@@ -1768,8 +1877,20 @@ export async function fetchAssignedJobsForProfessional(uid) {
   const { fsMod, db } = ctx;
   try {
     const [hireSnap, outSnap] = await Promise.all([
-      fsMod.getDocs(fsMod.query(fsMod.collection(db, "professionalHiringRequests"), fsMod.where("assignedProfessionalUid", "==", uid))),
-      fsMod.getDocs(fsMod.query(fsMod.collection(db, "outsourcingRequests"), fsMod.where("assignedProfessionalUid", "==", uid)))
+      fsMod.getDocs(
+        fsMod.query(
+          fsMod.collection(db, "professionalHiringRequests"),
+          fsMod.where("assignedProfessionalUid", "==", uid),
+          fsMod.where("status", "in", ["Confirmed", "Assigned", "In Progress", "Completed"])
+        )
+      ),
+      fsMod.getDocs(
+        fsMod.query(
+          fsMod.collection(db, "outsourcingRequests"),
+          fsMod.where("assignedProfessionalUid", "==", uid),
+          fsMod.where("status", "in", ["Approved", "Assigned", "In Progress", "Completed"])
+        )
+      )
     ]);
     const hires = hireSnap.docs.map((d) => ({ id: d.id, _assignmentKind: "hiring", ...d.data() }));
     const outs = outSnap.docs.map((d) => ({ id: d.id, _assignmentKind: "outsourcing", ...d.data() }));
@@ -2324,6 +2445,404 @@ export async function adminDeleteCustomerSlot(slotId) {
   const { fsMod, db } = ctx;
   await fsMod.deleteDoc(fsMod.doc(db, "customerSlots", slotId));
 }
+
+// ============================================================================
+// UPI ADVANCE PAYMENT & WEDDING BOOKING PAYMENT SYSTEM
+// ============================================================================
+
+export async function fetchPaymentSettings() {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return { ...DEFAULT_PAYMENT_CONFIG };
+  const { fsMod, db } = ctx;
+  try {
+    const snap = await fsMod.getDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"));
+    if (!snap.exists()) return { ...DEFAULT_PAYMENT_CONFIG };
+    return { ...DEFAULT_PAYMENT_CONFIG, ...snap.data() };
+  } catch {
+    return { ...DEFAULT_PAYMENT_CONFIG };
+  }
+}
+
+export async function adminSavePaymentSettings(input = {}) {
+  const ctx = await initFirebaseClient();
+  const adminUser = requireAuthorizedAdmin(ctx);
+  const check = validateAdminPaymentConfigPayload(input);
+  if (!check.valid) throw new Error(check.error);
+  const { fsMod, db } = ctx;
+  const payload = {
+    ...check.clean,
+    updatedByEmail: String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase(),
+    updatedAt: fsMod.serverTimestamp()
+  };
+  await fsMod.setDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"), payload);
+  return payload;
+}
+
+export async function fetchMyBookingPayments(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) return [];
+  const authUid = ctx.auth.currentUser.uid;
+  const targetUid = String(uid || authUid).trim();
+  if (!targetUid || (targetUid !== authUid && !isAuthorizedAdminUser(ctx.auth.currentUser))) {
+    return [];
+  }
+  const { fsMod, db } = ctx;
+  try {
+    const q = fsMod.query(
+      fsMod.collection(db, "bookingPayments"),
+      fsMod.where("customerUid", "==", targetUid)
+    );
+    const snap = await fsMod.getDocs(q);
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((p) => p.customerUid === targetUid)
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function createModelAdvancePaymentRequest(payload = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Please sign in first to request a model booking.");
+  const check = validateModelAdvanceRequestPayload(payload);
+  if (!check.valid) throw new Error(check.error);
+
+  const { fsMod, db, auth } = ctx;
+  const user = auth.currentUser;
+  const paymentId = `pay_model_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const nowIso = new Date().toISOString();
+  const c = check.clean;
+
+  await fsMod.setDoc(fsMod.doc(db, "bookingPayments", paymentId), {
+    customerUid: user.uid,
+    customerName: c.customerName,
+    customerContact: c.customerContact,
+    bookingId: "",
+    paymentCategory: "model_advance",
+    modelId: c.modelId,
+    modelName: c.modelName,
+    serviceType: c.serviceType,
+    eventType: "Model Booking",
+    shootDate: c.shootDate,
+    shootTime: c.shootTime,
+    eventLocation: c.eventLocation || "Star Artist Studio (Talwara Khurd)",
+    eventDetails: c.eventDetails,
+    totalPrice: 0,
+    chargeMode: "percentage",
+    chargeValue: 0,
+    requiredAdvance: 0,
+    paidAmount: 0,
+    remainingBalance: 0,
+    priceSetByAdmin: false,
+    paymentStatus: "Payment Pending",
+    bookingStatus: "Payment Pending",
+    utrNumber: "",
+    screenshotDataUrl: "",
+    verifiedAmount: 0,
+    verifiedByAdminEmail: "",
+    rejectionReason: "",
+    refundAmount: 0,
+    refundReason: "",
+    refundStatus: "",
+    refundReference: "",
+    adminNotes: "",
+    history: [
+      {
+        action: "Model Booking Requested",
+        status: "Payment Pending",
+        note: `Model: ${c.modelName} (${c.serviceType}) on ${c.shootDate} ${c.shootTime}`,
+        at: nowIso
+      }
+    ],
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+
+  return paymentId;
+}
+
+export async function createWeddingBookingPaymentRequest(payload = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Please sign in first to submit a wedding/event booking.");
+  const check = validateWeddingPaymentRequestPayload(payload);
+  if (!check.valid) throw new Error(check.error);
+
+  const { fsMod, db, auth } = ctx;
+  const user = auth.currentUser;
+  const paymentId = `pay_wed_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const nowIso = new Date().toISOString();
+  const c = check.clean;
+
+  await fsMod.setDoc(fsMod.doc(db, "bookingPayments", paymentId), {
+    customerUid: user.uid,
+    customerName: c.customerName,
+    customerContact: c.customerContact,
+    bookingId: "",
+    paymentCategory: "wedding_booking",
+    modelId: "",
+    modelName: "",
+    serviceType: c.serviceType,
+    eventType: c.eventType,
+    shootDate: c.shootDate,
+    shootTime: c.shootTime,
+    eventLocation: c.eventLocation,
+    eventDetails: c.eventDetails,
+    totalPrice: 0,
+    chargeMode: "percentage",
+    chargeValue: 0,
+    requiredAdvance: 0,
+    paidAmount: 0,
+    remainingBalance: 0,
+    priceSetByAdmin: false,
+    paymentStatus: "Payment Pending",
+    bookingStatus: "Pending Admin Pricing",
+    utrNumber: "",
+    screenshotDataUrl: "",
+    verifiedAmount: 0,
+    verifiedByAdminEmail: "",
+    rejectionReason: "",
+    refundAmount: 0,
+    refundReason: "",
+    refundStatus: "",
+    refundReference: "",
+    adminNotes: "",
+    history: [
+      {
+        action: "Wedding / Event Submitted",
+        status: "Payment Pending",
+        note: `${c.eventType} at ${c.eventLocation} on ${c.shootDate}`,
+        at: nowIso
+      }
+    ],
+    createdAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+
+  return paymentId;
+}
+
+export async function submitCustomerPaymentUtr({ paymentId, utrNumber, screenshotDataUrl = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const utrCheck = validateUtrReference(utrNumber);
+  if (!utrCheck.valid) throw new Error(utrCheck.error);
+  const cleanShot = String(screenshotDataUrl || "").trim();
+  if (cleanShot && !isAllowedPaymentImageSrc(cleanShot)) {
+    throw new Error("Payment screenshot must be a compressed JPG/PNG/WebP image under 180KB.");
+  }
+
+  const { fsMod, db, auth } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+  if (existing.customerUid !== auth.currentUser.uid) {
+    throw new Error("Unauthorized access to another customer's payment record.");
+  }
+  if (!existing.priceSetByAdmin || Number(existing.requiredAdvance || 0) <= 0 || Number(existing.remainingBalance || 0) <= 0) {
+    throw new Error("Admin must finalize the booking price and required advance before UTR submission.");
+  }
+
+  await fsMod.updateDoc(ref, {
+    utrNumber: utrCheck.clean,
+    screenshotDataUrl: cleanShot || existing.screenshotDataUrl || "",
+    paymentStatus: "Submitted for Verification",
+    submittedAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function requestCustomerPaymentRefund({ paymentId, refundReason = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) throw new Error("Sign in required.");
+  const cleanReason = String(refundReason || "").trim().slice(0, 500);
+  if (cleanReason.length < 4) {
+    throw new Error("Please enter a brief reason for your refund request.");
+  }
+
+  const { fsMod, db, auth } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+  if (existing.customerUid !== auth.currentUser.uid) {
+    throw new Error("Unauthorized access.");
+  }
+
+  await fsMod.updateDoc(ref, {
+    paymentStatus: "Refund Requested",
+    refundStatus: "Requested",
+    refundReason: cleanReason,
+    refundRequestedAt: fsMod.serverTimestamp(),
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminFetchAllBookingPayments() {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const snap = await fsMod.getDocs(fsMod.collection(db, "bookingPayments"));
+  const items = await Promise.all(
+    snap.docs.map(async (d) => {
+      const base = { id: d.id, ...d.data() };
+      try {
+        const privSnap = await fsMod.getDoc(fsMod.doc(db, "bookingPayments", d.id, "adminPrivate", "notes"));
+        if (privSnap.exists()) {
+          base.adminNotes = String(privSnap.data()?.note || "");
+        }
+      } catch {
+        // Non-blocking private note lookup
+      }
+      return base;
+    })
+  );
+  return items.sort(
+    (a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0)
+  );
+}
+
+export async function adminSetBookingPaymentPricing({ paymentId, totalPrice, chargeMode = "percentage", chargeValue = 25 } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+  const calc = calculateAdvanceAndBalance({
+    totalPrice,
+    mode: chargeMode,
+    value: chargeValue,
+    paidAmount: existing.paidAmount || 0
+  });
+  if (calc.totalPrice <= 0) throw new Error("Total price must be greater than ₹0.");
+
+  const prevHistory = Array.isArray(existing.history) ? existing.history.slice(-29) : [];
+  prevHistory.push({
+    action: "Admin Pricing Set",
+    status: existing.paymentStatus || "Payment Pending",
+    note: `Total ₹${calc.totalPrice}, Required Advance ₹${calc.requiredAdvance}, Remaining ₹${calc.remainingBalance}`,
+    at: new Date().toISOString()
+  });
+
+  await fsMod.updateDoc(ref, {
+    totalPrice: calc.totalPrice,
+    chargeMode: calc.chargeMode,
+    chargeValue: calc.chargeValue,
+    requiredAdvance: calc.requiredAdvance,
+    remainingBalance: calc.remainingBalance,
+    priceSetByAdmin: true,
+    bookingStatus: existing.bookingStatus === "Pending Admin Pricing" ? "Payment Pending" : existing.bookingStatus || "Payment Pending",
+    history: prevHistory,
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminVerifyBookingPayment({ paymentId, verifiedAmount, confirmBooking = true, adminNotes = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  const adminUser = requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+
+  const transition = computeVerifiedPaymentTransition(existing, { verifiedAmount, confirmBooking });
+  if (!transition.valid) throw new Error(transition.error);
+
+  const prevHistory = Array.isArray(existing.history) ? existing.history.slice(-29) : [];
+  prevHistory.push({
+    action: "Payment Verified by Admin",
+    status: transition.paymentStatus,
+    note: `Verified ₹${transition.verifiedAmount} (Paid: ₹${transition.paidAmount}, Remaining: ₹${transition.remainingBalance})${confirmBooking ? " • Booking Confirmed" : ""}`,
+    at: new Date().toISOString()
+  });
+
+  const cleanAdminNotes = String(adminNotes || "").trim().slice(0, 1000);
+  const adminEmail = String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase();
+
+  await fsMod.updateDoc(ref, {
+    paidAmount: transition.paidAmount,
+    verifiedAmount: transition.verifiedAmount,
+    remainingBalance: transition.remainingBalance,
+    paymentStatus: transition.paymentStatus,
+    bookingStatus: transition.bookingStatus,
+    verifiedAt: fsMod.serverTimestamp(),
+    verifiedByAdminEmail: adminEmail,
+    rejectionReason: "",
+    adminNotes: "",
+    history: prevHistory,
+    updatedAt: fsMod.serverTimestamp()
+  });
+
+  if (cleanAdminNotes) {
+    await fsMod.setDoc(fsMod.doc(db, "bookingPayments", paymentId, "adminPrivate", "notes"), {
+      note: cleanAdminNotes,
+      updatedByEmail: adminEmail,
+      updatedAt: fsMod.serverTimestamp()
+    });
+  }
+}
+
+export async function adminRejectBookingPayment({ paymentId, rejectionReason = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+  const cleanReason = String(rejectionReason || "UTR / bank transaction could not be verified.").trim().slice(0, 500);
+
+  const prevHistory = Array.isArray(existing.history) ? existing.history.slice(-29) : [];
+  prevHistory.push({
+    action: "Payment Rejected by Admin",
+    status: "Payment Rejected",
+    note: cleanReason,
+    at: new Date().toISOString()
+  });
+
+  await fsMod.updateDoc(ref, {
+    paymentStatus: "Payment Rejected",
+    rejectionReason: cleanReason,
+    history: prevHistory,
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
+export async function adminProcessBookingPaymentRefund({ paymentId, refundAmount, refundReference = "" } = {}) {
+  const ctx = await initFirebaseClient();
+  requireAuthorizedAdmin(ctx);
+  const { fsMod, db } = ctx;
+  const ref = fsMod.doc(db, "bookingPayments", paymentId);
+  const snap = await fsMod.getDoc(ref);
+  if (!snap.exists()) throw new Error("Payment record not found.");
+  const existing = snap.data() || {};
+  const cleanRefundAmt = Math.max(0, Math.round(Number(refundAmount) || 0));
+  if (cleanRefundAmt <= 0) throw new Error("Enter a valid refund amount greater than ₹0.");
+  const cleanRef = String(refundReference || "").trim().slice(0, 80);
+
+  const prevHistory = Array.isArray(existing.history) ? existing.history.slice(-29) : [];
+  prevHistory.push({
+    action: "Refund Processed by Admin",
+    status: "Refund Processed",
+    note: `Refunded ₹${cleanRefundAmt}${cleanRef ? ` • Ref: ${cleanRef}` : ""}`,
+    at: new Date().toISOString()
+  });
+
+  await fsMod.updateDoc(ref, {
+    paymentStatus: "Refund Processed",
+    refundStatus: "Processed",
+    refundAmount: cleanRefundAmt,
+    refundReference: cleanRef,
+    refundProcessedAt: fsMod.serverTimestamp(),
+    history: prevHistory,
+    updatedAt: fsMod.serverTimestamp()
+  });
+}
+
 
 
 

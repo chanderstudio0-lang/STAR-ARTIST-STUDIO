@@ -6387,6 +6387,274 @@ test("Unauthorized cross-customer URL/ID tampering, Admin route escalation, and 
   assert.ok(swJs.includes('"/js/customer-portal.js"'));
 });
 
+test("Message read receipts animate smoothly from gray to gold and Admin recipient view trigger updates isRead in Firestore", async () => {
+  const stylesCss = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const chatMod = await import(pathToFileURL(path.join(webDir, "js/private-chat.js")).href);
+
+  // 1. CSS animation verifies gray-to-gold color transition & fade-in with reduced-motion accessibility
+  assert.ok(stylesCss.includes("@keyframes chatReceiptFadeIn"));
+  assert.ok(stylesCss.includes("@keyframes chatReceiptGrayToGold"));
+  assert.ok(stylesCss.includes("color: #9ca3af;"));
+  assert.ok(stylesCss.includes("color: var(--gold-light);"));
+  assert.ok(stylesCss.includes("animation: chatReceiptGrayToGold"));
+  assert.ok(stylesCss.includes("@media (prefers-reduced-motion: reduce)"));
+
+  // 2. Admin recipient view trigger selects incoming unread customer messages and triggers Firestore isRead update
+  const messages = [
+    { id: "msg_c1", senderRole: "customer", text: "Hello Admin", isRead: false, createdAt: "2026-11-25T10:00:00Z" },
+    { id: "msg_a1", senderRole: "admin", text: "Hi there!", isRead: false, createdAt: "2026-11-25T10:01:00Z" },
+    { id: "msg_c2", senderRole: "customer", text: "Booking query", isRead: true, readAt: "2026-11-25T10:02:00Z", createdAt: "2026-11-25T10:01:30Z" }
+  ];
+  const adminUnreadIds = chatMod.getUnreadIncomingMessageIds(messages, { viewerRole: "admin" });
+  assert.deepEqual(adminUnreadIds, ["msg_c1"], "Admin view trigger must identify only unread customer message msg_c1");
+
+  // App trigger & Firestore update contract check
+  assert.ok(appJs.includes("syncVisibleChatReadReceipts({ asAdmin: true })"));
+  assert.ok(appJs.includes('markPrivateChatMessagesRead({ chatId, messageIds: pendingIds, asAdmin: true, readerRole: "admin" })'));
+  assert.ok(firebaseJs.includes("isRead: true"));
+  assert.ok(firebaseJs.includes("readByRole: effectiveReaderRole"));
+});
+
+test("Booking form integrates interactive Date-Picker Calendar highlighting available studio slots and preventing double-booking", async () => {
+  const calMod = await import(pathToFileURL(path.join(webDir, "js/booking-calendar.js")).href);
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+
+  assert.equal(calMod.STUDIO_TIME_SLOTS.length, 5);
+  assert.equal(calMod.buildStudioSlotKey("2026-12-20", "10:00 AM"), "2026-12-20__morning_gold");
+  assert.equal(calMod.buildStudioSlotKey("2026-12-20", "04:30 PM (Golden Hour)"), "2026-12-20__golden_hour");
+
+  const bookedSlots = [
+    { date: "2026-12-20", slotCode: "morning_gold", preferredTime: "10:00 AM", status: "confirmed" },
+    { date: "2026-12-20", slotCode: "main_bay", preferredTime: "11:30 AM", status: "reserved" }
+  ];
+  const ownBookings = [
+    { preferredDate: "2026-12-21", preferredTime: "10:00 AM", status: "Pending" },
+    { preferredDate: "2026-12-21", preferredTime: "11:30 AM", status: "Confirmed" },
+    { preferredDate: "2026-12-21", preferredTime: "02:00 PM", status: "Approved" },
+    { preferredDate: "2026-12-21", preferredTime: "04:30 PM", status: "Pending" },
+    { preferredDate: "2026-12-21", preferredTime: "06:30 PM", status: "Confirmed" },
+    // Cancelled booking should NOT block the slot
+    { preferredDate: "2026-12-22", preferredTime: "10:00 AM", status: "Cancelled" }
+  ];
+
+  const idx = calMod.buildBookedSlotIndex(bookedSlots, ownBookings);
+  assert.equal(calMod.isStudioSlotBooked(idx, "2026-12-20", "10:00 AM"), true);
+  assert.equal(calMod.isStudioSlotBooked(idx, "2026-12-20", "02:00 PM"), false);
+  assert.equal(calMod.isStudioSlotBooked(idx, "2026-12-22", "10:00 AM"), false, "Cancelled booking must not block slot");
+
+  const avail20 = calMod.getDateSlotAvailability(idx, "2026-12-20");
+  assert.equal(avail20.state, "partial");
+  assert.equal(avail20.bookedCount, 2);
+  assert.equal(avail20.availableCount, 3);
+
+  const avail21 = calMod.getDateSlotAvailability(idx, "2026-12-21");
+  assert.equal(avail21.state, "full");
+  assert.equal(avail21.availableCount, 0);
+
+  const avail22 = calMod.getDateSlotAvailability(idx, "2026-12-22");
+  assert.equal(avail22.state, "available");
+  assert.equal(avail22.availableCount, 5);
+
+  assert.equal(calMod.getFirstAvailableTimeForDate(idx, "2026-12-20"), "02:00 PM");
+
+  const calHtml = calMod.renderBookingCalendarHtml({
+    viewYear: 2026,
+    viewMonth: 11,
+    selectedDate: "2026-12-20",
+    selectedTime: "02:00 PM",
+    slotIndex: idx,
+    minDateStr: "2026-12-15"
+  });
+  assert.ok(calHtml.includes('data-cal-date="2026-12-20"'));
+  assert.ok(calHtml.includes('data-cal-date="2026-12-21"') && calHtml.includes("is-full"));
+  assert.ok(calHtml.includes('data-cal-slot="10:00 AM"') && calHtml.includes("is-booked"));
+
+  assert.ok(indexHtml.includes('id="bookingSlotCalendar"'));
+  assert.ok(firebaseJs.includes("fetchStudioBookedSlots"));
+  assert.ok(firebaseJs.includes("runTransaction"));
+  assert.ok(rules.includes("match /bookedSlots/{slotKey}"));
+  assert.ok(swJs.includes('"/js/booking-calendar.js"'));
+});
+
+test("UPI Advance Payment & Wedding Booking Payment System enforces disabled default config, 8 statuses, accurate balance math, customer isolation, and Admin-only verification", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const rules = fs.readFileSync(path.join(rootDir, "firestore.rules"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+
+  // 1. Official Studio UPI ID is 9812890081@ybl, QR is NEVER invented/generated, and payments stay disabled until QR is uploaded & verified
+  assert.equal(payMod.OFFICIAL_STUDIO_UPI_ID, "9812890081@ybl");
+  assert.equal(payMod.DEFAULT_PAYMENT_CONFIG.enabled, false);
+  assert.equal(payMod.DEFAULT_PAYMENT_CONFIG.upiId, "9812890081@ybl");
+  assert.equal(payMod.DEFAULT_PAYMENT_CONFIG.qrImageDataUrl, "");
+  assert.equal(payMod.DEFAULT_PAYMENT_CONFIG.qrVerified, false);
+  assert.equal(payMod.isPaymentConfigReady(payMod.DEFAULT_PAYMENT_CONFIG), false);
+
+  const disabledPanel = payMod.renderUpiPaymentPanelHtml({ config: payMod.DEFAULT_PAYMENT_CONFIG, payableAmount: 3000 });
+  assert.ok(disabledPanel.includes('data-upi-configured="false"'));
+
+  // Activation MUST fail without uploaded QR or without qrVerified=true
+  const sampleQr = "data:image/png;base64," + "A".repeat(160);
+  const missingQrCheck = payMod.validateAdminPaymentConfigPayload({
+    enabled: true,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: "",
+    qrVerified: false,
+    modelAdvanceMode: "percentage",
+    modelAdvanceValue: 30,
+    weddingChargeMode: "fixed",
+    weddingChargeValue: 5000
+  });
+  assert.equal(missingQrCheck.valid, false, "Payments must stay blocked when no QR is uploaded");
+
+  const unverifiedQrCheck = payMod.validateAdminPaymentConfigPayload({
+    enabled: true,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: sampleQr,
+    qrVerified: false,
+    modelAdvanceMode: "percentage",
+    modelAdvanceValue: 30,
+    weddingChargeMode: "fixed",
+    weddingChargeValue: 5000
+  });
+  assert.equal(unverifiedQrCheck.valid, false, "Payments must stay blocked until uploaded QR is verified to match official UPI");
+
+  // Valid Admin UPI config enables payment panel ONLY after QR is uploaded & verified
+  const cfgCheck = payMod.validateAdminPaymentConfigPayload({
+    enabled: true,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: sampleQr,
+    qrVerified: true,
+    modelAdvanceMode: "percentage",
+    modelAdvanceValue: 30,
+    weddingChargeMode: "fixed",
+    weddingChargeValue: 5000
+  });
+  assert.equal(cfgCheck.valid, true);
+  assert.equal(payMod.isPaymentConfigReady(cfgCheck.clean), true);
+  const enabledPanel = payMod.renderUpiPaymentPanelHtml({ config: cfgCheck.clean, payableAmount: 5000 });
+  assert.ok(enabledPanel.includes('data-upi-configured="true"'));
+  assert.ok(enabledPanel.includes("9812890081@ybl"));
+  assert.ok(enabledPanel.includes("₹5,000"));
+
+  // 2. All 8 required payment statuses are supported
+  assert.deepEqual(payMod.PAYMENT_STATUS_LIST, [
+    "Payment Pending",
+    "Submitted for Verification",
+    "Payment Verified",
+    "Payment Rejected",
+    "Partially Paid",
+    "Fully Paid",
+    "Refund Requested",
+    "Refund Processed"
+  ]);
+
+  // 3. Model Advance & Wedding Booking charge math
+  const modelCalc = payMod.calculateAdvanceAndBalance({ totalPrice: 12000, mode: "percentage", value: 30, paidAmount: 0 });
+  assert.equal(modelCalc.requiredAdvance, 3600);
+  assert.equal(modelCalc.remainingBalance, 12000);
+
+  const wedCalc = payMod.calculateAdvanceAndBalance({ totalPrice: 65000, mode: "fixed", value: 15000, paidAmount: 15000 });
+  assert.equal(wedCalc.requiredAdvance, 15000);
+  assert.equal(wedCalc.remainingBalance, 50000);
+
+  // 4. UTR validation blocks sensitive banking credentials (PIN/OTP/card number)
+  assert.equal(payMod.validateUtrReference("432198765432").valid, true);
+  assert.equal(payMod.validateUtrReference("123").valid, false);
+  assert.equal(payMod.containsSensitiveBankingData("UPI PIN 1234"), true);
+  assert.equal(payMod.containsSensitiveBankingData("4111111111111111"), true);
+
+  // 5. Admin verification transitions (Partially Paid -> Fully Paid + Confirmed)
+  const partialTx = payMod.computeVerifiedPaymentTransition(
+    { totalPrice: 12000, paidAmount: 0, bookingStatus: "Payment Pending" },
+    { verifiedAmount: 3600, confirmBooking: true }
+  );
+  assert.equal(partialTx.valid, true);
+  assert.equal(partialTx.paymentStatus, "Partially Paid");
+  assert.equal(partialTx.remainingBalance, 8400);
+  assert.equal(partialTx.bookingStatus, "Confirmed");
+
+  const fullTx = payMod.computeVerifiedPaymentTransition(
+    { totalPrice: 12000, paidAmount: 3600, bookingStatus: "Confirmed" },
+    { verifiedAmount: 8400, confirmBooking: true }
+  );
+  assert.equal(fullTx.paymentStatus, "Fully Paid");
+  assert.equal(fullTx.remainingBalance, 0);
+
+  // 6. Strict customer privacy isolation in Customer Private Payment Portal
+  const mixedPayments = [
+    {
+      id: "pay_a1",
+      customerUid: "uid_A",
+      customerName: "Riya A",
+      paymentCategory: "model_advance",
+      modelName: "Ananya",
+      serviceType: "Fashion Editorial Shoot",
+      shootDate: "2026-12-20",
+      totalPrice: 10000,
+      requiredAdvance: 3000,
+      paidAmount: 3000,
+      remainingBalance: 7000,
+      priceSetByAdmin: true,
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      utrNumber: "UTR_ALICE_111",
+      adminNotes: "INTERNAL_SECRET_ADMIN_NOTE"
+    },
+    {
+      id: "pay_b1",
+      customerUid: "uid_B",
+      customerName: "Vikram B Secret",
+      paymentCategory: "wedding_booking",
+      eventType: "Wedding Photography",
+      shootDate: "2026-12-25",
+      totalPrice: 80000,
+      requiredAdvance: 20000,
+      paidAmount: 20000,
+      remainingBalance: 60000,
+      priceSetByAdmin: true,
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      utrNumber: "UTR_BOB_999999",
+      adminNotes: "BOB_PRIVATE_NOTE"
+    }
+  ];
+
+  const customerHtml = payMod.renderCustomerPaymentsPortalHtml({
+    payments: mixedPayments,
+    paymentConfig: cfgCheck.clean,
+    currentUserUid: "uid_A",
+    currentUserName: "Riya A"
+  });
+  assert.ok(customerHtml.includes("UTR_ALICE_111"));
+  assert.equal(customerHtml.includes("Vikram B Secret"), false, "Customer A must NEVER see Customer B's name");
+  assert.equal(customerHtml.includes("UTR_BOB_999999"), false, "Customer A must NEVER see Customer B's UTR");
+  assert.equal(customerHtml.includes("INTERNAL_SECRET_ADMIN_NOTE"), false, "Customer must NEVER see internal Admin notes");
+
+  // 7. Printable HTML receipt escapes untrusted input cleanly
+  const receiptHtml = payMod.buildPrintablePaymentReceiptHtml(
+    { ...mixedPayments[0], customerName: '<script>alert("xss")</script>' },
+    cfgCheck.clean
+  );
+  assert.equal(receiptHtml.includes("<script>alert"), false);
+  assert.ok(receiptHtml.includes("&lt;script&gt;"));
+
+  // 8. Firestore rules, HTML Admin tab, and SW precache verified
+  assert.ok(rules.includes("match /bookingPayments/{paymentId}"));
+  assert.ok(rules.includes("isValidPaymentSettingsConfig"));
+  assert.ok(indexHtml.includes('data-admin-tab="payments"'));
+  assert.ok(swJs.includes('"/js/payment-system.js"'));
+});
+
+
 
 
 

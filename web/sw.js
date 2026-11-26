@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v61";
+const CACHE_VERSION = "star-artist-pwa-v63";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -29,6 +29,7 @@ const APP_SHELL_URLS = [
   "/js/admin-pro-network.js",
   "/js/app.js",
   "/js/auth-gate.js",
+  "/js/booking-calendar.js",
   "/js/booking-status.js",
   "/js/catalog-reviews.js",
   "/js/company-booking.js",
@@ -44,6 +45,7 @@ const APP_SHELL_URLS = [
   "/js/model-portal.js",
   "/js/newsletter.js",
   "/js/offline-sync.js",
+  "/js/payment-system.js",
   "/js/private-chat.js",
   "/js/pro-network.js",
   "/js/testimonials.js",

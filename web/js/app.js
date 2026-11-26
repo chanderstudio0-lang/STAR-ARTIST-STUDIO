@@ -254,7 +254,20 @@ import {
   adminDeleteCustomerCatalog,
   adminAssignCustomerSlot,
   adminUpdateCustomerSlotStatus,
-  adminDeleteCustomerSlot
+  adminDeleteCustomerSlot,
+  fetchStudioBookedSlots,
+  fetchPaymentSettings,
+  adminSavePaymentSettings,
+  fetchMyBookingPayments,
+  createModelAdvancePaymentRequest,
+  createWeddingBookingPaymentRequest,
+  submitCustomerPaymentUtr,
+  requestCustomerPaymentRefund,
+  adminFetchAllBookingPayments,
+  adminSetBookingPaymentPricing,
+  adminVerifyBookingPayment,
+  adminRejectBookingPayment,
+  adminProcessBookingPaymentRefund
 } from "./firebase.js";
 import {
   renderApprovedProfessionalsDirectoryHtml,
@@ -284,6 +297,17 @@ import {
   renderCustomerPortalHtml,
   renderAdminCustomerPortalTabHtml
 } from "./customer-portal.js";
+import {
+  buildBookedSlotIndex,
+  getFirstAvailableTimeForDate,
+  isStudioSlotBooked,
+  renderBookingCalendarHtml
+} from "./booking-calendar.js";
+import {
+  DEFAULT_PAYMENT_CONFIG,
+  buildPrintablePaymentReceiptHtml,
+  renderAdminPaymentDashboardHtml
+} from "./payment-system.js";
 
 const state = {
   lang: localStorage.getItem("star_artist_lang") === "hi" ? "hi" : "en",
@@ -356,6 +380,14 @@ const state = {
   portalDeniedNotice: "",
   portalHighlightedBookingId: "",
   adminPortalData: { catalogs: [], slots: [] },
+  studioBookedSlots: [],
+  bookingCalYear: new Date().getFullYear(),
+  bookingCalMonth: new Date().getMonth(),
+  paymentConfig: { ...DEFAULT_PAYMENT_CONFIG },
+  myBookingPayments: [],
+  activePaymentForm: "model",
+  adminBookingPayments: [],
+  adminPaymentFilter: "all",
   modelRegPortfolioPhotos: [],
   editingModelId: null,
   editModelDraftPhotos: [],
@@ -1665,7 +1697,7 @@ async function loadAdminConsole() {
   syncAdminUiVisibility(document, { isAdmin: true, adminEmail: state.user?.email || "" });
 
   try {
-    const [dashData, weddingConfigs, alertSettings, alertLogs, proNetData, portalAdminData] = await Promise.all([
+    const [dashData, weddingConfigs, alertSettings, alertLogs, proNetData, portalAdminData, payConfig, allPayments] = await Promise.all([
       adminFetchDashboardData(),
       fetchWeddingPackageConfigs(),
       adminFetchEmailAlertSettings(),
@@ -1679,11 +1711,15 @@ async function loadAdminConsole() {
       adminFetchCustomerPortalData().catch(() => ({
         catalogs: [],
         slots: []
-      }))
+      })),
+      fetchPaymentSettings().catch(() => ({ ...DEFAULT_PAYMENT_CONFIG })),
+      adminFetchAllBookingPayments().catch(() => [])
     ]);
     state.adminData = dashData;
     state.adminProData = proNetData;
     state.adminPortalData = portalAdminData;
+    state.paymentConfig = payConfig;
+    state.adminBookingPayments = Array.isArray(allPayments) ? allPayments : [];
     state.weddingPackageConfigs = weddingConfigs;
     state.adminEmailAlertSettings = normalizeAdminEmailAlertSettings(alertSettings);
     state.adminEmailAlerts = Array.isArray(alertLogs) ? alertLogs : [];
@@ -1753,7 +1789,8 @@ function renderAdminConsole() {
     "pro-booking-history": state.adminData.bookings.length + hiringList.length + outsourcingList.length,
     "customer-portal":
       (Array.isArray(state.adminPortalData?.catalogs) ? state.adminPortalData.catalogs.length : 0) +
-      (Array.isArray(state.adminPortalData?.slots) ? state.adminPortalData.slots.length : 0)
+      (Array.isArray(state.adminPortalData?.slots) ? state.adminPortalData.slots.length : 0),
+    payments: Array.isArray(state.adminBookingPayments) ? state.adminBookingPayments.length : 0
   };
   document.querySelectorAll("[data-admin-count]").forEach((badge) => {
     const key = badge.getAttribute("data-admin-count");
@@ -1940,6 +1977,15 @@ function renderAdminConsole() {
       t,
       escapeHtml
     });
+  } else if (state.adminTab === "payments") {
+    body.innerHTML = renderAdminPaymentDashboardHtml({
+      payments: state.adminBookingPayments || [],
+      paymentConfig: state.paymentConfig || DEFAULT_PAYMENT_CONFIG,
+      filterStatus: state.adminPaymentFilter || "all",
+      lang: state.lang,
+      t,
+      escapeHtml
+    });
   } else {
     body.innerHTML = `
       <form id="adminAnnouncementForm" class="studio-card form-grid">
@@ -2029,7 +2075,10 @@ async function refreshCloudData() {
         myBlockRes,
         myProfileRes,
         myCatalogsRes,
-        mySlotsRes
+        mySlotsRes,
+        bookedSlotsRes,
+        paymentSettingsRes,
+        myPaymentsRes
       ] = await Promise.allSettled([
         fetchMyBookings(state.user.uid),
         fetchMyModels(state.user.uid),
@@ -2045,7 +2094,10 @@ async function refreshCloudData() {
         fetchMyChatBlockStatus(state.user.uid),
         fetchMyUserProfile(state.user.uid),
         fetchMyCustomerCatalogs(state.user.uid),
-        fetchMyCustomerSlots(state.user.uid)
+        fetchMyCustomerSlots(state.user.uid),
+        fetchStudioBookedSlots(),
+        fetchPaymentSettings(),
+        fetchMyBookingPayments(state.user.uid)
       ]);
       if (bookingsRes.status === "fulfilled") state.myBookings = bookingsRes.value;
       if (modelsRes.status === "fulfilled") state.myModels = modelsRes.value;
@@ -2067,8 +2119,12 @@ async function refreshCloudData() {
       if (myProfileRes.status === "fulfilled") state.myUserProfile = myProfileRes.value;
       if (myCatalogsRes.status === "fulfilled") state.myCustomerCatalogs = myCatalogsRes.value;
       if (mySlotsRes.status === "fulfilled") state.myCustomerSlots = mySlotsRes.value;
+      if (bookedSlotsRes.status === "fulfilled") state.studioBookedSlots = bookedSlotsRes.value;
+      if (paymentSettingsRes.status === "fulfilled") state.paymentConfig = paymentSettingsRes.value;
+      if (myPaymentsRes.status === "fulfilled") state.myBookingPayments = myPaymentsRes.value;
 
       renderMyBookings();
+      renderBookingSlotCalendar();
       renderMyModels();
       renderMyCompanyBookings();
       renderCatalog();
@@ -4452,6 +4508,17 @@ function wireEvents() {
       return;
     }
 
+    const bookedIndex = buildBookedSlotIndex(state.studioBookedSlots, state.myBookings);
+    if (isStudioSlotBooked(bookedIndex, payload.preferredDate, payload.preferredTime)) {
+      showToast(
+        state.lang === "hi"
+          ? "यह तारीख और स्टूडियो स्लॉट पहले से बुक है। कृपया कोई अन्य उपलब्ध स्लॉट चुनें।"
+          : "This studio date and time slot is already booked. Please choose another available slot."
+      );
+      renderBookingSlotCalendar();
+      return;
+    }
+
     const queueBookingOffline = async () => {
       const syncCtx = await getBookingSyncContext();
       const record = createQueuedBookingRecord({
@@ -5355,6 +5422,10 @@ function clearProtectedStudioViews() {
   state.portalDeniedNotice = "";
   state.portalHighlightedBookingId = "";
   state.adminPortalData = { catalogs: [], slots: [] };
+  state.studioBookedSlots = [];
+  state.paymentConfig = { ...DEFAULT_PAYMENT_CONFIG };
+  state.myBookingPayments = [];
+  state.adminBookingPayments = [];
   state.editingModelId = null;
   state.editModelDraftPhotos = [];
   state.myCompanyProfile = null;
@@ -5383,6 +5454,7 @@ function clearProtectedStudioViews() {
     "homeShowcaseGrid",
     "homeTestimonialCarousel",
     "customerPortalBody",
+    "bookingSlotCalendar",
     "catalogGrid",
     "galleryGrid",
     "publicModelsGrid",
@@ -5419,6 +5491,7 @@ function renderProtectedStudioViews() {
     state.publicModels = mergePublicModels([]);
   }
   populateBookingServicesDropdown();
+  renderBookingSlotCalendar();
   renderCatalog();
   renderGallery();
   renderTestimonialCarousel();
@@ -6560,7 +6633,407 @@ function wireProNetworkEvents() {
       } catch (err) {
         showToast(err?.message || "Unable to assign booking slot.");
       }
+      return;
     }
+
+    // Customer Model Advance Payment Request Form
+    const modelPayForm = e.target.closest("#customerModelPaymentForm");
+    if (modelPayForm) {
+      e.preventDefault();
+      if (!isAuthenticatedMember(state.user)) return;
+      const sel = document.getElementById("payModelSelect");
+      const selOpt = sel?.options?.[sel.selectedIndex];
+      try {
+        await createModelAdvancePaymentRequest({
+          customerName: document.getElementById("payModelCustomerName")?.value || "",
+          customerContact: document.getElementById("payModelContact")?.value || "",
+          modelId: sel?.value || "",
+          modelName: selOpt?.getAttribute("data-model-name") || selOpt?.textContent || "",
+          serviceType: document.getElementById("payModelService")?.value || "",
+          shootDate: document.getElementById("payModelDate")?.value || "",
+          shootTime: document.getElementById("payModelTime")?.value || "",
+          eventDetails: document.getElementById("payModelNotes")?.value || ""
+        });
+        showToast(state.lang === "hi" ? "मॉडल बुकिंग अनुरोध भेज दिया गया (Payment Pending)!" : "Model booking request submitted (Payment Pending)!");
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to submit model booking request.");
+      }
+      return;
+    }
+
+    // Customer Wedding / Event Payment Request Form
+    const wedPayForm = e.target.closest("#customerWeddingPaymentForm");
+    if (wedPayForm) {
+      e.preventDefault();
+      if (!isAuthenticatedMember(state.user)) return;
+      try {
+        await createWeddingBookingPaymentRequest({
+          customerName: document.getElementById("payWedCustomerName")?.value || "",
+          customerContact: document.getElementById("payWedContact")?.value || "",
+          eventType: document.getElementById("payWedEventType")?.value || "",
+          shootDate: document.getElementById("payWedDate")?.value || "",
+          shootTime: document.getElementById("payWedTime")?.value || "",
+          eventLocation: document.getElementById("payWedLocation")?.value || "",
+          eventDetails: document.getElementById("payWedDetails")?.value || ""
+        });
+        showToast(state.lang === "hi" ? "शादी/इवेंट बुकिंग अनुरोध एडमिन समीक्षा हेतु भेज दिया गया!" : "Wedding / event booking request submitted for Admin pricing!");
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to submit wedding booking request.");
+      }
+      return;
+    }
+
+    // Customer UTR Submission Form
+    const utrForm = e.target.closest("[data-customer-utr-form]");
+    if (utrForm) {
+      e.preventDefault();
+      if (!isAuthenticatedMember(state.user)) return;
+      const paymentId = utrForm.getAttribute("data-customer-utr-form") || "";
+      const utrNumber = utrForm.querySelector("[name='utrNumber']")?.value || "";
+      const fileInput = utrForm.querySelector("[name='screenshotFile']");
+      let screenshotDataUrl = "";
+      if (fileInput?.files?.[0]) {
+        try {
+          screenshotDataUrl = await compressPaymentImageFile(fileInput.files[0]);
+        } catch (imgErr) {
+          showToast(imgErr?.message || "Could not process payment screenshot.");
+          return;
+        }
+      }
+      try {
+        await submitCustomerPaymentUtr({ paymentId, utrNumber, screenshotDataUrl });
+        showToast(state.lang === "hi" ? "UTR सत्यापन हेतु जमा कर दिया गया!" : "UTR submitted for Admin verification!");
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to submit UTR.");
+      }
+      return;
+    }
+
+    // Admin UPI Config Form
+    const upiCfgForm = e.target.closest("#adminUpiConfigForm");
+    if (upiCfgForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      let qrImageDataUrl = state.paymentConfig?.qrImageDataUrl || "";
+      const qrFile = document.getElementById("adminUpiQrFile")?.files?.[0];
+      if (qrFile) {
+        try {
+          qrImageDataUrl = await compressPaymentImageFile(qrFile);
+        } catch (imgErr) {
+          showToast(imgErr?.message || "Could not process QR image.");
+          return;
+        }
+      }
+      const nextUpiId = String(document.getElementById("adminUpiId")?.value || "").trim();
+      const upiChanged =
+        Boolean(state.paymentConfig?.upiId) &&
+        nextUpiId.toLowerCase() !== String(state.paymentConfig.upiId).trim().toLowerCase();
+      const qrVerifiedChecked = Boolean(document.getElementById("adminUpiQrVerified")?.checked);
+      const enabledChecked = Boolean(document.getElementById("adminUpiEnabled")?.checked);
+
+      // Replacing the QR image or changing the UPI ID requires saving & re-verifying the QR before activating payments
+      const effectiveQrVerified = qrFile || upiChanged ? false : qrVerifiedChecked;
+      const effectiveEnabled = effectiveQrVerified ? enabledChecked : false;
+      if ((qrFile || upiChanged) && (qrVerifiedChecked || enabledChecked)) {
+        showToast(
+          state.lang === "hi"
+            ? "नया QR/UPI सहेजा गया। कृपया QR स्कैन कर सत्यापित करें, फिर भुगतान चालू करें।"
+            : "New QR/UPI saved in disabled state. Verify that the QR matches the official UPI ID before activating payments."
+        );
+      }
+
+      try {
+        await adminSavePaymentSettings({
+          enabled: effectiveEnabled,
+          upiId: nextUpiId,
+          payeeName: document.getElementById("adminUpiPayeeName")?.value || "",
+          qrImageDataUrl,
+          qrVerified: effectiveQrVerified,
+          instructions: document.getElementById("adminUpiInstructions")?.value || "",
+          modelAdvanceMode: document.getElementById("adminModelAdvMode")?.value || "percentage",
+          modelAdvanceValue: Number(document.getElementById("adminModelAdvValue")?.value || 0),
+          weddingChargeMode: document.getElementById("adminWedChargeMode")?.value || "percentage",
+          weddingChargeValue: Number(document.getElementById("adminWedChargeValue")?.value || 0)
+        });
+        showToast(state.lang === "hi" ? "UPI भुगतान सेटिंग्स सहेजी गईं!" : "UPI payment configuration saved!");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to save UPI configuration.");
+      }
+      return;
+    }
+
+    // Admin Set Package Price & Advance Charge
+    const setPriceForm = e.target.closest("[data-admin-set-price-form]");
+    if (setPriceForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const paymentId = setPriceForm.getAttribute("data-admin-set-price-form") || "";
+      try {
+        await adminSetBookingPaymentPricing({
+          paymentId,
+          totalPrice: Number(setPriceForm.querySelector("[name='totalPrice']")?.value || 0),
+          chargeMode: setPriceForm.querySelector("[name='chargeMode']")?.value || "percentage",
+          chargeValue: Number(setPriceForm.querySelector("[name='chargeValue']")?.value || 0)
+        });
+        showToast("Admin price & booking charge updated!");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to update pricing.");
+      }
+      return;
+    }
+
+    // Admin Verify Manual UPI Payment
+    const verifyPayForm = e.target.closest("[data-admin-verify-pay-form]");
+    if (verifyPayForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const paymentId = verifyPayForm.getAttribute("data-admin-verify-pay-form") || "";
+      try {
+        await adminVerifyBookingPayment({
+          paymentId,
+          verifiedAmount: Number(verifyPayForm.querySelector("[name='verifiedAmount']")?.value || 0),
+          adminNotes: verifyPayForm.querySelector("[name='adminNotes']")?.value || "",
+          confirmBooking: Boolean(verifyPayForm.querySelector("[name='confirmBooking']")?.checked)
+        });
+        showToast("Payment verified & balance updated!");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to verify payment.");
+      }
+      return;
+    }
+
+    // Admin Reject Payment
+    const rejectPayForm = e.target.closest("[data-admin-reject-pay-form]");
+    if (rejectPayForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const paymentId = rejectPayForm.getAttribute("data-admin-reject-pay-form") || "";
+      try {
+        await adminRejectBookingPayment({
+          paymentId,
+          rejectionReason: rejectPayForm.querySelector("[name='rejectionReason']")?.value || ""
+        });
+        showToast("Payment marked as Payment Rejected.");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to reject payment.");
+      }
+      return;
+    }
+
+    // Admin Refund Processed
+    const refundPayForm = e.target.closest("[data-admin-refund-pay-form]");
+    if (refundPayForm) {
+      e.preventDefault();
+      if (!hasVerifiedAdminSession()) return;
+      const paymentId = refundPayForm.getAttribute("data-admin-refund-pay-form") || "";
+      try {
+        await adminProcessBookingPaymentRefund({
+          paymentId,
+          refundAmount: Number(refundPayForm.querySelector("[name='refundAmount']")?.value || 0),
+          refundReference: refundPayForm.querySelector("[name='refundReference']")?.value || ""
+        });
+        showToast("Refund recorded as Refund Processed.");
+        await loadAdminConsole();
+      } catch (err) {
+        showToast(err?.message || "Unable to record refund.");
+      }
+    }
+  });
+
+  // Booking Calendar & Payment System delegated clicks
+  document.addEventListener("click", async (e) => {
+    const calNav = e.target.closest("[data-cal-nav]");
+    if (calNav) {
+      const delta = Number(calNav.getAttribute("data-cal-nav") || 0);
+      const nextDate = new Date(state.bookingCalYear, state.bookingCalMonth + delta, 1);
+      state.bookingCalYear = nextDate.getFullYear();
+      state.bookingCalMonth = nextDate.getMonth();
+      renderBookingSlotCalendar();
+      return;
+    }
+
+    const calDayBtn = e.target.closest("[data-cal-date]");
+    if (calDayBtn && !calDayBtn.disabled) {
+      const pickedDate = calDayBtn.getAttribute("data-cal-date") || "";
+      const dateEl = document.getElementById("bookingDate");
+      const timeEl = document.getElementById("bookingTime");
+      if (dateEl && pickedDate) {
+        dateEl.value = pickedDate;
+        const slotIndex = buildBookedSlotIndex(state.studioBookedSlots, state.myBookings);
+        if (timeEl && isStudioSlotBooked(slotIndex, pickedDate, timeEl.value)) {
+          const openTime = getFirstAvailableTimeForDate(slotIndex, pickedDate);
+          if (openTime) timeEl.value = openTime;
+        }
+        renderBookingSlotCalendar();
+      }
+      return;
+    }
+
+    const calSlotBtn = e.target.closest("[data-cal-slot]");
+    if (calSlotBtn && !calSlotBtn.disabled) {
+      const pickedTime = calSlotBtn.getAttribute("data-cal-slot") || "";
+      const timeEl = document.getElementById("bookingTime");
+      if (timeEl && pickedTime) {
+        timeEl.value = pickedTime;
+        renderBookingSlotCalendar();
+      }
+      return;
+    }
+
+    const payFormTab = e.target.closest("[data-payment-form-tab]");
+    if (payFormTab) {
+      const tabVal = payFormTab.getAttribute("data-payment-form-tab");
+      state.activePaymentForm = tabVal === "wedding" ? "wedding" : "model";
+      renderCustomerPortalView();
+      return;
+    }
+
+    const copyUpiBtn = e.target.closest("[data-copy-upi]");
+    if (copyUpiBtn) {
+      const upi = copyUpiBtn.getAttribute("data-copy-upi") || "";
+      if (upi && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(upi);
+          showToast(`UPI ID copied: ${upi}`);
+        } catch {
+          showToast(`UPI ID: ${upi}`);
+        }
+      }
+      return;
+    }
+
+    const adminPayFilterBtn = e.target.closest("[data-admin-pay-filter]");
+    if (adminPayFilterBtn && hasVerifiedAdminSession()) {
+      state.adminPaymentFilter = adminPayFilterBtn.getAttribute("data-admin-pay-filter") || "all";
+      renderAdminConsole();
+      return;
+    }
+
+    const printReceiptBtn = e.target.closest("[data-print-payment-receipt]");
+    if (printReceiptBtn) {
+      const pid = printReceiptBtn.getAttribute("data-print-payment-receipt") || "";
+      const record =
+        (state.adminBookingPayments || []).find((x) => x.id === pid) ||
+        (state.myBookingPayments || []).find((x) => x.id === pid);
+      if (!record) return;
+      const receiptHtml = buildPrintablePaymentReceiptHtml(record, state.paymentConfig || DEFAULT_PAYMENT_CONFIG, { escapeHtml });
+      const win = window.open("", "_blank", "noopener,noreferrer");
+      if (win) {
+        win.document.open();
+        win.document.write(receiptHtml);
+        win.document.close();
+      } else {
+        showToast("Allow pop-ups to print or download your payment receipt.");
+      }
+      return;
+    }
+
+    const reqRefundBtn = e.target.closest("[data-request-payment-refund]");
+    if (reqRefundBtn && isAuthenticatedMember(state.user)) {
+      const pid = reqRefundBtn.getAttribute("data-request-payment-refund") || "";
+      const reason = window.prompt(
+        state.lang === "hi" ? "रिफंड अनुरोध का कारण दर्ज करें:" : "Enter reason for refund request:"
+      );
+      if (!reason || !reason.trim()) return;
+      try {
+        await requestCustomerPaymentRefund({ paymentId: pid, refundReason: reason.trim() });
+        showToast(state.lang === "hi" ? "रिफंड अनुरोध भेज दिया गया।" : "Refund request submitted.");
+        await refreshCloudData();
+      } catch (err) {
+        showToast(err?.message || "Unable to submit refund request.");
+      }
+    }
+  });
+
+  document.getElementById("bookingDate")?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+      const [y, m] = val.split("-").map((x) => parseInt(x, 10));
+      state.bookingCalYear = y;
+      state.bookingCalMonth = m - 1;
+    }
+    renderBookingSlotCalendar();
+  });
+
+  document.getElementById("bookingTime")?.addEventListener("change", () => {
+    renderBookingSlotCalendar();
+  });
+}
+
+function compressPaymentImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\/(jpeg|jpg|png|webp)$/i.test(file.type || "")) {
+      reject(new Error("Please upload a JPG, PNG, or WebP image."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read image file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Invalid image file."));
+      img.onload = () => {
+        const maxDim = 680;
+        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round((img.width || 1) * scale));
+        canvas.height = Math.max(1, Math.round((img.height || 1) * scale));
+        const ctx2d = canvas.getContext("2d");
+        ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+        if (dataUrl.length > 175000) {
+          reject(new Error("Image is too large even after compression. Please use a smaller image."));
+          return;
+        }
+        resolve(dataUrl);
+      };
+      img.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderBookingSlotCalendar() {
+  const host = document.getElementById("bookingSlotCalendar");
+  if (!host) return;
+  if (!isAuthenticatedMember(state.user)) {
+    host.innerHTML = "";
+    return;
+  }
+  const dateEl = document.getElementById("bookingDate");
+  const timeEl = document.getElementById("bookingTime");
+  const selectedDate = dateEl?.value || "";
+  const selectedTime = timeEl?.value || "11:30 AM";
+  const slotIndex = buildBookedSlotIndex(state.studioBookedSlots, state.myBookings);
+
+  // Sync <select id="bookingTime"> option availability so booked slots are clearly disabled
+  if (timeEl && selectedDate) {
+    Array.from(timeEl.options).forEach((opt) => {
+      const booked = isStudioSlotBooked(slotIndex, selectedDate, opt.value);
+      opt.disabled = booked;
+    });
+    if (isStudioSlotBooked(slotIndex, selectedDate, timeEl.value)) {
+      const firstOpen = getFirstAvailableTimeForDate(slotIndex, selectedDate);
+      if (firstOpen) timeEl.value = firstOpen;
+    }
+  }
+
+  host.innerHTML = renderBookingCalendarHtml({
+    viewYear: state.bookingCalYear,
+    viewMonth: state.bookingCalMonth,
+    selectedDate,
+    selectedTime: timeEl?.value || selectedTime,
+    slotIndex,
+    minDateStr: dateEl?.min || "",
+    lang: state.lang,
+    t,
+    escapeHtml
   });
 }
 
@@ -6636,6 +7109,10 @@ function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
     chatDraftText: state.userChatDraftText,
     chatDraftImage: state.userChatDraftImage,
     isChatSending: state.userChatSending,
+    payments: state.myBookingPayments,
+    paymentConfig: state.paymentConfig || DEFAULT_PAYMENT_CONFIG,
+    publicModels: state.publicModels || [],
+    activePaymentForm: state.activePaymentForm || "model",
     activeTab: state.portalTab,
     deniedResourceNotice: state.portalDeniedNotice,
     highlightedBookingId: state.portalHighlightedBookingId,

@@ -1,5 +1,10 @@
 import { formatNetworkTimestamp } from "./pro-network.js";
 import { renderUserPrivateChatHtml } from "./private-chat.js";
+import {
+  DEFAULT_PAYMENT_CONFIG,
+  filterCustomerPayments,
+  renderCustomerPaymentsPortalHtml
+} from "./payment-system.js";
 
 export const CUSTOMER_PORTAL_TABS = [
   "my-catalog",
@@ -7,6 +12,7 @@ export const CUSTOMER_PORTAL_TABS = [
   "my-registration",
   "approval-status",
   "my-bookings",
+  "my-payments",
   "my-messages"
 ];
 
@@ -429,6 +435,10 @@ export function renderCustomerPortalHtml({
   chatDraftText = "",
   chatDraftImage = "",
   isChatSending = false,
+  payments = [],
+  paymentConfig = DEFAULT_PAYMENT_CONFIG,
+  publicModels = [],
+  activePaymentForm = "model",
   activeTab = "my-catalog",
   deniedResourceNotice = "",
   highlightedBookingId = "",
@@ -449,6 +459,7 @@ export function renderCustomerPortalHtml({
   const ownModels = filterCustomerOwnedRecords(models, uid);
   const ownCompanyBookings = filterCustomerOwnedRecords(companyBookings, uid);
   const ownThreads = filterCustomerOwnedRecords(chatThreads, uid);
+  const ownPayments = filterCustomerPayments(payments, uid);
 
   const safeProfile =
     userProfile && (String(userProfile.userId || userProfile.id || "").trim() === uid)
@@ -493,6 +504,10 @@ export function renderCustomerPortalHtml({
       <button type="button" class="chip-btn ${safeTab === "my-bookings" ? "active" : ""}" role="tab" aria-selected="${safeTab === "my-bookings"}" data-portal-tab="my-bookings">
         <span>${escapeHtml(t("portalTabMyBookings"))}</span>
         <span class="filter-count-badge">${ownBookings.length + ownHiring.length + ownCompanyBookings.length}</span>
+      </button>
+      <button type="button" class="chip-btn ${safeTab === "my-payments" ? "active" : ""}" role="tab" aria-selected="${safeTab === "my-payments"}" data-portal-tab="my-payments">
+        <span>${escapeHtml(t("portalTabMyPayments"))}</span>
+        <span class="filter-count-badge">${ownPayments.length}</span>
       </button>
       <button type="button" class="chip-btn ${safeTab === "my-messages" ? "active" : ""}" role="tab" aria-selected="${safeTab === "my-messages"}" data-portal-tab="my-messages">
         <span>${escapeHtml(t("portalTabMyMessages"))}</span>
@@ -776,6 +791,21 @@ export function renderCustomerPortalHtml({
                 <button type="button" class="btn-gold btn-sm" data-route="booking">${escapeHtml(t("heroBookCta"))}</button>
               </div>`
         }
+      </div>`;
+  } else if (safeTab === "my-payments") {
+    panelHtml = `
+      <div class="portal-section-panel" data-portal-panel="my-payments">
+        ${renderCustomerPaymentsPortalHtml({
+          payments: ownPayments,
+          paymentConfig,
+          publicModels,
+          currentUserUid: uid,
+          currentUserName: safeProfile?.displayName || user?.displayName || "",
+          activePaymentForm,
+          lang,
+          t,
+          escapeHtml
+        })}
       </div>`;
   } else {
     // my-messages: strictly this customer's private conversation with Studio Admin

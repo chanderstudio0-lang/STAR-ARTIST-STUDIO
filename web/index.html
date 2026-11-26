@@ -580,6 +580,9 @@
             <select id="bookingService" class="input" required></select>
             <div id="bookingWeddingSummary" class="booking-wedding-summary hidden" aria-live="polite"></div>
           </div>
+          <div class="field full">
+            <div id="bookingSlotCalendar" class="booking-slot-calendar-host" aria-live="polite"></div>
+          </div>
           <div class="field">
             <label for="bookingDate" data-i18n="dateLabel">Preferred Shoot Date</label>
             <input id="bookingDate" class="input" type="date" required />
@@ -1496,6 +1499,10 @@
           <button type="button" class="chip-btn" data-admin-tab="customer-portal">
             <span data-i18n="adminTabCustomerPortal">Customer Portal</span>
             <span class="filter-count-badge" data-admin-count="customer-portal">0</span>
+          </button>
+          <button type="button" class="chip-btn" data-admin-tab="payments">
+            <span data-i18n="adminTabPayments">UPI Payments</span>
+            <span class="filter-count-badge" data-admin-count="payments">0</span>
           </button>
         </div>
         <div id="adminTabBody" style="display: flex; flex-direction: column; gap: 14px;"></div>
