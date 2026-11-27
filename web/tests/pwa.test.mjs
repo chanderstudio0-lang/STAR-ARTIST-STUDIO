@@ -6855,7 +6855,7 @@ test("Gallery upload flow integrates HTML Canvas image cropping and brightness a
   assert.ok(css.includes(".gallery-editor-result-canvas"));
 
   const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
-  assert.ok(swJs.includes("star-artist-pwa-v68"));
+  assert.ok(swJs.includes("star-artist-pwa-v69"));
   assert.ok(swJs.includes('"/js/image-editor.js"'));
 });
 
@@ -7173,6 +7173,34 @@ test("UPI QR Upload saves immediately on file selection, syncs paymentConfig sta
   assert.ok(i18nMod.TRANSLATIONS.hi.adminPayQrUploadSuccessToast);
   assert.ok(css.includes(".admin-qr-live-badge.is-uploading"));
   assert.ok(css.includes(".admin-qr-saved-note"));
+});
+
+test("UPI QR Permission Hardening uses O(1) prefix-slice Firestore rule, refreshes Admin ID token, stays Spark-free without Storage billing, and forbids open rules", async () => {
+  const rulesPath = path.resolve(webDir, "..", "firestore.rules");
+  const rules = fs.readFileSync(rulesPath, "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+
+  // 1. O(1) 32-byte prefix-slice validation prevents production RE2 regex limit errors on large base64 QR images
+  assert.ok(rules.includes("function isValidPaymentImageDataUrl(val)"));
+  assert.ok(rules.includes("val[0:32].matches('^data:image/(jpeg|jpg|png|webp);base64,.*')"));
+  assert.equal(rules.includes("data.qrImageDataUrl.matches('^data:image/"), false);
+  assert.equal(rules.includes("data.screenshotDataUrl.matches('^data:image/"), false);
+
+  // 2. Zero open wildcard permissions anywhere in firestore.rules
+  assert.equal(/allow\s+read\s*,\s*write\s*:\s*if\s+true/i.test(rules), false);
+  assert.ok(rules.includes("match /{document=**}"));
+  assert.ok(rules.includes("allow read, write: if false;"));
+  assert.ok(rules.includes("allow create, update: if isAdmin() && isValidPaymentSettingsConfig(incoming(), configId);"));
+
+  // 3. adminSavePaymentSettings refreshes Admin ID token, gives clear permission error, and stays on Spark-free Firestore (no Storage upload)
+  const fnStart = firebaseJs.indexOf("export async function adminSavePaymentSettings");
+  const fnEnd = firebaseJs.indexOf("export async function fetchMyBookingPayments");
+  assert.ok(fnStart > 0 && fnEnd > fnStart);
+  const saveFnBody = firebaseJs.slice(fnStart, fnEnd);
+  assert.ok(saveFnBody.includes("adminUser.getIdToken(true)"));
+  assert.ok(saveFnBody.includes("permission-denied"));
+  assert.ok(saveFnBody.includes("paymentConfig/paymentSettings"));
+  assert.equal(saveFnBody.includes("getStorage"), false, "QR upload must remain on Spark-free Firestore, not paid Storage");
 });
 
 

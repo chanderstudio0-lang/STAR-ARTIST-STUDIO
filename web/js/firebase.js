@@ -2478,7 +2478,31 @@ export async function adminSavePaymentSettings(input = {}) {
     updatedByEmail,
     updatedAt: fsMod.serverTimestamp()
   };
-  await fsMod.setDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"), payload);
+
+  // Refresh the Admin ID token so Firestore Security Rules receive a fresh email_verified claim
+  if (typeof adminUser.getIdToken === "function") {
+    try {
+      await adminUser.getIdToken(true);
+    } catch {
+      // Proceed with existing valid session token if offline refresh fails
+    }
+  }
+
+  try {
+    await fsMod.setDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"), payload);
+  } catch (err) {
+    const code = String(err?.code || "").toLowerCase();
+    const rawMsg = String(err?.message || "");
+    if (code.includes("permission-denied") || /missing or insufficient permissions/i.test(rawMsg)) {
+      const permErr = new Error(
+        "Permission denied while saving QR to Firestore (paymentConfig/paymentSettings). Confirm you are signed in with verified chanderstudio0@gmail.com and that the latest firestore.rules are deployed to Firebase."
+      );
+      permErr.code = "permission-denied";
+      throw permErr;
+    }
+    throw err;
+  }
+
   return {
     ...DEFAULT_PAYMENT_CONFIG,
     ...check.clean,

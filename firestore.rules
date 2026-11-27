@@ -560,6 +560,13 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidPaymentImageDataUrl(val) {
+      return val is string &&
+             val.size() >= 100 &&
+             val.size() <= 180000 &&
+             val[0:32].matches('^data:image/(jpeg|jpg|png|webp);base64,.*');
+    }
+
     function isValidPaymentSettingsConfig(data, configId) {
       return configId == 'paymentSettings' &&
              data.keys().hasOnly([
@@ -573,21 +580,14 @@ service cloud.firestore {
              data.upiId is string && data.upiId.size() <= 120 &&
              data.payeeName is string && data.payeeName.size() <= 120 &&
              data.qrImageDataUrl is string && data.qrImageDataUrl.size() <= 180000 &&
-             (data.qrImageDataUrl == '' || (
-               data.qrImageDataUrl.size() >= 100 &&
-               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
-             )) &&
-             (!data.qrVerified || (
-               data.qrImageDataUrl.size() >= 100 &&
-               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
-             )) &&
+             (data.qrImageDataUrl == '' || isValidPaymentImageDataUrl(data.qrImageDataUrl)) &&
+             (!data.qrVerified || isValidPaymentImageDataUrl(data.qrImageDataUrl)) &&
              (!data.enabled || (
                data.upiId.size() >= 5 &&
                data.upiId.matches('^[a-zA-Z0-9._\\-]{2,}@[a-zA-Z0-9]{2,}$') &&
                data.payeeName.size() >= 2 &&
                data.qrVerified == true &&
-               data.qrImageDataUrl.size() >= 100 &&
-               data.qrImageDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
+               isValidPaymentImageDataUrl(data.qrImageDataUrl)
              )) &&
              (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 1000)) &&
              data.modelAdvanceMode in ['percentage', 'fixed'] &&
@@ -640,11 +640,7 @@ service cloud.firestore {
              )) &&
              (!('screenshotDataUrl' in data) || (
                data.screenshotDataUrl is string && (
-                 data.screenshotDataUrl == '' || (
-                   data.screenshotDataUrl.size() >= 100 &&
-                   data.screenshotDataUrl.size() <= 180000 &&
-                   data.screenshotDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,.*')
-                 )
+                 data.screenshotDataUrl == '' || isValidPaymentImageDataUrl(data.screenshotDataUrl)
                )
              )) &&
              (!('submittedAt' in data) || (data.submittedAt is timestamp && data.submittedAt <= request.time)) &&
