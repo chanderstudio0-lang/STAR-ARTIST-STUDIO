@@ -6855,7 +6855,7 @@ test("Gallery upload flow integrates HTML Canvas image cropping and brightness a
   assert.ok(css.includes(".gallery-editor-result-canvas"));
 
   const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
-  assert.ok(swJs.includes("star-artist-pwa-v69"));
+  assert.ok(swJs.includes("star-artist-pwa-v70"));
   assert.ok(swJs.includes('"/js/image-editor.js"'));
 });
 
@@ -7175,32 +7175,164 @@ test("UPI QR Upload saves immediately on file selection, syncs paymentConfig sta
   assert.ok(css.includes(".admin-qr-saved-note"));
 });
 
-test("UPI QR Permission Hardening uses O(1) prefix-slice Firestore rule, refreshes Admin ID token, stays Spark-free without Storage billing, and forbids open rules", async () => {
+test("UPI QR Permission Hardening uses O(1) prefix-slice Firestore rule, verifies signed Admin JWT claims, stays Spark-free without Storage billing, and forbids open rules", async () => {
   const rulesPath = path.resolve(webDir, "..", "firestore.rules");
   const rules = fs.readFileSync(rulesPath, "utf8");
   const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
 
-  // 1. O(1) 32-byte prefix-slice validation prevents production RE2 regex limit errors on large base64 QR images
+  // 1. O(1) 32-byte case-insensitive prefix-slice validation prevents production RE2 regex limit errors on large base64 QR images
   assert.ok(rules.includes("function isValidPaymentImageDataUrl(val)"));
-  assert.ok(rules.includes("val[0:32].matches('^data:image/(jpeg|jpg|png|webp);base64,.*')"));
+  assert.ok(rules.includes("val[0:32].lower().matches('^data:image/(jpeg|jpg|png|webp);base64,.*')"));
   assert.equal(rules.includes("data.qrImageDataUrl.matches('^data:image/"), false);
   assert.equal(rules.includes("data.screenshotDataUrl.matches('^data:image/"), false);
 
   // 2. Zero open wildcard permissions anywhere in firestore.rules
   assert.equal(/allow\s+read\s*,\s*write\s*:\s*if\s+true/i.test(rules), false);
+  assert.equal(/allow\s+write\s*:\s*if\s+true/i.test(rules), false);
   assert.ok(rules.includes("match /{document=**}"));
   assert.ok(rules.includes("allow read, write: if false;"));
   assert.ok(rules.includes("allow create, update: if isAdmin() && isValidPaymentSettingsConfig(incoming(), configId);"));
 
-  // 3. adminSavePaymentSettings refreshes Admin ID token, gives clear permission error, and stays on Spark-free Firestore (no Storage upload)
+  // 3. adminSavePaymentSettings verifies signed Admin JWT claims, gives clear permission error, and stays on Spark-free Firestore (no Storage upload)
   const fnStart = firebaseJs.indexOf("export async function adminSavePaymentSettings");
   const fnEnd = firebaseJs.indexOf("export async function fetchMyBookingPayments");
   assert.ok(fnStart > 0 && fnEnd > fnStart);
   const saveFnBody = firebaseJs.slice(fnStart, fnEnd);
-  assert.ok(saveFnBody.includes("adminUser.getIdToken(true)"));
+  assert.ok(saveFnBody.includes("verifyAuthorizedAdminToken(adminUser)"));
+  assert.ok(firebaseJs.includes("adminUser.getIdTokenResult(true)"));
+  assert.ok(firebaseJs.includes("validateAdminTokenClaims(tokenResult?.claims, adminUser.uid)"));
   assert.ok(saveFnBody.includes("permission-denied"));
   assert.ok(saveFnBody.includes("paymentConfig/paymentSettings"));
   assert.equal(saveFnBody.includes("getStorage"), false, "QR upload must remain on Spark-free Firestore, not paid Storage");
+});
+
+test("Admin JWT Token Verification & Payment Bounds strictly require verified chanderstudio0@gmail.com claims and block anonymous/spoofed tokens or out-of-range payloads", async () => {
+  const guardMod = await import(pathToFileURL(path.join(webDir, "js/admin-guard.js")).href);
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+
+  // 1. Anonymous user with matching email is rejected by isAuthorizedAdminUser
+  assert.equal(
+    guardMod.isAuthorizedAdminUser({
+      uid: "anon_1",
+      email: "chanderstudio0@gmail.com",
+      emailVerified: true,
+      isAnonymous: true
+    }),
+    false
+  );
+
+  // 2. Signed Firebase Auth JWT token claim validation
+  assert.equal(
+    guardMod.validateAdminTokenClaims(
+      {
+        email: "chanderstudio0@gmail.com",
+        email_verified: true,
+        user_id: "admin_uid_001",
+        firebase: { sign_in_provider: "google.com" }
+      },
+      "admin_uid_001"
+    ),
+    true
+  );
+  // Reject unverified email claim
+  assert.equal(
+    guardMod.validateAdminTokenClaims(
+      {
+        email: "chanderstudio0@gmail.com",
+        email_verified: false,
+        user_id: "admin_uid_001",
+        firebase: { sign_in_provider: "password" }
+      },
+      "admin_uid_001"
+    ),
+    false
+  );
+  // Reject wrong email claim
+  assert.equal(
+    guardMod.validateAdminTokenClaims(
+      {
+        email: "customer@gmail.com",
+        email_verified: true,
+        user_id: "cust_uid_001",
+        firebase: { sign_in_provider: "google.com" }
+      },
+      "cust_uid_001"
+    ),
+    false
+  );
+  // Reject anonymous provider claim
+  assert.equal(
+    guardMod.validateAdminTokenClaims(
+      {
+        email: "chanderstudio0@gmail.com",
+        email_verified: true,
+        user_id: "admin_uid_001",
+        firebase: { sign_in_provider: "anonymous" }
+      },
+      "admin_uid_001"
+    ),
+    false
+  );
+  // Reject UID mismatch between signed token and currentUser
+  assert.equal(
+    guardMod.validateAdminTokenClaims(
+      {
+        email: "chanderstudio0@gmail.com",
+        email_verified: true,
+        user_id: "other_uid_999",
+        firebase: { sign_in_provider: "google.com" }
+      },
+      "admin_uid_001"
+    ),
+    false
+  );
+  // Reject null/missing claims
+  assert.equal(guardMod.validateAdminTokenClaims(null, "admin_uid_001"), false);
+
+  // 3. Payment payload bounds align with firestore.rules (payeeName <= 120, amounts <= 10000000, official UPI preserved)
+  const overPayee = payMod.validateAdminPaymentConfigPayload({
+    enabled: false,
+    upiId: "9812890081@ybl",
+    payeeName: "A".repeat(121),
+    qrImageDataUrl: "",
+    qrVerified: false
+  });
+  assert.equal(overPayee.valid, false);
+
+  const overFixedAmount = payMod.validateAdminPaymentConfigPayload({
+    enabled: false,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: "",
+    qrVerified: false,
+    modelAdvanceMode: "fixed",
+    modelAdvanceValue: 10000001
+  });
+  assert.equal(overFixedAmount.valid, false);
+
+  const validQr = "data:image/jpeg;base64," + "A".repeat(160);
+  const validSave = payMod.validateAdminPaymentConfigPayload({
+    enabled: true,
+    upiId: "9812890081@ybl",
+    payeeName: "STAR ARTIST STUDIO",
+    qrImageDataUrl: validQr,
+    qrVerified: true,
+    modelAdvanceMode: "percentage",
+    modelAdvanceValue: 30,
+    weddingChargeMode: "percentage",
+    weddingChargeValue: 25
+  });
+  assert.equal(validSave.valid, true);
+  assert.equal(validSave.clean.upiId, "9812890081@ybl");
+
+  // 4. checkIsAdmin verifies signed token claims in firebase.js
+  const checkAdminStart = firebaseJs.indexOf("export async function checkIsAdmin");
+  const checkAdminEnd = firebaseJs.indexOf("async function ensureUserDocument");
+  assert.ok(checkAdminStart > 0 && checkAdminEnd > checkAdminStart);
+  const checkAdminBody = firebaseJs.slice(checkAdminStart, checkAdminEnd);
+  assert.ok(checkAdminBody.includes("getIdTokenResult"));
+  assert.ok(checkAdminBody.includes("validateAdminTokenClaims"));
 });
 
 

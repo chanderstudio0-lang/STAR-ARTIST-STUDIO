@@ -1,6 +1,6 @@
 import { FIREBASE_PROJECT_DEFAULTS, STUDIO_CONTACT } from "./data.js";
 import { buildStorageObjectPath, computeUploadProgress } from "./image-upload.js";
-import { isAuthorizedAdminUser } from "./admin-guard.js";
+import { isAuthorizedAdminUser, validateAdminTokenClaims } from "./admin-guard.js";
 import { sanitizePublicModelProfile } from "./company-booking.js";
 import {
   sanitizePortfolioPhotoList,
@@ -426,7 +426,18 @@ export async function subscribeAuthState(onChange) {
 }
 
 export async function checkIsAdmin(user) {
-  return isAuthorizedAdminUser(user);
+  if (!isAuthorizedAdminUser(user)) return false;
+  if (typeof user.getIdTokenResult === "function") {
+    try {
+      const tokenResult = await user.getIdTokenResult();
+      if (!validateAdminTokenClaims(tokenResult?.claims, user.uid)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function ensureUserDocument(user, { fullName = "" } = {}) {
@@ -1163,6 +1174,43 @@ function requireAuthorizedAdmin(ctx) {
     throw new Error("Access denied: authorized Studio Admin Gmail account required.");
   }
   return ctx.auth.currentUser;
+}
+
+async function verifyAuthorizedAdminToken(adminUser) {
+  if (!isAuthorizedAdminUser(adminUser) || !String(adminUser.uid || "").trim()) {
+    const err = new Error("Access denied: verified chanderstudio0@gmail.com Admin sign-in is required.");
+    err.code = "auth/admin-token-unverified";
+    throw err;
+  }
+
+  if (typeof adminUser.getIdTokenResult === "function") {
+    let tokenResult = null;
+    try {
+      tokenResult = await adminUser.getIdTokenResult(true);
+    } catch {
+      try {
+        tokenResult = await adminUser.getIdTokenResult(false);
+      } catch {
+        tokenResult = null;
+      }
+    }
+    if (!validateAdminTokenClaims(tokenResult?.claims, adminUser.uid)) {
+      const err = new Error(
+        "Admin Firebase Auth token is not verified for chanderstudio0@gmail.com (email_verified claim missing or mismatched). Please sign out and sign in again with Google using chanderstudio0@gmail.com."
+      );
+      err.code = "auth/admin-token-unverified";
+      throw err;
+    }
+    return {
+      uid: adminUser.uid,
+      email: String(tokenResult.claims.email).trim().toLowerCase()
+    };
+  }
+
+  return {
+    uid: adminUser.uid,
+    email: String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase()
+  };
 }
 
 export async function adminFetchDashboardData() {
@@ -2469,24 +2517,16 @@ export async function fetchPaymentSettings({ throwOnError = false } = {}) {
 export async function adminSavePaymentSettings(input = {}) {
   const ctx = await initFirebaseClient();
   const adminUser = requireAuthorizedAdmin(ctx);
+  const verifiedAdmin = await verifyAuthorizedAdminToken(adminUser);
   const check = validateAdminPaymentConfigPayload(input);
   if (!check.valid) throw new Error(check.error);
   const { fsMod, db } = ctx;
-  const updatedByEmail = String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase();
+  const updatedByEmail = verifiedAdmin.email;
   const payload = {
     ...check.clean,
     updatedByEmail,
     updatedAt: fsMod.serverTimestamp()
   };
-
-  // Refresh the Admin ID token so Firestore Security Rules receive a fresh email_verified claim
-  if (typeof adminUser.getIdToken === "function") {
-    try {
-      await adminUser.getIdToken(true);
-    } catch {
-      // Proceed with existing valid session token if offline refresh fails
-    }
-  }
 
   try {
     await fsMod.setDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"), payload);

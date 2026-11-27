@@ -1950,17 +1950,16 @@ test("16. Atomic Duplicate UTR Protection: simultaneous submissions by two custo
   );
 });
 
-test("17. Admin UPI QR Upload Security & Scale: accepts realistic 172KB JPEG/PNG/WebP QR from verified Admin only, blocks oversized/SVG/unverified/customer writes, and preserves 9812890081@ybl", async () => {
-  const adminDb = testEnv
-    .authenticatedContext(ADMIN_UID, { email: AUTHORIZED_ADMIN_EMAIL, email_verified: true })
-    .firestore();
-  const unverifiedAdminDb = testEnv
-    .authenticatedContext("admin_unverified_17", { email: AUTHORIZED_ADMIN_EMAIL, email_verified: false })
-    .firestore();
-  const aliceDb = testEnv
-    .authenticatedContext(CUSTOMER_A_UID, { email: "alice@example.com", email_verified: true })
-    .firestore();
+test("17. Admin UPI QR Upload Security & Scale: accepts realistic 172KB JPEG/PNG/WebP QR & serverTimestamp() from verified Admin only, blocks oversized/SVG/unverified/anonymous/customer writes, and preserves 9812890081@ybl", async () => {
+  const adminDb = getAdminContext().firestore();
+  const unverifiedAdminDb = getUnverifiedAdminContext().firestore();
+  const otherGmailDb = getOtherGmailContext().firestore();
+  const anonDb = getAnonymousContext().firestore();
+  const aliceDb = getCustomerAContext().firestore();
   const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const serverTs = adminDb.app?.firebase_?.firestore?.FieldValue?.serverTimestamp
+    ? adminDb.app.firebase_.firestore.FieldValue.serverTimestamp()
+    : pastDate(1000);
 
   const buildPayload = (qrImageDataUrl, overrides = {}) => ({
     enabled: false,
@@ -1974,18 +1973,18 @@ test("17. Admin UPI QR Upload Security & Scale: accepts realistic 172KB JPEG/PNG
     weddingChargeMode: "percentage",
     weddingChargeValue: 25,
     updatedByEmail: AUTHORIZED_ADMIN_EMAIL,
-    updatedAt: pastDate(1000),
+    updatedAt: serverTs,
     ...overrides,
   });
 
-  // 1. Realistic 172KB JPEG QR upload from verified Admin succeeds
+  // 1. Realistic 172KB JPEG QR upload from verified Admin (with real serverTimestamp) succeeds
   const realistic172KbJpeg = "data:image/jpeg;base64," + "A".repeat(171900);
   await assertSucceeds(
     adminDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realistic172KbJpeg))
   );
 
-  // 2. Replacing with PNG or WebP QR from verified Admin succeeds, and then verifying & enabling succeeds
-  const realisticWebp = "data:image/webp;base64," + "B".repeat(48000);
+  // 2. Replacing with uppercase-header or WebP QR from verified Admin succeeds, and then verifying & enabling succeeds
+  const realisticWebp = "data:image/WEBP;base64," + "B".repeat(48000);
   await assertSucceeds(
     adminDb
       .collection("paymentConfig")
@@ -1993,7 +1992,18 @@ test("17. Admin UPI QR Upload Security & Scale: accepts realistic 172KB JPEG/PNG
       .set(buildPayload(realisticWebp, { qrVerified: true, enabled: true }))
   );
 
-  // 3. Oversized (> 180,000 bytes) or unsafe formats (SVG, GIF, JS URL) are strictly rejected even for Admin
+  // 3. Cannot enable payments without qrVerified == true, and cannot write to any doc other than paymentSettings
+  await assertFails(
+    adminDb
+      .collection("paymentConfig")
+      .doc("paymentSettings")
+      .set(buildPayload(realisticWebp, { qrVerified: false, enabled: true }))
+  );
+  await assertFails(
+    adminDb.collection("paymentConfig").doc("otherConfig").set(buildPayload(realisticWebp))
+  );
+
+  // 4. Oversized (> 180,000 bytes) or unsafe formats (SVG, GIF, JS URL) are strictly rejected even for Admin
   const oversizedQr = "data:image/jpeg;base64," + "C".repeat(180100);
   const svgQr = "data:image/svg+xml;base64," + "D".repeat(200);
   const gifQr = "data:image/gif;base64," + "E".repeat(200);
@@ -2003,15 +2013,20 @@ test("17. Admin UPI QR Upload Security & Scale: accepts realistic 172KB JPEG/PNG
   await assertFails(adminDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(gifQr)));
   await assertFails(adminDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(jsQr)));
 
-  // 4. Unauthorized users (unauth, normal customer, unverified admin) CANNOT upload or change QR settings
+  // 5. Unauthorized users (unauth, anonymous, normal customer, other Gmail, unverified admin) CANNOT upload or change QR settings
   await assertFails(unauthDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realisticWebp)));
+  await assertFails(anonDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realisticWebp)));
   await assertFails(aliceDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realisticWebp)));
+  await assertFails(otherGmailDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realisticWebp)));
   await assertFails(
     unverifiedAdminDb.collection("paymentConfig").doc("paymentSettings").set(buildPayload(realisticWebp))
   );
 
-  // 5. Signed-in customer CAN still read saved QR config (get only), NEVER list or delete
-  await assertSucceeds(aliceDb.collection("paymentConfig").doc("paymentSettings").get());
+  // 6. Signed-in customer CAN still read saved QR config (get only), NEVER list or delete, and official UPI ID stays preserved
+  const savedSnap = await assertSucceeds(aliceDb.collection("paymentConfig").doc("paymentSettings").get());
+  if (savedSnap.data()?.upiId !== "9812890081@ybl") {
+    throw new Error(`Expected official UPI ID 9812890081@ybl to be preserved, got ${savedSnap.data()?.upiId}`);
+  }
   await assertFails(aliceDb.collection("paymentConfig").get());
   await assertFails(aliceDb.collection("paymentConfig").doc("paymentSettings").delete());
 });

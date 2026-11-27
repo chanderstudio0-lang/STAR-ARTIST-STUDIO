@@ -277,13 +277,21 @@ export function validateAdminPaymentConfigPayload(input = {}) {
   const qrVerified = Boolean(input.qrVerified);
   const instructions = String(input.instructions || "").trim();
   const modelAdvanceMode = input.modelAdvanceMode === "fixed" ? "fixed" : "percentage";
-  const modelAdvanceValue = Math.max(0, Number(input.modelAdvanceValue) || 0);
+  const rawModelVal = Number(input.modelAdvanceValue);
+  const modelAdvanceValue = Number.isFinite(rawModelVal) ? Math.max(0, rawModelVal) : 0;
   const weddingChargeMode = input.weddingChargeMode === "fixed" ? "fixed" : "percentage";
-  const weddingChargeValue = Math.max(0, Number(input.weddingChargeValue) || 0);
+  const rawWedVal = Number(input.weddingChargeValue);
+  const weddingChargeValue = Number.isFinite(rawWedVal) ? Math.max(0, rawWedVal) : 0;
   const hasUploadedQr = isUploadedQrImageDataUrl(qrImageDataUrl);
 
   if (containsSensitiveBankingData(instructions) || containsSensitiveBankingData(payeeName)) {
     return { valid: false, error: "Never store UPI PINs, OTPs, passwords, or banking credentials." };
+  }
+  if (upiId.length > 120) {
+    return { valid: false, error: "UPI ID must be 120 characters or fewer." };
+  }
+  if (payeeName.length > 120) {
+    return { valid: false, error: "Payee Name must be 120 characters or fewer." };
   }
   if (qrImageDataUrl && !hasUploadedQr) {
     return { valid: false, error: "Official UPI QR image must be an uploaded JPG/PNG/WebP image under 180KB." };
@@ -308,6 +316,9 @@ export function validateAdminPaymentConfigPayload(input = {}) {
     return { valid: false, error: "UPI ID format is invalid (example: 9812890081@ybl)." };
   }
 
+  if (modelAdvanceValue > 10000000 || weddingChargeValue > 10000000) {
+    return { valid: false, error: "Advance / booking charge amount must be ₹1,00,00,000 or less." };
+  }
   if (modelAdvanceMode === "percentage" && modelAdvanceValue > 100) {
     return { valid: false, error: "Model advance percentage must be between 0% and 100%." };
   }

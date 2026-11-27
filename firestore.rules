@@ -564,7 +564,7 @@ service cloud.firestore {
       return val is string &&
              val.size() >= 100 &&
              val.size() <= 180000 &&
-             val[0:32].matches('^data:image/(jpeg|jpg|png|webp);base64,.*');
+             val[0:32].lower().matches('^data:image/(jpeg|jpg|png|webp);base64,.*');
     }
 
     function isValidPaymentSettingsConfig(data, configId) {

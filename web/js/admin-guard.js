@@ -9,13 +9,33 @@ export const ALL_ROUTES = [...PUBLIC_ROUTES, "admin"];
 
 /**
  * Returns true ONLY when the authenticated Firebase user matches the exact authorized
- * Studio Administrator Gmail account with a verified email token.
+ * Studio Administrator Gmail account with a verified email flag and non-anonymous session.
  */
 export function isAuthorizedAdminUser(user) {
   if (!user || typeof user !== "object") return false;
+  if (user.isAnonymous === true) return false;
   const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
   if (!email || email !== AUTHORIZED_ADMIN_EMAIL) return false;
   return user.emailVerified === true;
+}
+
+/**
+ * Verifies the cryptographically signed Firebase Auth ID Token claims (from getIdTokenResult)
+ * so Admin authorization never relies solely on mutable/client-side email properties.
+ */
+export function validateAdminTokenClaims(claims, expectedUid = "") {
+  if (!claims || typeof claims !== "object") return false;
+  const email = typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
+  if (!email || email !== AUTHORIZED_ADMIN_EMAIL) return false;
+  if (claims.email_verified !== true) return false;
+  const provider = String(claims.firebase?.sign_in_provider || "").trim().toLowerCase();
+  if (provider === "anonymous") return false;
+  const cleanExpectedUid = String(expectedUid || "").trim();
+  if (cleanExpectedUid) {
+    const tokenUid = String(claims.user_id || claims.sub || "").trim();
+    if (tokenUid && tokenUid !== cleanExpectedUid) return false;
+  }
+  return true;
 }
 
 /**
