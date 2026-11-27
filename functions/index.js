@@ -19,6 +19,22 @@ const SMTP_USER = defineSecret("SMTP_USER");
 const SMTP_PASS = defineSecret("SMTP_PASS");
 
 /**
+ * Safely reads and trims a Firebase Secret Manager parameter at runtime,
+ * stripping accidental trailing newlines from CLI secret uploads.
+ */
+function readSecretValue(secretParam, fallbackEnvKey) {
+  try {
+    const val = secretParam?.value?.();
+    if (typeof val === "string" && val.trim()) {
+      return val.trim();
+    }
+  } catch {
+    // Fallback to process.env during local emulator execution
+  }
+  return String(process.env[fallbackEnvKey] || "").trim();
+}
+
+/**
  * Optionally loads live email branding/template overrides from Firestore
  * (`studioConfig/emailTemplates` in the named database). Falls back silently to defaults.
  */
@@ -91,8 +107,8 @@ export const notifyAdminOnNewBooking = onDocumentCreated(
   },
   async (event) => {
     await handleNewBookingCreated(event, {
-      smtpUser: SMTP_USER.value(),
-      smtpPass: SMTP_PASS.value(),
+      smtpUser: readSecretValue(SMTP_USER, "SMTP_USER"),
+      smtpPass: readSecretValue(SMTP_PASS, "SMTP_PASS"),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
       loadAlertSettings: loadFirestoreEmailAlertSettings,
       recordAlertLog: writeAdminEmailAlertLog,
@@ -115,8 +131,8 @@ export const notifyAdminOnNewModelApplication = onDocumentCreated(
   },
   async (event) => {
     await handleNewModelApplicationCreated(event, {
-      smtpUser: SMTP_USER.value(),
-      smtpPass: SMTP_PASS.value(),
+      smtpUser: readSecretValue(SMTP_USER, "SMTP_USER"),
+      smtpPass: readSecretValue(SMTP_PASS, "SMTP_PASS"),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
       loadAlertSettings: loadFirestoreEmailAlertSettings,
       recordAlertLog: writeAdminEmailAlertLog,
@@ -139,8 +155,8 @@ export const notifyAdminOnNewCompanyBooking = onDocumentCreated(
   },
   async (event) => {
     await handleNewCompanyBookingCreated(event, {
-      smtpUser: SMTP_USER.value(),
-      smtpPass: SMTP_PASS.value(),
+      smtpUser: readSecretValue(SMTP_USER, "SMTP_USER"),
+      smtpPass: readSecretValue(SMTP_PASS, "SMTP_PASS"),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
       loadAlertSettings: loadFirestoreEmailAlertSettings,
       recordAlertLog: writeAdminEmailAlertLog,
@@ -168,8 +184,8 @@ export const sendAdminTestNotificationEmail = onDocumentCreated(
     const statusRef = testId ? db.doc(`adminEmailTests/${testId}`) : null;
 
     await handleAdminTestEmailRequested(event, {
-      smtpUser: SMTP_USER.value(),
-      smtpPass: SMTP_PASS.value(),
+      smtpUser: readSecretValue(SMTP_USER, "SMTP_USER"),
+      smtpPass: readSecretValue(SMTP_PASS, "SMTP_PASS"),
       loadTemplateOverrides: loadFirestoreEmailTemplateOverrides,
       updateStatusDoc: async (patch) => {
         if (!statusRef) return;

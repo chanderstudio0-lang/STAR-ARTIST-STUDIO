@@ -387,6 +387,17 @@ export function buildNewModelApplicationAlertEmail({
   const subject = renderSubjectTemplate(brand.modelSubjectTemplate, templateVars, 160);
   const intro = renderSubjectTemplate(brand.modelIntroTemplate, templateVars, 340);
 
+  const state = String(model.state || "").trim();
+  const locationDisplay = state ? `${city}, ${state}` : city;
+  const contactEmail = String(model.contactEmail || "").trim();
+  const experienceLevel = String(model.experienceLevel || "").trim();
+  const heightCm = Number(model.heightCm);
+  const heightDisplay = Number.isFinite(heightCm) && heightCm >= 120 && heightCm <= 230 ? `${heightCm} cm` : "";
+  const languages = String(model.languages || "").trim();
+  const rawIntroVideo = String(model.introVideoUrl || "").trim();
+  const safeIntroVideoHref = safeHttpUrl(rawIntroVideo);
+  const uploadedPhotosCount = Array.isArray(model.portfolioPhotos) ? model.portfolioPhotos.filter(Boolean).length : 0;
+
   const portfolioRow = rawPortfolio
     ? {
         label: "Portfolio Link",
@@ -397,12 +408,27 @@ export function buildNewModelApplicationAlertEmail({
       }
     : { label: "Portfolio Link", value: "None provided" };
 
+  const introVideoRow = rawIntroVideo
+    ? [
+        {
+          label: "Intro Video",
+          value: rawIntroVideo,
+          htmlValue: safeIntroVideoHref
+            ? `<a href="${escapeHtml(safeIntroVideoHref)}" style="color:${escapeHtml(brand.accentLightColor)};text-decoration:underline;font-weight:700;">${escapeHtml(safeIntroVideoHref)}</a>`
+            : escapeHtml(rawIntroVideo)
+        }
+      ]
+    : [];
+
   const rows = [
     { label: "Application ID", value: modelId || "N/A" },
     { label: "Applicant Name", value: fullName },
     { label: "Age Verification", value: ageLabel },
     { label: "Gender", value: gender },
-    { label: "City", value: city },
+    { label: "City", value: locationDisplay },
+    ...(heightDisplay ? [{ label: "Height", value: heightDisplay }] : []),
+    ...(experienceLevel ? [{ label: "Experience Level", value: experienceLevel }] : []),
+    ...(languages ? [{ label: "Languages", value: languages }] : []),
     {
       label: "Phone Number",
       value: phoneNumber,
@@ -410,8 +436,11 @@ export function buildNewModelApplicationAlertEmail({
         ? `<a href="${escapeHtml(telHref)}" style="color:${escapeHtml(brand.accentLightColor)};text-decoration:none;font-weight:700;">${escapeHtml(phoneNumber)}</a>`
         : escapeHtml(phoneNumber)
     },
+    ...(contactEmail ? [{ label: "Contact Email", value: contactEmail }] : []),
     { label: "Skills & Experience", value: skills },
     portfolioRow,
+    ...(uploadedPhotosCount > 0 ? [{ label: "Uploaded Photos", value: `${uploadedPhotosCount} photo(s) attached in Admin Dashboard` }] : []),
+    ...introVideoRow,
     { label: "18+ Consent", value: consentText },
     { label: "Status", value: status },
     { label: "Submitted At", value: submittedAt }

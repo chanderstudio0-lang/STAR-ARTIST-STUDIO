@@ -1,4 +1,4 @@
-const CACHE_VERSION = "star-artist-pwa-v63";
+const CACHE_VERSION = "star-artist-pwa-v68";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const MEDIA_CACHE = `${CACHE_VERSION}-media`;
 
@@ -39,6 +39,7 @@ const APP_SHELL_URLS = [
   "/js/firebase.js",
   "/js/gallery-share.js",
   "/js/i18n.js",
+  "/js/image-editor.js",
   "/js/image-upload.js",
   "/js/lazy-images.js",
   "/js/model-discovery.js",

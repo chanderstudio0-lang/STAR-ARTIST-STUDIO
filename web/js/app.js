@@ -119,6 +119,17 @@ import {
   createUploadProgressController
 } from "./image-upload.js";
 import {
+  createDefaultEditorState,
+  clampBrightness,
+  clampCropZoom,
+  clampOffset,
+  normalizeAspectPreset,
+  drawCropWorkspaceToCanvas,
+  drawEditedImageToCanvas,
+  exportEditedCanvasPayloads,
+  formatEditorSummary
+} from "./image-editor.js";
+import {
   readExifFromImageUrl,
   hasMeaningfulExif,
   sanitizeExifMetadata
@@ -305,7 +316,10 @@ import {
 } from "./booking-calendar.js";
 import {
   DEFAULT_PAYMENT_CONFIG,
+  OFFICIAL_STUDIO_UPI_ID,
   buildPrintablePaymentReceiptHtml,
+  isAllowedPaymentImageFileMeta,
+  isUploadedQrImageDataUrl,
   renderAdminPaymentDashboardHtml
 } from "./payment-system.js";
 
@@ -327,6 +341,7 @@ const state = {
   bookingStatusFilter: "all",
   galleryFilter: "All",
   adminTab: "bookings",
+  adminQrUploadState: { status: "idle", previewDataUrl: "", fileName: "", error: "", approxKb: 0 },
   adminGrowthChartType: "area",
   adminModelExperienceScope: "all",
   adminModelFilter: "pending",
@@ -1712,7 +1727,7 @@ async function loadAdminConsole() {
         catalogs: [],
         slots: []
       })),
-      fetchPaymentSettings().catch(() => ({ ...DEFAULT_PAYMENT_CONFIG })),
+      fetchPaymentSettings({ throwOnError: true }).catch(() => state.paymentConfig || { ...DEFAULT_PAYMENT_CONFIG }),
       adminFetchAllBookingPayments().catch(() => [])
     ]);
     state.adminData = dashData;
@@ -1978,9 +1993,13 @@ function renderAdminConsole() {
       escapeHtml
     });
   } else if (state.adminTab === "payments") {
+    if (state.adminQrUploadState?.status === "uploading") {
+      return;
+    }
     body.innerHTML = renderAdminPaymentDashboardHtml({
       payments: state.adminBookingPayments || [],
       paymentConfig: state.paymentConfig || DEFAULT_PAYMENT_CONFIG,
+      qrUploadState: state.adminQrUploadState || null,
       filterStatus: state.adminPaymentFilter || "all",
       lang: state.lang,
       t,
@@ -4820,6 +4839,19 @@ function wireEvents() {
   const galleryDropzone = document.getElementById("galleryUploadDropzone");
   const pickGalleryBtn = document.getElementById("pickGalleryImageBtn");
   const clearGalleryBtn = document.getElementById("clearGalleryImageBtn");
+  const toggleEditorBtn = document.getElementById("toggleGalleryEditorBtn");
+  const editorPanel = document.getElementById("galleryImageEditorPanel");
+  const editorCanvas = document.getElementById("galleryEditorCanvas");
+  const croppedPreviewCanvas = document.getElementById("galleryCroppedPreviewCanvas");
+  const croppedOutputMeta = document.getElementById("galleryCroppedOutputMeta");
+  const editorDimsBadge = document.getElementById("galleryEditorDimsBadge");
+  const editorAspectGroup = document.getElementById("galleryCropAspectGroup");
+  const editorZoomInput = document.getElementById("galleryCropZoom");
+  const editorZoomValue = document.getElementById("galleryCropZoomValue");
+  const editorBrightnessInput = document.getElementById("galleryBrightnessRange");
+  const editorBrightnessValue = document.getElementById("galleryBrightnessValue");
+  const resetEditorBtn = document.getElementById("resetGalleryEditorBtn");
+  const applyEditorBtn = document.getElementById("applyGalleryEditsBtn");
   const previewBox = document.getElementById("galleryUploadPreviewBox");
   const previewImg = document.getElementById("galleryUploadPreviewImg");
   const previewName = document.getElementById("galleryUploadPreviewName");
@@ -4836,10 +4868,115 @@ function wireEvents() {
   });
   let uploadProgressClearTimer = null;
   let isUploadingGalleryFile = false;
+  let galleryEditorSourceImg = null;
+  let galleryEditorState = createDefaultEditorState();
+  let galleryEditorDirty = false;
+  let editorDragState = null;
+
+  function loadEditorSourceImage(src) {
+    return new Promise((resolve, reject) => {
+      if (!src) {
+        reject(new Error("No image source available for editor."));
+        return;
+      }
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not load image into Canvas editor."));
+      img.src = src;
+    });
+  }
+
+  function updateGalleryPreviewMeta(encoded) {
+    if (!previewMeta || !encoded) return;
+    const exifParts = encoded.metadata
+      ? [encoded.metadata.camera, encoded.metadata.aperture, encoded.metadata.iso, encoded.metadata.dateTaken].filter(Boolean)
+      : [];
+    const editSummary = encoded.edits ? formatEditorSummary(encoded.edits) : "";
+    const segments = [`${encoded.width}×${encoded.height}px • ~${encoded.approxKb} KB`];
+    if (editSummary) segments.push(editSummary);
+    if (exifParts.length) segments.push(`EXIF: ${exifParts.join(" · ")}`);
+    previewMeta.textContent = segments.join(" • ");
+  }
+
+  function syncGalleryEditorControlValues() {
+    if (editorZoomInput) editorZoomInput.value = String(galleryEditorState.zoom);
+    if (editorZoomValue) editorZoomValue.textContent = `${galleryEditorState.zoom.toFixed(1)}×`;
+    if (editorBrightnessInput) editorBrightnessInput.value = String(galleryEditorState.brightness);
+    if (editorBrightnessValue) editorBrightnessValue.textContent = `${galleryEditorState.brightness}%`;
+    editorAspectGroup?.querySelectorAll("[data-crop-aspect]").forEach((btn) => {
+      const isActive = btn.dataset.cropAspect === galleryEditorState.aspectRatio;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-pressed", String(isActive));
+    });
+  }
+
+  function renderGalleryEditorPreview() {
+    if (!editorCanvas || !galleryEditorSourceImg) return;
+    try {
+      const workspace = drawCropWorkspaceToCanvas(editorCanvas, galleryEditorSourceImg, galleryEditorState, {
+        maxDim: 680
+      });
+      if (croppedPreviewCanvas) {
+        drawEditedImageToCanvas(croppedPreviewCanvas, galleryEditorSourceImg, galleryEditorState, {
+          maxDim: 320,
+          showGrid: false
+        });
+      }
+      if (editorDimsBadge) {
+        const aspectLabel = galleryEditorState.aspectRatio === "original"
+          ? `${workspace.crop.sw}×${workspace.crop.sh}px`
+          : `${galleryEditorState.aspectRatio} • ${workspace.crop.sw}×${workspace.crop.sh}px`;
+        editorDimsBadge.textContent = `${aspectLabel} • ${galleryEditorState.brightness}%`;
+      }
+      if (croppedOutputMeta) {
+        croppedOutputMeta.textContent = `${workspace.crop.sw}×${workspace.crop.sh}px`;
+      }
+    } catch (err) {
+      console.warn("Unable to render Canvas crop preview:", err?.message || err);
+    }
+  }
+
+  function setGalleryEditorOpen(open) {
+    const show = Boolean(open && galleryEditorSourceImg);
+    editorPanel?.classList.toggle("hidden", !show);
+    toggleEditorBtn?.setAttribute("aria-expanded", String(show));
+    if (show) {
+      syncGalleryEditorControlValues();
+      renderGalleryEditorPreview();
+    }
+  }
+
+  function commitGalleryEditorChanges({ closePanel = true, showFeedback = true } = {}) {
+    if (!galleryEditorSourceImg || !state.uploadedGalleryMedia) return false;
+    const prev = state.uploadedGalleryMedia;
+    const exported = exportEditedCanvasPayloads({
+      img: galleryEditorSourceImg,
+      edits: galleryEditorState,
+      originalName: prev.originalName,
+      metadata: prev.metadata,
+      rawDataUrl: prev.rawDataUrl || prev.mediaUrl
+    });
+    state.uploadedGalleryMedia = {
+      ...exported,
+      file: exported.file || prev.file
+    };
+    galleryEditorDirty = false;
+    if (previewImg) previewImg.src = exported.thumbnailUrl || exported.mediaUrl;
+    updateGalleryPreviewMeta(state.uploadedGalleryMedia);
+    if (closePanel) setGalleryEditorOpen(false);
+    if (showFeedback) showToast(t("editsAppliedToast"));
+    return true;
+  }
 
   function clearGalleryUploadSelection({ keepProgress = false } = {}) {
     state.uploadedGalleryMedia = null;
     state.isEncodingGalleryImage = false;
+    galleryEditorSourceImg = null;
+    galleryEditorState = createDefaultEditorState();
+    galleryEditorDirty = false;
+    editorDragState = null;
+    setGalleryEditorOpen(false);
+    syncGalleryEditorControlValues();
     if (galleryFileInput) galleryFileInput.value = "";
     if (previewImg) previewImg.removeAttribute("src");
     if (previewName) previewName.textContent = "";
@@ -4855,6 +4992,9 @@ function wireEvents() {
     if (!file || isUploadingGalleryFile) return;
     clearTimeout(uploadProgressClearTimer);
     state.isEncodingGalleryImage = true;
+    galleryEditorState = createDefaultEditorState();
+    galleryEditorDirty = false;
+    setGalleryEditorOpen(false);
     if (previewBox) previewBox.classList.remove("hidden");
     if (previewName) previewName.textContent = file.name || "studio-photo.jpg";
     if (previewMeta) previewMeta.textContent = t("uploadOptimizingMsg");
@@ -4868,18 +5008,21 @@ function wireEvents() {
 
     try {
       const encoded = await encodeImageFileToStudioPayloads(file);
-      state.uploadedGalleryMedia = encoded;
+      state.uploadedGalleryMedia = {
+        ...encoded,
+        edits: createDefaultEditorState(),
+        isEdited: false
+      };
+      try {
+        galleryEditorSourceImg = await loadEditorSourceImage(encoded.rawDataUrl || encoded.mediaUrl);
+      } catch {
+        galleryEditorSourceImg = null;
+      }
       if (previewImg) previewImg.src = encoded.thumbnailUrl || encoded.mediaUrl;
       if (previewName) previewName.textContent = encoded.originalName;
-      if (previewMeta) {
-        const exifParts = encoded.metadata
-          ? [encoded.metadata.camera, encoded.metadata.aperture, encoded.metadata.iso, encoded.metadata.dateTaken].filter(Boolean)
-          : [];
-        const baseInfo = `${encoded.width}×${encoded.height}px • ~${encoded.approxKb} KB`;
-        previewMeta.textContent = exifParts.length
-          ? `${baseInfo} • EXIF: ${exifParts.join(" · ")}`
-          : baseInfo;
-      }
+      updateGalleryPreviewMeta(state.uploadedGalleryMedia);
+      syncGalleryEditorControlValues();
+      setGalleryEditorOpen(Boolean(galleryEditorSourceImg));
       const mediaTypeEl = document.getElementById("galleryMediaType");
       if (mediaTypeEl) mediaTypeEl.value = "photo";
       const titleEl = document.getElementById("galleryTitle");
@@ -4896,6 +5039,128 @@ function wireEvents() {
       state.isEncodingGalleryImage = false;
     }
   }
+
+  toggleEditorBtn?.addEventListener("click", () => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    const isHidden = editorPanel?.classList.contains("hidden");
+    setGalleryEditorOpen(isHidden);
+  });
+
+  editorAspectGroup?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-crop-aspect]");
+    if (!btn || isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    galleryEditorState = {
+      ...galleryEditorState,
+      aspectRatio: normalizeAspectPreset(btn.dataset.cropAspect),
+      offsetX: 0,
+      offsetY: 0
+    };
+    galleryEditorDirty = true;
+    syncGalleryEditorControlValues();
+    renderGalleryEditorPreview();
+  });
+
+  editorZoomInput?.addEventListener("input", () => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    galleryEditorState = {
+      ...galleryEditorState,
+      zoom: clampCropZoom(editorZoomInput.value)
+    };
+    galleryEditorDirty = true;
+    syncGalleryEditorControlValues();
+    renderGalleryEditorPreview();
+  });
+
+  editorBrightnessInput?.addEventListener("input", () => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    galleryEditorState = {
+      ...galleryEditorState,
+      brightness: clampBrightness(editorBrightnessInput.value)
+    };
+    galleryEditorDirty = true;
+    syncGalleryEditorControlValues();
+    renderGalleryEditorPreview();
+  });
+
+  editorCanvas?.addEventListener("pointerdown", (e) => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    editorDragState = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      startOffsetX: galleryEditorState.offsetX,
+      startOffsetY: galleryEditorState.offsetY
+    };
+    editorCanvas.classList.add("is-dragging");
+    editorCanvas.setPointerCapture?.(e.pointerId);
+  });
+
+  editorCanvas?.addEventListener("pointermove", (e) => {
+    if (!editorDragState || e.pointerId !== editorDragState.pointerId || !galleryEditorSourceImg) return;
+    const rect = editorCanvas.getBoundingClientRect();
+    const scaleX = Math.max(80, rect.width || 300);
+    const scaleY = Math.max(80, rect.height || 300);
+    const dx = (e.clientX - editorDragState.startX) / (scaleX * 0.5);
+    const dy = (e.clientY - editorDragState.startY) / (scaleY * 0.5);
+    galleryEditorState = {
+      ...galleryEditorState,
+      offsetX: clampOffset(editorDragState.startOffsetX + dx),
+      offsetY: clampOffset(editorDragState.startOffsetY + dy)
+    };
+    galleryEditorDirty = true;
+    renderGalleryEditorPreview();
+  });
+
+  function stopGalleryEditorDrag(e) {
+    if (!editorDragState) return;
+    if (e && editorDragState.pointerId !== e.pointerId) return;
+    editorCanvas?.classList.remove("is-dragging");
+    editorDragState = null;
+  }
+
+  editorCanvas?.addEventListener("pointerup", stopGalleryEditorDrag);
+  editorCanvas?.addEventListener("pointercancel", stopGalleryEditorDrag);
+  editorCanvas?.addEventListener("keydown", (e) => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    const step = e.shiftKey ? 0.16 : 0.06;
+    let dx = 0;
+    let dy = 0;
+    if (e.key === "ArrowLeft") dx = -step;
+    else if (e.key === "ArrowRight") dx = step;
+    else if (e.key === "ArrowUp") dy = -step;
+    else if (e.key === "ArrowDown") dy = step;
+    else return;
+    e.preventDefault();
+    galleryEditorState = {
+      ...galleryEditorState,
+      offsetX: clampOffset(galleryEditorState.offsetX + dx),
+      offsetY: clampOffset(galleryEditorState.offsetY + dy)
+    };
+    galleryEditorDirty = true;
+    renderGalleryEditorPreview();
+  });
+
+  resetEditorBtn?.addEventListener("click", () => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    galleryEditorState = createDefaultEditorState();
+    syncGalleryEditorControlValues();
+    renderGalleryEditorPreview();
+    try {
+      commitGalleryEditorChanges({ closePanel: false, showFeedback: false });
+      showToast(t("editsResetToast"));
+    } catch (err) {
+      showToast(err.message || "Unable to reset edits.");
+    }
+  });
+
+  applyEditorBtn?.addEventListener("click", () => {
+    if (isUploadingGalleryFile || !galleryEditorSourceImg) return;
+    try {
+      commitGalleryEditorChanges({ closePanel: true, showFeedback: true });
+    } catch (err) {
+      showToast(err.message || "Unable to apply image edits.");
+    }
+  });
 
   pickGalleryBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -4952,6 +5217,15 @@ function wireEvents() {
       return;
     }
     if (isUploadingGalleryFile) return;
+
+    if (galleryEditorDirty && galleryEditorSourceImg && state.uploadedGalleryMedia) {
+      try {
+        commitGalleryEditorChanges({ closePanel: true, showFeedback: false });
+      } catch (editErr) {
+        showToast(editErr.message || "Unable to apply image edits before upload.");
+        return;
+      }
+    }
 
     const submitBtn = document.getElementById("submitGalleryBtn");
     const title = document.getElementById("galleryTitle")?.value || "";
@@ -6693,12 +6967,24 @@ function wireProNetworkEvents() {
       const paymentId = utrForm.getAttribute("data-customer-utr-form") || "";
       const utrNumber = utrForm.querySelector("[name='utrNumber']")?.value || "";
       const fileInput = utrForm.querySelector("[name='screenshotFile']");
+      const errBox = utrForm.querySelector("[data-utr-error-box]");
+      const showUtrError = (msg) => {
+        if (errBox) {
+          errBox.textContent = msg;
+          errBox.classList.remove("hidden");
+        }
+        showToast(msg);
+      };
+      if (errBox) {
+        errBox.textContent = "";
+        errBox.classList.add("hidden");
+      }
       let screenshotDataUrl = "";
       if (fileInput?.files?.[0]) {
         try {
           screenshotDataUrl = await compressPaymentImageFile(fileInput.files[0]);
         } catch (imgErr) {
-          showToast(imgErr?.message || "Could not process payment screenshot.");
+          showUtrError(imgErr?.message || "Could not process payment screenshot.");
           return;
         }
       }
@@ -6707,7 +6993,7 @@ function wireProNetworkEvents() {
         showToast(state.lang === "hi" ? "UTR सत्यापन हेतु जमा कर दिया गया!" : "UTR submitted for Admin verification!");
         await refreshCloudData();
       } catch (err) {
-        showToast(err?.message || "Unable to submit UTR.");
+        showUtrError(err?.message || "Unable to submit UTR.");
       }
       return;
     }
@@ -6717,27 +7003,58 @@ function wireProNetworkEvents() {
     if (upiCfgForm) {
       e.preventDefault();
       if (!hasVerifiedAdminSession()) return;
-      let qrImageDataUrl = state.paymentConfig?.qrImageDataUrl || "";
+      if (state.adminQrUploadState?.status === "uploading") {
+        showToast(t("adminPayQrUploadingBadge"));
+        return;
+      }
+      const showQrFormError = (msg) => {
+        const cleanMsg = String(msg || "Unable to save UPI configuration.");
+        state.adminQrUploadState = {
+          ...(state.adminQrUploadState || {}),
+          status: "error",
+          error: cleanMsg
+        };
+        const errBox = document.getElementById("adminUpiQrErrorBox");
+        if (errBox) {
+          errBox.textContent = cleanMsg;
+          errBox.classList.remove("hidden");
+        }
+        showToast(cleanMsg);
+      };
+
+      let qrImageDataUrl = String(state.paymentConfig?.qrImageDataUrl || "").trim();
       const qrFile = document.getElementById("adminUpiQrFile")?.files?.[0];
+      let replacedQrInSubmit = false;
       if (qrFile) {
         try {
-          qrImageDataUrl = await compressPaymentImageFile(qrFile);
+          const compressed = await compressPaymentImageFile(qrFile);
+          if (compressed !== qrImageDataUrl) {
+            qrImageDataUrl = compressed;
+            replacedQrInSubmit = true;
+          }
         } catch (imgErr) {
-          showToast(imgErr?.message || "Could not process QR image.");
+          showQrFormError(imgErr?.message || "Could not process QR image.");
           return;
         }
       }
-      const nextUpiId = String(document.getElementById("adminUpiId")?.value || "").trim();
+
+      const hasValidSavedQr = isUploadedQrImageDataUrl(qrImageDataUrl);
+      const nextUpiId = String(document.getElementById("adminUpiId")?.value || "").trim() || OFFICIAL_STUDIO_UPI_ID;
       const upiChanged =
         Boolean(state.paymentConfig?.upiId) &&
         nextUpiId.toLowerCase() !== String(state.paymentConfig.upiId).trim().toLowerCase();
       const qrVerifiedChecked = Boolean(document.getElementById("adminUpiQrVerified")?.checked);
       const enabledChecked = Boolean(document.getElementById("adminUpiEnabled")?.checked);
 
+      if ((qrVerifiedChecked || enabledChecked) && !hasValidSavedQr) {
+        showQrFormError(t("adminPayQrNeedUploadFirst"));
+        return;
+      }
+
       // Replacing the QR image or changing the UPI ID requires saving & re-verifying the QR before activating payments
-      const effectiveQrVerified = qrFile || upiChanged ? false : qrVerifiedChecked;
-      const effectiveEnabled = effectiveQrVerified ? enabledChecked : false;
-      if ((qrFile || upiChanged) && (qrVerifiedChecked || enabledChecked)) {
+      const effectiveQrVerified = replacedQrInSubmit || upiChanged ? false : qrVerifiedChecked && hasValidSavedQr;
+      const effectiveEnabled = effectiveQrVerified && hasValidSavedQr ? enabledChecked : false;
+      if ((replacedQrInSubmit || upiChanged) && (qrVerifiedChecked || enabledChecked)) {
         showToast(
           state.lang === "hi"
             ? "नया QR/UPI सहेजा गया। कृपया QR स्कैन कर सत्यापित करें, फिर भुगतान चालू करें।"
@@ -6746,10 +7063,10 @@ function wireProNetworkEvents() {
       }
 
       try {
-        await adminSavePaymentSettings({
+        const savedConfig = await adminSavePaymentSettings({
           enabled: effectiveEnabled,
           upiId: nextUpiId,
-          payeeName: document.getElementById("adminUpiPayeeName")?.value || "",
+          payeeName: document.getElementById("adminUpiPayeeName")?.value || "STAR ARTIST STUDIO",
           qrImageDataUrl,
           qrVerified: effectiveQrVerified,
           instructions: document.getElementById("adminUpiInstructions")?.value || "",
@@ -6758,10 +7075,20 @@ function wireProNetworkEvents() {
           weddingChargeMode: document.getElementById("adminWedChargeMode")?.value || "percentage",
           weddingChargeValue: Number(document.getElementById("adminWedChargeValue")?.value || 0)
         });
+        const approxKb = hasValidSavedQr ? Math.max(1, Math.round((qrImageDataUrl.length * 0.75) / 1024)) : 0;
+        state.paymentConfig = { ...DEFAULT_PAYMENT_CONFIG, ...savedConfig };
+        state.adminQrUploadState = {
+          status: isUploadedQrImageDataUrl(state.paymentConfig.qrImageDataUrl) ? "saved" : "idle",
+          previewDataUrl: "",
+          fileName: "",
+          error: "",
+          approxKb
+        };
         showToast(state.lang === "hi" ? "UPI भुगतान सेटिंग्स सहेजी गईं!" : "UPI payment configuration saved!");
+        renderAdminConsole();
         await loadAdminConsole();
       } catch (err) {
-        showToast(err?.message || "Unable to save UPI configuration.");
+        showQrFormError(err?.message || "Unable to save UPI configuration.");
       }
       return;
     }
@@ -6916,6 +7243,23 @@ function wireProNetworkEvents() {
       return;
     }
 
+    const clearQrSelBtn = e.target.closest("#adminUpiQrClearSelectionBtn");
+    if (clearQrSelBtn && hasVerifiedAdminSession()) {
+      const fileEl = document.getElementById("adminUpiQrFile");
+      if (fileEl) fileEl.value = "";
+      const savedQr = String(state.paymentConfig?.qrImageDataUrl || "");
+      const hasSaved = isUploadedQrImageDataUrl(savedQr);
+      state.adminQrUploadState = {
+        status: hasSaved ? "saved" : "idle",
+        previewDataUrl: "",
+        fileName: "",
+        error: "",
+        approxKb: hasSaved ? Math.max(1, Math.round((savedQr.length * 0.75) / 1024)) : 0
+      };
+      renderAdminConsole();
+      return;
+    }
+
     const printReceiptBtn = e.target.closest("[data-print-payment-receipt]");
     if (printReceiptBtn) {
       const pid = printReceiptBtn.getAttribute("data-print-payment-receipt") || "";
@@ -6952,6 +7296,150 @@ function wireProNetworkEvents() {
     }
   });
 
+  document.addEventListener("change", async (e) => {
+    const qrVerifiedToggle = e.target.closest("#adminUpiQrVerified");
+    if (qrVerifiedToggle && hasVerifiedAdminSession()) {
+      const hasSaved = isUploadedQrImageDataUrl(state.paymentConfig?.qrImageDataUrl || "");
+      const qrEnabledBox = document.getElementById("adminUpiEnabled");
+      const errBox = document.getElementById("adminUpiQrErrorBox");
+      if (!hasSaved) {
+        qrVerifiedToggle.checked = false;
+        qrVerifiedToggle.disabled = true;
+        if (qrEnabledBox) {
+          qrEnabledBox.checked = false;
+          qrEnabledBox.disabled = true;
+        }
+        const msg = t("adminPayQrNeedUploadFirst");
+        if (errBox) {
+          errBox.textContent = msg;
+          errBox.classList.remove("hidden");
+        }
+        showToast(msg);
+        return;
+      }
+      if (qrEnabledBox) {
+        qrEnabledBox.disabled = !qrVerifiedToggle.checked;
+        if (!qrVerifiedToggle.checked) {
+          qrEnabledBox.checked = false;
+        }
+        qrEnabledBox.closest(".admin-pay-checkbox")?.classList.toggle("is-disabled", !qrVerifiedToggle.checked);
+      }
+      return;
+    }
+
+    const qrInput = e.target.closest("#adminUpiQrFile");
+    if (!qrInput || !hasVerifiedAdminSession()) return;
+    const pickedFile = qrInput.files?.[0];
+    const imgWrap = document.getElementById("adminUpiQrImgWrap");
+    const previewImg = document.getElementById("adminUpiQrPreviewImg");
+    const emptyNote = document.getElementById("adminUpiQrEmptyNote");
+    const savedNote = document.getElementById("adminUpiQrSavedNote");
+    const statusBadge = document.getElementById("adminUpiQrPreviewStatus");
+    const clearBtn = document.getElementById("adminUpiQrClearSelectionBtn");
+    const errBox = document.getElementById("adminUpiQrErrorBox");
+    const qrVerifiedBox = document.getElementById("adminUpiQrVerified");
+    const qrEnabledBox = document.getElementById("adminUpiEnabled");
+    if (!pickedFile) return;
+
+    const showQrUploadError = (message) => {
+      const cleanMsg = String(message || "Could not upload QR image. Please try another JPG, PNG, or WebP file.");
+      qrInput.value = "";
+      qrInput.disabled = false;
+      state.adminQrUploadState = {
+        status: "error",
+        previewDataUrl: "",
+        fileName: "",
+        error: cleanMsg,
+        approxKb: 0
+      };
+      if (errBox) {
+        errBox.textContent = cleanMsg;
+        errBox.classList.remove("hidden");
+      }
+      showToast(cleanMsg);
+      renderAdminConsole();
+    };
+
+    try {
+      if (errBox) {
+        errBox.textContent = "";
+        errBox.classList.add("hidden");
+      }
+      qrInput.disabled = true;
+      if (statusBadge) {
+        statusBadge.textContent = t("adminPayQrUploadingBadge");
+        statusBadge.classList.remove("is-saved", "is-pending-save");
+        statusBadge.classList.add("is-uploading");
+      }
+
+      const compressedDataUrl = await compressPaymentImageFile(pickedFile);
+      const approxKb = Math.max(1, Math.round((compressedDataUrl.length * 0.75) / 1024));
+
+      // Immediately reflect uploaded preview in state & DOM so the "No QR uploaded" warning disappears immediately
+      state.adminQrUploadState = {
+        status: "uploading",
+        previewDataUrl: compressedDataUrl,
+        fileName: pickedFile.name || "",
+        error: "",
+        approxKb
+      };
+      if (previewImg) previewImg.src = compressedDataUrl;
+      imgWrap?.classList.remove("hidden");
+      emptyNote?.classList.add("hidden");
+      savedNote?.classList.add("hidden");
+      clearBtn?.classList.add("hidden");
+      if (qrVerifiedBox) {
+        qrVerifiedBox.checked = false;
+        qrVerifiedBox.disabled = true;
+      }
+      if (qrEnabledBox) {
+        qrEnabledBox.checked = false;
+        qrEnabledBox.disabled = true;
+      }
+
+      // Auto-save compressed QR image to Firestore (paymentConfig/paymentSettings) while keeping official UPI ID & existing settings intact
+      const currentCfg = state.paymentConfig || DEFAULT_PAYMENT_CONFIG;
+      const preservedUpiId =
+        String(document.getElementById("adminUpiId")?.value || currentCfg.upiId || OFFICIAL_STUDIO_UPI_ID).trim() ||
+        OFFICIAL_STUDIO_UPI_ID;
+      const savedConfig = await adminSavePaymentSettings({
+        enabled: false,
+        upiId: preservedUpiId,
+        payeeName:
+          String(document.getElementById("adminUpiPayeeName")?.value || currentCfg.payeeName || "STAR ARTIST STUDIO").trim() ||
+          "STAR ARTIST STUDIO",
+        qrImageDataUrl: compressedDataUrl,
+        qrVerified: false,
+        instructions: String(document.getElementById("adminUpiInstructions")?.value ?? currentCfg.instructions ?? ""),
+        modelAdvanceMode:
+          document.getElementById("adminModelAdvMode")?.value || currentCfg.modelAdvanceMode || "percentage",
+        modelAdvanceValue: Number(
+          document.getElementById("adminModelAdvValue")?.value ?? currentCfg.modelAdvanceValue ?? 0
+        ),
+        weddingChargeMode:
+          document.getElementById("adminWedChargeMode")?.value || currentCfg.weddingChargeMode || "percentage",
+        weddingChargeValue: Number(
+          document.getElementById("adminWedChargeValue")?.value ?? currentCfg.weddingChargeValue ?? 0
+        )
+      });
+
+      state.paymentConfig = { ...DEFAULT_PAYMENT_CONFIG, ...savedConfig };
+      state.adminQrUploadState = {
+        status: "saved",
+        previewDataUrl: "",
+        fileName: pickedFile.name || "",
+        error: "",
+        approxKb
+      };
+      qrInput.disabled = false;
+      qrInput.value = "";
+      renderAdminConsole();
+      showToast(t("adminPayQrUploadSuccessToast"));
+    } catch (err) {
+      showQrUploadError(err?.message || "Could not upload selected QR image.");
+    }
+  });
+
   document.getElementById("bookingDate")?.addEventListener("change", (e) => {
     const val = e.target.value;
     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
@@ -6969,29 +7457,53 @@ function wireProNetworkEvents() {
 
 function compressPaymentImageFile(file) {
   return new Promise((resolve, reject) => {
-    if (!file || !/^image\/(jpeg|jpg|png|webp)$/i.test(file.type || "")) {
-      reject(new Error("Please upload a JPG, PNG, or WebP image."));
+    const metaCheck = isAllowedPaymentImageFileMeta(file);
+    if (!metaCheck.valid) {
+      reject(new Error(metaCheck.error));
       return;
     }
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Unable to read image file."));
+    reader.onerror = () => reject(new Error("Unable to read image file. Please try selecting the QR image again."));
     reader.onload = () => {
       const img = new Image();
-      img.onerror = () => reject(new Error("Invalid image file."));
+      img.onerror = () => reject(new Error("Invalid or corrupted image file. Please select a valid JPG, PNG, or WebP QR image."));
       img.onload = () => {
-        const maxDim = 680;
-        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round((img.width || 1) * scale));
-        canvas.height = Math.max(1, Math.round((img.height || 1) * scale));
-        const ctx2d = canvas.getContext("2d");
-        ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
-        if (dataUrl.length > 175000) {
-          reject(new Error("Image is too large even after compression. Please use a smaller image."));
+        const srcW = Math.max(1, img.naturalWidth || img.width || 1);
+        const srcH = Math.max(1, img.naturalHeight || img.height || 1);
+        const attempts = [
+          { maxDim: 680, quality: 0.82 },
+          { maxDim: 680, quality: 0.72 },
+          { maxDim: 600, quality: 0.62 },
+          { maxDim: 520, quality: 0.56 },
+          { maxDim: 440, quality: 0.52 },
+          { maxDim: 360, quality: 0.48 }
+        ];
+        let bestDataUrl = "";
+        for (const step of attempts) {
+          const scale = Math.min(1, step.maxDim / Math.max(srcW, srcH));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(srcW * scale));
+          canvas.height = Math.max(1, Math.round(srcH * scale));
+          const ctx2d = canvas.getContext("2d");
+          if (!ctx2d) {
+            reject(new Error("Browser canvas is unavailable to process this QR image."));
+            return;
+          }
+          ctx2d.fillStyle = "#FFFFFF";
+          ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+          ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const candidate = canvas.toDataURL("image/jpeg", step.quality);
+          bestDataUrl = candidate;
+          if (isUploadedQrImageDataUrl(candidate) && candidate.length <= 172000) {
+            resolve(candidate);
+            return;
+          }
+        }
+        if (isUploadedQrImageDataUrl(bestDataUrl)) {
+          resolve(bestDataUrl);
           return;
         }
-        resolve(dataUrl);
+        reject(new Error("QR image is too large even after compression (max 175 KB). Please crop closer to the QR square and retry."));
       };
       img.src = String(reader.result || "");
     };

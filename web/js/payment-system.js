@@ -42,6 +42,9 @@ export const WEDDING_EVENT_TYPES = [
 
 export const OFFICIAL_STUDIO_UPI_ID = "9812890081@ybl";
 
+export const DUPLICATE_UTR_ERROR_MESSAGE =
+  "This UTR has already been submitted. Please check your transaction reference number.";
+
 export const DEFAULT_PAYMENT_CONFIG = Object.freeze({
   enabled: false,
   upiId: OFFICIAL_STUDIO_UPI_ID,
@@ -103,6 +106,31 @@ export function isUploadedQrImageDataUrl(raw = "") {
 }
 
 /**
+ * Validates selected image file metadata for UPI QR or payment screenshot uploads.
+ * Handles mobile/Android browsers where File.type may be empty or application/octet-stream
+ * by checking safe extensions (.jpg/.jpeg/.png/.webp), while strictly blocking SVG/GIF/PDF/etc.
+ */
+export function isAllowedPaymentImageFileMeta(file) {
+  if (!file || typeof file !== "object") {
+    return { valid: false, error: "Please select a JPG, PNG, or WebP QR image file." };
+  }
+  const type = String(file.type || "").trim().toLowerCase();
+  const name = String(file.name || "").trim().toLowerCase();
+  const size = Number(file.size || 0);
+  const hasAllowedMime = /^image\/(jpeg|jpg|png|webp)$/.test(type);
+  const hasMissingOrGenericMime = !type || type === "application/octet-stream";
+  const hasAllowedExt = /\.(jpe?g|png|webp)$/.test(name);
+
+  if (!hasAllowedMime && !(hasMissingOrGenericMime && hasAllowedExt)) {
+    return { valid: false, error: "Unsupported file format. Please choose a JPG, PNG, or WebP image." };
+  }
+  if (size > 15 * 1024 * 1024) {
+    return { valid: false, error: "Selected image file is too large (max 15 MB). Please choose a smaller QR image." };
+  }
+  return { valid: true };
+}
+
+/**
  * Payment UI is strictly disabled until Admin uploads the official UPI QR image,
  * explicitly verifies it matches the official UPI account (9812890081@ybl), and enables payments.
  */
@@ -133,18 +161,75 @@ export function containsSensitiveBankingData(raw = "") {
   return false;
 }
 
+/**
+ * Normalizes a UTR / UPI transaction reference into a canonical uppercase alphanumeric key
+ * so uppercase/lowercase changes, extra spaces, hyphens, underscores, or slashes cannot
+ * bypass duplicate UTR detection.
+ */
+export function normalizeUtrKey(rawUtr = "") {
+  return String(rawUtr || "")
+    .trim()
+    .replace(/[\s/_-]+/g, "")
+    .toUpperCase();
+}
+
 export function validateUtrReference(rawUtr = "") {
-  const utr = String(rawUtr || "").trim();
+  const raw = String(rawUtr || "").trim();
+  const utr = raw.replace(/\s+/g, "").toUpperCase();
+  const canonicalKey = normalizeUtrKey(utr);
   if (utr.length < 6 || utr.length > 60) {
     return { valid: false, error: "Please enter a valid UTR / UPI transaction reference (6–60 characters)." };
   }
-  if (!/^[a-zA-Z0-9/_-]{6,60}$/.test(utr)) {
+  if (!/^[A-Z0-9/_-]{6,60}$/.test(utr)) {
     return { valid: false, error: "UTR / reference number may contain only letters, numbers, hyphens, or slashes." };
   }
-  if (containsSensitiveBankingData(utr)) {
+  if (canonicalKey.length < 6 || canonicalKey.length > 60 || !/^[A-Z0-9]{6,60}$/.test(canonicalKey)) {
+    return { valid: false, error: "UTR / reference number must contain at least 6 letters or digits." };
+  }
+  if (
+    containsSensitiveBankingData(raw) ||
+    containsSensitiveBankingData(utr) ||
+    containsSensitiveBankingData(canonicalKey)
+  ) {
     return { valid: false, error: "Never enter UPI PIN, OTP, card number, or banking passwords." };
   }
-  return { valid: true, clean: utr };
+  return { valid: true, clean: utr, canonicalKey };
+}
+
+/**
+ * Detects duplicate UTRs across payment records using canonical normalization
+ * (safe for both newly submitted records with utrKey and legacy records with only utrNumber).
+ */
+export function detectDuplicateUtrGroups(payments = []) {
+  const byKey = new Map();
+  const list = Array.isArray(payments) ? payments : [];
+  for (const p of list) {
+    if (!p || typeof p !== "object") continue;
+    const key = normalizeUtrKey(p.utrKey || p.utrNumber || "");
+    if (key.length < 6) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(p);
+  }
+
+  const duplicateKeys = new Set();
+  const duplicateRecordIds = new Set();
+  const groups = [];
+  for (const [key, records] of byKey.entries()) {
+    if (records.length > 1) {
+      duplicateKeys.add(key);
+      for (const r of records) {
+        if (r.id) duplicateRecordIds.add(String(r.id));
+      }
+      groups.push({ utrKey: key, records });
+    }
+  }
+
+  return {
+    duplicateKeys,
+    duplicateRecordIds,
+    groups,
+    duplicateCount: groups.length
+  };
 }
 
 /**
@@ -650,6 +735,7 @@ export function renderCustomerPaymentsPortalHtml({
                         />
                         <button type="submit" class="btn-gold">${escapeHtml(t("paySubmitUtrBtn"))}</button>
                       </div>
+                      <div class="payment-utr-error hidden" data-utr-error-box role="alert" aria-live="polite"></div>
                       <small class="payment-helper-note">${escapeHtml(t("payManualVerifyNote"))}</small>
                     </form>
                   `
@@ -813,12 +899,36 @@ export function renderCustomerPaymentsPortalHtml({
 export function renderAdminPaymentDashboardHtml({
   payments = [],
   paymentConfig = DEFAULT_PAYMENT_CONFIG,
+  qrUploadState = null,
   filterStatus = "all",
   lang = "en",
   t = (k) => k,
   escapeHtml = defaultEscapeHtml
 } = {}) {
   const cfg = { ...DEFAULT_PAYMENT_CONFIG, ...(paymentConfig || {}) };
+  const uploadState = qrUploadState && typeof qrUploadState === "object" ? qrUploadState : {};
+  const hasSavedQr = isUploadedQrImageDataUrl(cfg.qrImageDataUrl);
+  const isUploadingQr = uploadState.status === "uploading";
+  const previewCandidate = isUploadedQrImageDataUrl(uploadState.previewDataUrl)
+    ? uploadState.previewDataUrl
+    : "";
+  const displayQrSrc = previewCandidate || (hasSavedQr ? cfg.qrImageDataUrl : "");
+  const hasVisibleQr = Boolean(displayQrSrc);
+  const qrErrorMsg = String(uploadState.error || "").trim();
+  const qrStatusClass = isUploadingQr
+    ? "is-uploading"
+    : hasSavedQr
+    ? "is-saved"
+    : previewCandidate
+    ? "is-pending-save"
+    : "";
+  const qrStatusText = isUploadingQr
+    ? t("adminPayQrUploadingBadge")
+    : hasSavedQr
+    ? `${t("adminPayQrSavedBadge")}${uploadState.approxKb ? ` (~${uploadState.approxKb} KB)` : ""}`
+    : previewCandidate
+    ? t("adminPayQrPendingSaveBadge")
+    : t("adminPayStatusPendingQr");
   const allPayments = Array.isArray(payments) ? payments : [];
   const filtered =
     filterStatus && filterStatus !== "all"
@@ -827,6 +937,32 @@ export function renderAdminPaymentDashboardHtml({
 
   const pendingVerifyCount = allPayments.filter((p) => p.paymentStatus === "Submitted for Verification").length;
   const totalVerifiedInr = allPayments.reduce((sum, p) => sum + Math.max(0, Number(p.paidAmount || 0)), 0);
+  const duplicateInfo = detectDuplicateUtrGroups(allPayments);
+
+  const duplicateAlertBannerHtml = duplicateInfo.duplicateCount
+    ? `
+      <div id="adminDuplicateUtrAlert" class="admin-dup-utr-alert" role="alert" data-duplicate-utr-count="${duplicateInfo.duplicateCount}">
+        <div class="admin-dup-utr-alert-head">
+          <strong>🚨 ${escapeHtml(t("adminPayDupUtrAlertTitle"))} (${duplicateInfo.duplicateCount})</strong>
+          <span>${escapeHtml(t("adminPayDupUtrAlertSub"))}</span>
+        </div>
+        <ul class="admin-dup-utr-list">
+          ${duplicateInfo.groups
+            .map((g) => {
+              const labels = g.records
+                .map((r) => `${r.customerName || "Customer"} (${r.id || "—"} • ${r.paymentStatus || "Pending"})`)
+                .join(" · ");
+              return `<li><strong>UTR ${escapeHtml(g.utrKey)}</strong> (${g.records.length}×): ${escapeHtml(labels)}</li>`;
+            })
+            .join("")}
+        </ul>
+      </div>
+    `
+    : `
+      <div id="adminDuplicateUtrStatus" class="admin-dup-utr-ok" data-duplicate-utr-count="0">
+        🛡 <strong>${escapeHtml(t("adminPayDupUtrProtectedLabel"))}</strong> — ${escapeHtml(t("adminPayDupUtrNoneMsg"))}
+      </div>
+    `;
 
   const filterChipsHtml = ["all", ...PAYMENT_STATUS_LIST]
     .map((st) => {
@@ -842,8 +978,10 @@ export function renderAdminPaymentDashboardHtml({
           const statusCls = getPaymentStatusClass(p.paymentStatus);
           const safeShot = isAllowedPaymentImageSrc(p.screenshotDataUrl) ? p.screenshotDataUrl : "";
           const historyItems = Array.isArray(p.history) ? p.history : [];
+          const normalizedRowUtr = normalizeUtrKey(p.utrKey || p.utrNumber || "");
+          const isDuplicateUtr = Boolean(normalizedRowUtr && duplicateInfo.duplicateKeys.has(normalizedRowUtr));
           return `
-            <article class="admin-payment-card" data-admin-payment-id="${escapeHtml(p.id || "")}">
+            <article class="admin-payment-card ${isDuplicateUtr ? "is-duplicate-utr" : ""}" data-admin-payment-id="${escapeHtml(p.id || "")}" ${isDuplicateUtr ? 'data-duplicate-utr="true"' : ""}>
               <div class="payment-record-top">
                 <div>
                   <span class="payment-cat-tag">${escapeHtml(p.paymentCategory === "wedding_booking" ? "Wedding / Event" : "Model Advance")}</span>
@@ -868,7 +1006,15 @@ export function renderAdminPaymentDashboardHtml({
                 <div class="payment-money-box is-balance"><span>Remaining</span><strong>${escapeHtml(formatInrAmount(p.remainingBalance))}</strong></div>
               </div>
 
-              ${p.utrNumber ? `<div class="payment-ref-line">🧾 Customer UTR: <strong>${escapeHtml(p.utrNumber)}</strong></div>` : ""}
+              ${
+                p.utrNumber
+                  ? `<div class="payment-ref-line">🧾 Customer UTR: <strong>${escapeHtml(p.utrNumber)}</strong> ${
+                      isDuplicateUtr
+                        ? `<span class="admin-dup-utr-pill" role="alert">⚠ ${escapeHtml(t("adminPayDupUtrBadge"))}</span>`
+                        : ""
+                    }</div>`
+                  : ""
+              }
               ${safeShot ? `<div class="admin-pay-shot-wrap"><a href="${escapeHtml(safeShot)}" target="_blank" rel="noopener noreferrer"><img src="${escapeHtml(safeShot)}" alt="Customer payment proof" class="admin-pay-shot-thumb" /></a></div>` : ""}
 
               <!-- Step 1: Admin Set Package Price & Advance Charge -->
@@ -977,22 +1123,51 @@ export function renderAdminPaymentDashboardHtml({
         </div>
         <div class="field full">
           <label for="adminUpiQrFile">${escapeHtml(t("adminPayQrUploadLabel"))}</label>
-          <input id="adminUpiQrFile" type="file" accept="image/png,image/jpeg,image/webp" class="input" />
-          ${
-            isUploadedQrImageDataUrl(cfg.qrImageDataUrl)
-              ? `<div style="margin-top:8px;"><img src="${escapeHtml(cfg.qrImageDataUrl)}" alt="Configured UPI QR" class="upi-qr-preview-thumb" /></div>`
-              : `<p class="payment-wait-note" style="margin:8px 0 0;">⚠ ${escapeHtml(t("adminPayQrNotUploadedNote"))}</p>`
-          }
+          <input id="adminUpiQrFile" type="file" accept="image/png,image/jpeg,image/webp" class="input" ${isUploadingQr ? "disabled" : ""} />
+          <div id="adminUpiQrErrorBox" class="payment-utr-error ${qrErrorMsg ? "" : "hidden"}" role="alert" aria-live="polite">${escapeHtml(qrErrorMsg)}</div>
+          <div id="adminUpiQrLivePreviewBox" class="admin-qr-live-preview" data-has-saved-qr="${hasSavedQr ? "true" : "false"}" data-upload-status="${escapeHtml(uploadState.status || (hasSavedQr ? "saved" : "idle"))}">
+            <div class="admin-qr-live-preview-head">
+              <strong>📷 ${escapeHtml(t("adminPayQrLivePreviewTitle"))}</strong>
+              <span id="adminUpiQrPreviewStatus" class="admin-qr-live-badge ${qrStatusClass}">
+                ${escapeHtml(qrStatusText)}
+              </span>
+            </div>
+            <div class="admin-qr-live-body">
+              <div id="adminUpiQrImgWrap" class="upi-qr-img-wrap ${hasVisibleQr ? "" : "hidden"}">
+                <img
+                  id="adminUpiQrPreviewImg"
+                  src="${hasVisibleQr ? escapeHtml(displayQrSrc) : ""}"
+                  alt="Studio UPI QR Code Live Preview"
+                  class="upi-qr-preview-thumb"
+                />
+              </div>
+              <div class="admin-qr-live-info">
+                <p id="adminUpiQrEmptyNote" class="payment-wait-note ${hasVisibleQr ? "hidden" : ""}">
+                  ⚠ ${escapeHtml(t("adminPayQrNotUploadedNote"))}
+                </p>
+                <p id="adminUpiQrSavedNote" class="admin-qr-saved-note ${hasSavedQr && !isUploadingQr ? "" : "hidden"}">
+                  ✓ ${escapeHtml(t("adminPayQrSavedHelper"))}
+                </p>
+                <div class="admin-qr-live-upi-line">
+                  <span>UPI ID:</span>
+                  <strong class="upi-id-code">${escapeHtml(cfg.upiId || OFFICIAL_STUDIO_UPI_ID)}</strong>
+                </div>
+                <button type="button" id="adminUpiQrClearSelectionBtn" class="btn-outline btn-sm ${previewCandidate && !isUploadingQr ? "" : "hidden"}">
+                  ${escapeHtml(t("adminPayQrResetSelectionBtn"))}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="field full">
-          <label class="admin-pay-checkbox">
-            <input id="adminUpiQrVerified" type="checkbox" ${cfg.qrVerified && isUploadedQrImageDataUrl(cfg.qrImageDataUrl) ? "checked" : ""} />
+          <label class="admin-pay-checkbox ${hasSavedQr ? "" : "is-disabled"}">
+            <input id="adminUpiQrVerified" type="checkbox" ${cfg.qrVerified && hasSavedQr ? "checked" : ""} ${hasSavedQr ? "" : "disabled"} />
             <span>${escapeHtml(t("adminPayQrVerifiedLabel"))}</span>
           </label>
         </div>
         <div class="field full">
-          <label class="admin-pay-checkbox">
-            <input id="adminUpiEnabled" type="checkbox" ${isPaymentConfigReady(cfg) ? "checked" : ""} />
+          <label class="admin-pay-checkbox ${hasSavedQr && cfg.qrVerified ? "" : "is-disabled"}">
+            <input id="adminUpiEnabled" type="checkbox" ${isPaymentConfigReady(cfg) ? "checked" : ""} ${hasSavedQr && cfg.qrVerified ? "" : "disabled"} />
             <strong>${escapeHtml(t("adminPayEnableToggle"))}</strong>
           </label>
         </div>
@@ -1004,6 +1179,15 @@ export function renderAdminPaymentDashboardHtml({
           <button type="submit" class="btn-gold">${escapeHtml(t("adminPaySaveConfigBtn"))}</button>
         </div>
       </form>
+
+      <div class="admin-pay-records-header">
+        <div>
+          <h4>🧾 ${escapeHtml(t("adminPayRecordsSectionTitle"))} (${allPayments.length})</h4>
+          <p>${escapeHtml(t("adminPayRecordsSectionSub"))}</p>
+        </div>
+      </div>
+
+      ${duplicateAlertBannerHtml}
 
       <div class="admin-pay-filters">${filterChipsHtml}</div>
       <div class="admin-payments-list">${rowsHtml}</div>

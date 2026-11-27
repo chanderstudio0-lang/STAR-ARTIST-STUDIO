@@ -629,6 +629,15 @@ service cloud.firestore {
                'Confirmed', 'Cancelled', 'Rejected'
              ] &&
              (!('utrNumber' in data) || (data.utrNumber is string && data.utrNumber.size() <= 60)) &&
+             (!('utrKey' in data) || (
+               data.utrKey is string && (
+                 data.utrKey == '' || (
+                   data.utrKey.size() >= 6 &&
+                   data.utrKey.size() <= 60 &&
+                   data.utrKey.matches('^[A-Z0-9]{6,60}$')
+                 )
+               )
+             )) &&
              (!('screenshotDataUrl' in data) || (
                data.screenshotDataUrl is string && (
                  data.screenshotDataUrl == '' || (
@@ -652,6 +661,20 @@ service cloud.firestore {
              (!('history' in data) || (data.history is list && data.history.size() <= 40)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidUtrClaim(data, utrKey) {
+      return isValidId(utrKey) &&
+             utrKey.size() >= 6 &&
+             utrKey.size() <= 60 &&
+             utrKey.matches('^[A-Z0-9]{6,60}$') &&
+             data.keys().hasOnly(['utrKey', 'utrDisplay', 'paymentId', 'claimedByUid', 'status', 'createdAt']) &&
+             data.utrKey == utrKey &&
+             data.utrDisplay is string && data.utrDisplay.size() >= 6 && data.utrDisplay.size() <= 60 &&
+             isValidId(data.paymentId) &&
+             data.claimedByUid is string && data.claimedByUid.size() > 0 && data.claimedByUid.size() <= 128 &&
+             data.status == 'active' &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
     // Default deny all unknown collections
@@ -1181,6 +1204,7 @@ service cloud.firestore {
                            incoming().verifiedAmount == 0 &&
                            incoming().priceSetByAdmin == false &&
                            (!('utrNumber' in incoming()) || incoming().utrNumber == '') &&
+                           (!('utrKey' in incoming()) || incoming().utrKey == '') &&
                            (!('screenshotDataUrl' in incoming()) || incoming().screenshotDataUrl == '') &&
                            (!('verifiedByAdminEmail' in incoming()) || incoming().verifiedByAdminEmail == '') &&
                            !('verifiedAt' in incoming()) &&
@@ -1212,8 +1236,15 @@ service cloud.firestore {
                                incoming().utrNumber is string &&
                                incoming().utrNumber.size() >= 6 &&
                                incoming().utrNumber.size() <= 60 &&
+                               incoming().utrKey is string &&
+                               incoming().utrKey.size() >= 6 &&
+                               incoming().utrKey.size() <= 60 &&
+                               incoming().utrKey.matches('^[A-Z0-9]{6,60}$') &&
+                               existsAfter(/databases/$(database)/documents/utrClaims/$(incoming().utrKey)) &&
+                               getAfter(/databases/$(database)/documents/utrClaims/$(incoming().utrKey)).data.paymentId == paymentId &&
+                               getAfter(/databases/$(database)/documents/utrClaims/$(incoming().utrKey)).data.claimedByUid == request.auth.uid &&
                                incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'utrNumber', 'screenshotDataUrl', 'paymentStatus', 'submittedAt', 'updatedAt'
+                                 'utrNumber', 'utrKey', 'screenshotDataUrl', 'paymentStatus', 'submittedAt', 'updatedAt'
                                ])
                              ) || (
                                existing().paymentStatus in ['Payment Verified', 'Partially Paid', 'Fully Paid'] &&
@@ -1235,6 +1266,22 @@ service cloud.firestore {
       match /adminPrivate/{noteId} {
         allow get, list, create, update, delete: if isAdmin();
       }
+    }
+
+    // Atomic, zero-PII Duplicate UTR Lock Collection (prevents duplicate & race-condition UTR reuse across all customers)
+    match /utrClaims/{utrKey} {
+      allow get, list: if isAdmin();
+      allow create: if isValidUtrClaim(incoming(), utrKey) && (
+                       isAdmin() || (
+                         isSignedIn() &&
+                         incoming().claimedByUid == request.auth.uid &&
+                         existsAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)) &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.customerUid == request.auth.uid &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.utrKey == utrKey &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.paymentStatus == 'Submitted for Verification'
+                       )
+                     );
+      allow update, delete: if isAdmin();
     }
   }
 }

@@ -649,5 +649,128 @@ test("Automated email alert handlers honor Admin Dashboard studioConfig/emailAle
   assert.ok(indexSrc.includes("doc(`adminEmailAlerts/${alertId}`)"));
 });
 
+test("SMTP transport enforces timeouts & cleanup, strips header control chars, redacts plaintext/base64 secrets on rethrown errors, and renders enriched model fields safely", async () => {
+  const { sendAdminAlertEmail } = await import("../src/mailer.js");
+
+  // 1. Header injection stripped & Secret Manager trailing newlines trimmed
+  const trimmedCfg = resolveSmtpConfig(
+    { EMAIL_BRAND_NAME: "STAR ARTIST\r\nBcc: evil@test.com", SMTP_FROM: "sender@gmail.com\r\n" },
+    { smtpUser: "chanderstudio0@gmail.com\n", smtpPass: "my-secret-pass\r\n" }
+  );
+  assert.equal(trimmedCfg.user, "chanderstudio0@gmail.com");
+  assert.equal(trimmedCfg.pass, "my-secret-pass");
+  assert.equal(/[\r\n]/.test(trimmedCfg.from), false);
+
+  // 2. Missing SMTP_USER / SMTP_PASS fails clearly
+  await assert.rejects(
+    () =>
+      sendAdminAlertEmail({
+        subject: "Test",
+        text: "Body",
+        smtpConfig: resolveSmtpConfig({}, { smtpUser: "", smtpPass: "" })
+      }),
+    /SMTP_USER and SMTP_PASS secrets are not configured/
+  );
+
+  // 3. Internally created transport sets timeouts and closes in finally
+  let capturedTransportOpts = null;
+  let closedCount = 0;
+  const mockNodemailer = {
+    createTransport(opts) {
+      capturedTransportOpts = opts;
+      return {
+        async sendMail() {
+          return { messageId: "msg_cleanup_1" };
+        },
+        close() {
+          closedCount += 1;
+        }
+      };
+    }
+  };
+  const delivery = await sendAdminAlertEmail({
+    subject: "Alert",
+    text: "Hello",
+    smtpConfig: trimmedCfg,
+    nodemailerLib: mockNodemailer
+  });
+  assert.equal(delivery.messageId, "msg_cleanup_1");
+  assert.equal(capturedTransportOpts.connectionTimeout, 10000);
+  assert.equal(capturedTransportOpts.greetingTimeout, 10000);
+  assert.equal(capturedTransportOpts.socketTimeout, 15000);
+  assert.equal(closedCount, 1);
+
+  // 4. Rethrown handler errors redact both plaintext and base64 SMTP_PASS
+  const rawPass = "TopSecretAppPass!99";
+  const b64Pass = Buffer.from(rawPass, "utf8").toString("base64");
+  const loggedErrors = [];
+  await assert.rejects(
+    () =>
+      handleNewModelApplicationCreated(
+        {
+          params: { modelId: "mdl_redact_1" },
+          data: {
+            id: "mdl_redact_1",
+            data: () => ({
+              fullName: "Kiran Gill",
+              age: 22,
+              city: "Sirsa",
+              phoneNumber: "9812890081",
+              consentGiven: true,
+              status: "pending"
+            })
+          }
+        },
+        {
+          smtpUser: "chanderstudio0@gmail.com",
+          smtpPass: rawPass,
+          transporter: {
+            async sendMail() {
+              throw new Error(`535 Auth failed raw=${rawPass} b64=${b64Pass}`);
+            }
+          },
+          logger: { info: () => {}, warn: () => {}, error: (_m, meta) => loggedErrors.push(meta) }
+        }
+      ),
+    (err) => {
+      assert.equal(err.message.includes(rawPass), false);
+      assert.equal(err.message.includes(b64Pass), false);
+      assert.ok(err.message.includes("[REDACTED]"));
+      return true;
+    }
+  );
+  assert.equal(loggedErrors.length, 1);
+  assert.equal(loggedErrors[0].error.includes(rawPass), false);
+  assert.equal(loggedErrors[0].error.includes(b64Pass), false);
+
+  // 5. Enriched optional model fields render safely while blocking unsafe introVideoUrl
+  const enriched = buildNewModelApplicationAlertEmail({
+    modelId: "mdl_rich_1",
+    model: {
+      fullName: "Rhea Kapoor",
+      age: 24,
+      gender: "Female",
+      city: "Sirsa",
+      state: "Haryana",
+      heightCm: 172,
+      experienceLevel: "Intermediate",
+      languages: "Hindi, English, Punjabi",
+      contactEmail: "rhea@example.com",
+      phoneNumber: "9812890081",
+      skills: "Bridal & Editorial",
+      portfolioPhotos: ["data:image/jpeg;base64,abc", "data:image/jpeg;base64,def"],
+      introVideoUrl: "javascript:alert(1)",
+      consentGiven: true,
+      status: "pending"
+    }
+  });
+  assert.ok(enriched.html.includes("Sirsa, Haryana"));
+  assert.ok(enriched.html.includes("172 cm"));
+  assert.ok(enriched.html.includes("Intermediate"));
+  assert.ok(enriched.html.includes("rhea@example.com"));
+  assert.ok(enriched.html.includes("2 photo(s) attached in Admin Dashboard"));
+  assert.equal(enriched.html.includes('href="javascript:'), false);
+});
+
 
 

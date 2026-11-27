@@ -6654,6 +6654,527 @@ test("UPI Advance Payment & Wedding Booking Payment System enforces disabled def
   assert.ok(swJs.includes('"/js/payment-system.js"'));
 });
 
+test("Gallery upload flow integrates HTML Canvas image cropping and brightness adjustment tool with live preview, clamping, and Firestore-safe export", async () => {
+  const editorMod = await import(pathToFileURL(path.join(webDir, "js/image-editor.js")).href);
+
+  // 1. Clamping and defaults
+  assert.equal(editorMod.clampBrightness(10), 50);
+  assert.equal(editorMod.clampBrightness(250), 150);
+  assert.equal(editorMod.clampBrightness(118.4), 118);
+  assert.equal(editorMod.clampCropZoom(0.2), 1);
+  assert.equal(editorMod.clampCropZoom(5), 3);
+  assert.equal(editorMod.clampOffset(-4), -1);
+  assert.equal(editorMod.clampOffset(4), 1);
+  assert.equal(editorMod.normalizeAspectPreset("16:9"), "16:9");
+  assert.equal(editorMod.normalizeAspectPreset("4:5"), "4:5");
+  assert.equal(editorMod.normalizeAspectPreset("9:16"), "9:16");
+  assert.equal(editorMod.normalizeAspectPreset("unknown"), "original");
+  assert.ok(editorMod.CROP_ASPECT_PRESETS.includes("4:5"));
+  assert.ok(editorMod.CROP_ASPECT_PRESETS.includes("9:16"));
+  assert.equal(editorMod.hasNonDefaultEdits(editorMod.createDefaultEditorState()), false);
+  assert.equal(editorMod.hasNonDefaultEdits({ aspectRatio: "1:1", brightness: 115 }), true);
+
+  // 2. Crop source rectangle math across aspect ratios, zoom, and pan bounds
+  const sqCrop = editorMod.computeCropSourceRect({
+    imageWidth: 1600,
+    imageHeight: 1000,
+    aspectRatio: "1:1",
+    zoom: 1,
+    offsetX: 0,
+    offsetY: 0
+  });
+  assert.equal(sqCrop.sw, 1000);
+  assert.equal(sqCrop.sh, 1000);
+  assert.equal(sqCrop.sx, 300);
+  assert.equal(sqCrop.sy, 0);
+
+  const portrait45Crop = editorMod.computeCropSourceRect({
+    imageWidth: 1600,
+    imageHeight: 1000,
+    aspectRatio: "4:5",
+    zoom: 1,
+    offsetX: 0,
+    offsetY: 0
+  });
+  assert.equal(portrait45Crop.sw, 800);
+  assert.equal(portrait45Crop.sh, 1000);
+  assert.equal(portrait45Crop.sx, 400);
+  assert.equal(portrait45Crop.sy, 0);
+
+  const story916Crop = editorMod.computeCropSourceRect({
+    imageWidth: 1600,
+    imageHeight: 1600,
+    aspectRatio: "9:16",
+    zoom: 1,
+    offsetX: 0,
+    offsetY: 0
+  });
+  assert.equal(story916Crop.sw, 900);
+  assert.equal(story916Crop.sh, 1600);
+
+  const zoomedPanCrop = editorMod.computeCropSourceRect({
+    imageWidth: 1600,
+    imageHeight: 1000,
+    aspectRatio: "16:9",
+    zoom: 2,
+    offsetX: 1,
+    offsetY: -1
+  });
+  assert.equal(zoomedPanCrop.sw, 800);
+  assert.equal(zoomedPanCrop.sh, 450);
+  assert.equal(zoomedPanCrop.sx, 800);
+  assert.equal(zoomedPanCrop.sy, 0);
+  assert.ok(zoomedPanCrop.sx + zoomedPanCrop.sw <= 1600);
+  assert.ok(zoomedPanCrop.sy + zoomedPanCrop.sh <= 1000);
+
+  // 3. Pixel-level RGBA brightness fallback preserves alpha and clamps 0..255
+  const pixels = new Uint8ClampedArray([100, 200, 250, 255, 40, 80, 120, 128]);
+  editorMod.applyBrightnessToRgbaPixels(pixels, 150);
+  assert.deepEqual(Array.from(pixels), [150, 255, 255, 255, 60, 120, 180, 128]);
+
+  // 4. HTML Canvas rendering & export (workspace crop frame, live cropped preview, and Blob/File output)
+  const drawCalls = [];
+  const fillRectCalls = [];
+  const filtersApplied = [];
+  const createMockCanvas = () => {
+    const ctx = {
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 1,
+      _filter: "none",
+      get filter() {
+        return this._filter;
+      },
+      set filter(v) {
+        this._filter = v;
+        filtersApplied.push(v);
+      },
+      save() {},
+      restore() {},
+      fillRect(...args) {
+        fillRectCalls.push({ style: this.fillStyle, args });
+      },
+      drawImage(...args) {
+        drawCalls.push(args);
+      },
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      strokeRect() {}
+    };
+    return {
+      width: 0,
+      height: 0,
+      getContext: (type) => (type === "2d" ? ctx : null),
+      toDataURL: () => "data:image/jpeg;base64," + Buffer.from("edited-studio-jpeg").toString("base64")
+    };
+  };
+
+  const mockImg = { naturalWidth: 1600, naturalHeight: 1200 };
+  const workspaceCanvas = createMockCanvas();
+  const workspaceRes = editorMod.drawCropWorkspaceToCanvas(
+    workspaceCanvas,
+    mockImg,
+    { aspectRatio: "4:5", zoom: 1.2, offsetX: 0.2, offsetY: -0.1, brightness: 112 },
+    { maxDim: 680 }
+  );
+  assert.equal(workspaceRes.width, 680);
+  assert.equal(workspaceRes.height, 510);
+  assert.ok(workspaceRes.frameRect.width > 0 && workspaceRes.frameRect.width < workspaceRes.width);
+  assert.ok(workspaceRes.frameRect.height > 0 && workspaceRes.frameRect.height <= workspaceRes.height);
+  assert.ok(
+    fillRectCalls.some((call) => call.style === "rgba(0, 0, 0, 0.58)"),
+    "Workspace canvas must shade areas outside the active crop frame"
+  );
+
+  const previewCanvas = createMockCanvas();
+  const previewRes = editorMod.drawEditedImageToCanvas(
+    previewCanvas,
+    mockImg,
+    { aspectRatio: "1:1", zoom: 1.5, offsetX: 0.25, offsetY: -0.25, brightness: 120 },
+    { maxDim: 600, showGrid: true }
+  );
+  assert.equal(previewRes.width, 600);
+  assert.equal(previewRes.height, 600);
+  assert.ok(filtersApplied.includes("brightness(120%)"));
+  assert.equal(drawCalls.length, 2);
+
+  const exported = editorMod.exportEditedCanvasPayloads({
+    img: mockImg,
+    edits: { aspectRatio: "4:3", zoom: 1.25, offsetX: 0, offsetY: 0, brightness: 115 },
+    originalName: "bridal-shoot.png",
+    metadata: { camera: "Sony A7IV" },
+    rawDataUrl: "data:image/png;base64,AAAA",
+    createCanvas: createMockCanvas
+  });
+  assert.equal(exported.isEdited, true);
+  assert.equal(exported.width, 1280);
+  assert.equal(exported.height, 960);
+  assert.ok(exported.mediaUrl.startsWith("data:image/jpeg;base64,"));
+  assert.ok(exported.thumbnailUrl.startsWith("data:image/jpeg;base64,"));
+  assert.ok(exported.file, "Exported payload must produce a Blob/File for Storage upload");
+  assert.equal(exported.metadata.camera, "Sony A7IV");
+  assert.equal(editorMod.formatEditorSummary(exported.edits), "Crop 4:3 • Zoom 1.3× • Brightness 115%");
+
+  // 5. HTML, app.js, CSS, i18n, and Service Worker precache wiring
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  for (const token of [
+    'id="toggleGalleryEditorBtn"',
+    'id="galleryImageEditorPanel"',
+    'id="galleryEditorCanvas"',
+    'id="galleryCroppedPreviewCanvas"',
+    'id="galleryCroppedOutputMeta"',
+    'id="galleryCropAspectGroup"',
+    'data-crop-aspect="4:5"',
+    'data-crop-aspect="9:16"',
+    'id="galleryCropZoom"',
+    'id="galleryBrightnessRange"',
+    'id="resetGalleryEditorBtn"',
+    'id="applyGalleryEditsBtn"'
+  ]) {
+    assert.ok(indexHtml.includes(token), `index.html missing gallery editor token: ${token}`);
+  }
+
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  for (const token of [
+    'from "./image-editor.js"',
+    "drawCropWorkspaceToCanvas",
+    "drawEditedImageToCanvas",
+    "galleryCroppedPreviewCanvas",
+    "exportEditedCanvasPayloads",
+    "commitGalleryEditorChanges"
+  ]) {
+    assert.ok(appJs.includes(token), `app.js missing gallery editor wiring: ${token}`);
+  }
+
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  assert.ok(css.includes(".gallery-image-editor"));
+  assert.ok(css.includes(".gallery-editor-stage-grid"));
+  assert.ok(css.includes(".gallery-editor-canvas"));
+  assert.ok(css.includes(".gallery-editor-result-canvas"));
+
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  assert.ok(swJs.includes("star-artist-pwa-v68"));
+  assert.ok(swJs.includes('"/js/image-editor.js"'));
+});
+
+test("Admin Dashboard provides prominent UPI Payments & Settings tab with live QR preview, official UPI ID protection, UTR verification, and mobile responsiveness", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+
+  const indexHtml = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const rules = fs.readFileSync(path.resolve(webDir, "..", "firestore.rules"), "utf8");
+
+  // 1. Prominent "UPI Payments & Settings" tab placed right after Bookings in Admin Dashboard
+  const bookingsIdx = indexHtml.indexOf('data-admin-tab="bookings"');
+  const paymentsIdx = indexHtml.indexOf('data-admin-tab="payments"');
+  const modelsIdx = indexHtml.indexOf('data-admin-tab="models"');
+  assert.ok(bookingsIdx > 0 && paymentsIdx > bookingsIdx && paymentsIdx < modelsIdx, "UPI Payments & Settings tab must appear prominently right after Bookings");
+  assert.ok(indexHtml.includes("UPI Payments &amp; Settings"));
+
+  // 2. Bilingual EN & HI translations
+  assert.equal(i18nMod.TRANSLATIONS.en.adminTabPayments, "UPI Payments & Settings");
+  assert.equal(i18nMod.TRANSLATIONS.hi.adminTabPayments, "UPI भुगतान व सेटिंग्स");
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayQrLivePreviewTitle);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayQrLivePreviewTitle);
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayRecordsSectionTitle);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayRecordsSectionTitle);
+
+  // 3. Official PhonePe UPI ID preserved + Live QR Preview + Verify/Reject + Records heading rendered
+  assert.equal(payMod.OFFICIAL_STUDIO_UPI_ID, "9812890081@ybl");
+  const sampleQr = "data:image/jpeg;base64," + "A".repeat(240);
+  const adminHtml = payMod.renderAdminPaymentDashboardHtml({
+    payments: [
+      {
+        id: "pay_demo_1",
+        customerUid: "uid_cust_1",
+        customerName: "Riya Sharma",
+        customerContact: "9812800001",
+        paymentCategory: "wedding_booking",
+        eventType: "Wedding Photography",
+        shootDate: "2026-12-20",
+        totalPrice: 50000,
+        requiredAdvance: 12500,
+        paidAmount: 0,
+        remainingBalance: 50000,
+        priceSetByAdmin: true,
+        paymentStatus: "Submitted for Verification",
+        bookingStatus: "Payment Pending",
+        utrNumber: "UTR412345678901"
+      }
+    ],
+    paymentConfig: {
+      ...payMod.DEFAULT_PAYMENT_CONFIG,
+      qrImageDataUrl: sampleQr,
+      qrVerified: true,
+      enabled: true
+    },
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+
+  for (const token of [
+    'id="adminUpiConfigForm"',
+    'id="adminUpiQrFile"',
+    'id="adminUpiQrLivePreviewBox"',
+    'id="adminUpiQrPreviewImg"',
+    'id="adminUpiQrPreviewStatus"',
+    'id="adminUpiQrClearSelectionBtn"',
+    'id="adminUpiQrVerified"',
+    'id="adminUpiEnabled"',
+    "9812890081@ybl",
+    "UTR412345678901",
+    'data-admin-verify-pay-form="pay_demo_1"',
+    'data-admin-reject-pay-form="pay_demo_1"',
+    "Customer UTR &amp; Transaction Records"
+  ]) {
+    assert.ok(adminHtml.includes(token), `Admin UPI Payments & Settings HTML missing token: ${token}`);
+  }
+
+  // 4. Live preview change handler + transparent-PNG white background fill in app.js
+  assert.ok(appJs.includes('e.target.closest("#adminUpiQrFile")'));
+  assert.ok(appJs.includes('e.target.closest("#adminUpiQrClearSelectionBtn")'));
+  assert.ok(appJs.includes('ctx2d.fillStyle = "#FFFFFF"'));
+
+  // 5. Mobile responsive styles + untouched strict Admin-only Firestore rules
+  assert.ok(css.includes(".admin-qr-live-preview"));
+  assert.ok(css.includes(".admin-pay-records-header"));
+  assert.ok(css.includes("@media (max-width: 640px)"));
+  assert.ok(rules.includes("allow create, update: if isAdmin() && isValidPaymentSettingsConfig(incoming(), configId);"));
+  assert.ok(rules.includes("allow get: if isAdmin() || (isSignedIn() && configId == 'paymentSettings');"));
+});
+
+test("Duplicate UTR Protection normalizes case/spaces/separators, returns exact customer error, renders Admin Duplicate UTR Alert, and enforces atomic Firestore transaction + utrClaims rules", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const rules = fs.readFileSync(path.resolve(webDir, "..", "firestore.rules"), "utf8");
+
+  // 1. Exact customer-facing duplicate UTR error message
+  assert.equal(
+    payMod.DUPLICATE_UTR_ERROR_MESSAGE,
+    "This UTR has already been submitted. Please check your transaction reference number."
+  );
+
+  // 2. Canonical normalization defeats uppercase/lowercase, extra spaces, hyphens, slashes, and underscores
+  const variants = [
+    "UTR412345678901",
+    "utr412345678901",
+    "  utr 4123 4567 8901  ",
+    "UtR-4123-4567/8901",
+    "utr_4123_4567_8901"
+  ];
+  const canonicalKeys = variants.map((v) => payMod.normalizeUtrKey(v));
+  assert.ok(canonicalKeys.every((k) => k === "UTR412345678901"), `Expected all variants to normalize identically, got: ${canonicalKeys.join(", ")}`);
+
+  const validated = payMod.validateUtrReference("  utr 4123-4567 8901 ");
+  assert.equal(validated.valid, true);
+  assert.equal(validated.clean, "UTR4123-45678901");
+  assert.equal(validated.canonicalKey, "UTR412345678901");
+
+  // Separators-only / too short alphanumeric payload must fail
+  assert.equal(payMod.validateUtrReference("------").valid, false);
+  assert.equal(payMod.validateUtrReference("ab-12").valid, false);
+
+  // 3. Duplicate detection catches duplicates across mixed case/space/legacy records without altering legacy data
+  const samplePayments = [
+    {
+      id: "pay_legacy_1",
+      customerUid: "uid_1",
+      customerName: "Riya Verma",
+      paymentCategory: "wedding_booking",
+      eventType: "Wedding",
+      shootDate: "2026-12-10",
+      totalPrice: 40000,
+      requiredAdvance: 10000,
+      paidAmount: 0,
+      remainingBalance: 40000,
+      priceSetByAdmin: true,
+      paymentStatus: "Submitted for Verification",
+      bookingStatus: "Payment Pending",
+      utrNumber: "  utr 9988 7766 5544 "
+    },
+    {
+      id: "pay_new_2",
+      customerUid: "uid_2",
+      customerName: "Aman Singh",
+      paymentCategory: "model_advance",
+      modelName: "Ananya",
+      serviceType: "Fashion Editorial Shoot",
+      shootDate: "2026-12-14",
+      totalPrice: 12000,
+      requiredAdvance: 3600,
+      paidAmount: 0,
+      remainingBalance: 12000,
+      priceSetByAdmin: true,
+      paymentStatus: "Submitted for Verification",
+      bookingStatus: "Payment Pending",
+      utrNumber: "UTR-9988-7766-5544",
+      utrKey: "UTR998877665544"
+    },
+    {
+      id: "pay_unique_3",
+      customerUid: "uid_3",
+      customerName: "Neha Gill",
+      paymentCategory: "wedding_booking",
+      eventType: "Pre-Wedding Shoot",
+      shootDate: "2026-12-18",
+      totalPrice: 25000,
+      requiredAdvance: 5000,
+      paidAmount: 5000,
+      remainingBalance: 20000,
+      priceSetByAdmin: true,
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      utrNumber: "112233445566",
+      utrKey: "112233445566"
+    }
+  ];
+
+  const dupInfo = payMod.detectDuplicateUtrGroups(samplePayments);
+  assert.equal(dupInfo.duplicateCount, 1);
+  assert.equal(dupInfo.duplicateKeys.has("UTR998877665544"), true);
+  assert.equal(dupInfo.duplicateRecordIds.has("pay_legacy_1"), true);
+  assert.equal(dupInfo.duplicateRecordIds.has("pay_new_2"), true);
+  assert.equal(dupInfo.duplicateRecordIds.has("pay_unique_3"), false);
+
+  // 4. Admin Dashboard renders prominent Duplicate UTR Alert banner and per-card warning badges
+  const adminDupHtml = payMod.renderAdminPaymentDashboardHtml({
+    payments: samplePayments,
+    paymentConfig: payMod.DEFAULT_PAYMENT_CONFIG,
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(adminDupHtml.includes('id="adminDuplicateUtrAlert"'));
+  assert.ok(adminDupHtml.includes("UTR998877665544"));
+  assert.ok(adminDupHtml.includes('data-duplicate-utr="true"'));
+  assert.ok(adminDupHtml.includes("Duplicate UTR Alert"));
+
+  // Clean state renders active protection status bar
+  const adminCleanHtml = payMod.renderAdminPaymentDashboardHtml({
+    payments: [samplePayments[2]],
+    paymentConfig: payMod.DEFAULT_PAYMENT_CONFIG,
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(adminCleanHtml.includes('id="adminDuplicateUtrStatus"'));
+  assert.equal(adminCleanHtml.includes('id="adminDuplicateUtrAlert"'), false);
+
+  // 5. Bilingual translations + atomic Firestore transaction + rules + inline error UI
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayDupUtrAlertTitle);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayDupUtrAlertTitle);
+  assert.ok(firebaseJs.includes("fsMod.runTransaction"));
+  assert.ok(firebaseJs.includes('fsMod.doc(db, "utrClaims", canonicalKey)'));
+  assert.ok(firebaseJs.includes("DUPLICATE_UTR_ERROR_MESSAGE"));
+  assert.ok(appJs.includes("[data-utr-error-box]"));
+  assert.ok(css.includes(".admin-dup-utr-alert"));
+  assert.ok(css.includes(".payment-utr-error"));
+  assert.ok(rules.includes("match /utrClaims/{utrKey}"));
+  assert.ok(rules.includes("function isValidUtrClaim"));
+  assert.ok(rules.includes("existsAfter(/databases/$(database)/documents/utrClaims/$(incoming().utrKey))"));
+});
+
+test("UPI QR Upload saves immediately on file selection, syncs paymentConfig state, clears empty warning, displays real live preview, gates checkboxes, and handles errors clearly", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+
+  // 1. File metadata validation accepts JPG/PNG/WebP + Android empty MIME fallback, blocks SVG/GIF/PDF/oversized
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "phonepe-qr.png", type: "image/png", size: 42000 }).valid, true);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "phonepe-qr.jpg", type: "image/jpeg", size: 80000 }).valid, true);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "phonepe-qr.webp", type: "image/webp", size: 25000 }).valid, true);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "IMG_QR.PNG", type: "", size: 55000 }).valid, true);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "qr.jpeg", type: "application/octet-stream", size: 55000 }).valid, true);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "evil.svg", type: "image/svg+xml", size: 2000 }).valid, false);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "evil.svg", type: "", size: 2000 }).valid, false);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "anim.gif", type: "image/gif", size: 12000 }).valid, false);
+  assert.equal(payMod.isAllowedPaymentImageFileMeta({ name: "huge.png", type: "image/png", size: 20 * 1024 * 1024 }).valid, false);
+
+  // 2. Before QR upload: warning is visible, preview hidden, QR Verified & Enable Payments checkboxes disabled
+  const htmlBefore = payMod.renderAdminPaymentDashboardHtml({
+    payments: [],
+    paymentConfig: payMod.DEFAULT_PAYMENT_CONFIG,
+    t: tEn
+  });
+  assert.ok(htmlBefore.includes('id="adminUpiQrEmptyNote" class="payment-wait-note "'));
+  assert.ok(htmlBefore.includes('id="adminUpiQrImgWrap" class="upi-qr-img-wrap hidden"'));
+  assert.ok(htmlBefore.includes('id="adminUpiQrVerified" type="checkbox"  disabled'));
+  assert.ok(htmlBefore.includes('id="adminUpiEnabled" type="checkbox"  disabled'));
+  assert.ok(htmlBefore.includes('id="adminUpiQrErrorBox"'));
+
+  // 3. During upload: warning hidden immediately, live preview displays candidate image, checkboxes stay disabled until saved
+  const sampleQr = "data:image/jpeg;base64," + "A".repeat(160);
+  const htmlUploading = payMod.renderAdminPaymentDashboardHtml({
+    payments: [],
+    paymentConfig: payMod.DEFAULT_PAYMENT_CONFIG,
+    qrUploadState: { status: "uploading", previewDataUrl: sampleQr, fileName: "phonepe_qr.png", error: "", approxKb: 24 },
+    t: tEn
+  });
+  assert.ok(htmlUploading.includes('id="adminUpiQrEmptyNote" class="payment-wait-note hidden"'));
+  assert.ok(htmlUploading.includes(`src="${sampleQr}"`));
+  assert.ok(htmlUploading.includes("is-uploading"));
+  assert.ok(htmlUploading.includes('id="adminUpiQrVerified" type="checkbox"  disabled'));
+
+  // 4. After upload/save success: warning stays hidden, saved QR renders in preview, saved note visible, QR Verified unlocked, Enable Payments still locked until verified
+  const savedUnverifiedCfg = {
+    ...payMod.DEFAULT_PAYMENT_CONFIG,
+    qrImageDataUrl: sampleQr,
+    qrVerified: false,
+    enabled: false
+  };
+  const htmlSaved = payMod.renderAdminPaymentDashboardHtml({
+    payments: [],
+    paymentConfig: savedUnverifiedCfg,
+    qrUploadState: { status: "saved", previewDataUrl: "", fileName: "phonepe_qr.png", error: "", approxKb: 24 },
+    t: tEn
+  });
+  assert.ok(htmlSaved.includes('data-has-saved-qr="true"'));
+  assert.ok(htmlSaved.includes('id="adminUpiQrEmptyNote" class="payment-wait-note hidden"'));
+  assert.ok(htmlSaved.includes('id="adminUpiQrSavedNote" class="admin-qr-saved-note "'));
+  assert.ok(htmlSaved.includes(`src="${sampleQr}"`));
+  assert.ok(htmlSaved.includes("(~24 KB)"));
+  assert.equal(htmlSaved.includes('id="adminUpiQrVerified" type="checkbox"  disabled'), false);
+  assert.ok(htmlSaved.includes('id="adminUpiEnabled" type="checkbox"  disabled'));
+
+  // 5. After QR Verified is saved: Enable Payments checkbox is unlocked
+  const verifiedCfg = { ...savedUnverifiedCfg, qrVerified: true, enabled: false };
+  const htmlVerified = payMod.renderAdminPaymentDashboardHtml({
+    payments: [],
+    paymentConfig: verifiedCfg,
+    t: tEn
+  });
+  assert.equal(htmlVerified.includes('id="adminUpiEnabled" type="checkbox"  disabled'), false);
+
+  // 6. On upload error: inline error box visibly renders clear error message
+  const htmlError = payMod.renderAdminPaymentDashboardHtml({
+    payments: [],
+    paymentConfig: payMod.DEFAULT_PAYMENT_CONFIG,
+    qrUploadState: { status: "error", previewDataUrl: "", fileName: "", error: "Unsupported file format." },
+    t: tEn
+  });
+  assert.ok(htmlError.includes('id="adminUpiQrErrorBox" class="payment-utr-error "'));
+  assert.ok(htmlError.includes("Unsupported file format."));
+
+  // 7. Verify app.js & firebase.js auto-upload/save, immediate state sync, adaptive compression, and bilingual keys
+  assert.ok(appJs.includes("isAllowedPaymentImageFileMeta"));
+  assert.ok(appJs.includes("state.adminQrUploadState"));
+  assert.ok(appJs.includes("fetchPaymentSettings({ throwOnError: true })"));
+  assert.ok(appJs.includes("const savedConfig = await adminSavePaymentSettings("));
+  assert.ok(appJs.includes("state.paymentConfig = { ...DEFAULT_PAYMENT_CONFIG, ...savedConfig }"));
+  assert.ok(firebaseJs.includes("throwOnError = false"));
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayQrUploadingBadge);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayQrUploadingBadge);
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayQrUploadSuccessToast);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayQrUploadSuccessToast);
+  assert.ok(css.includes(".admin-qr-live-badge.is-uploading"));
+  assert.ok(css.includes(".admin-qr-saved-note"));
+});
+
 
 
 

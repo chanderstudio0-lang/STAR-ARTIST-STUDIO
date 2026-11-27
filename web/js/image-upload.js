@@ -162,6 +162,7 @@ export async function encodeImageFileToStudioPayloads(
     file,
     mediaUrl: main.dataUrl,
     thumbnailUrl: thumb.dataUrl,
+    rawDataUrl,
     width: main.width,
     height: main.height,
     originalName: String(file.name || "studio-photo.jpg"),

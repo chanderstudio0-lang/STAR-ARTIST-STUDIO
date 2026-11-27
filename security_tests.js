@@ -1334,15 +1334,29 @@ test("13. UPI Payment System: official UPI 9812890081@ybl stays disabled until Q
     })
   );
 
-  // Customer A submits UTR (after Admin set pricing) -> status transitions ONLY to "Submitted for Verification" (never touches history)
+  // Customer A submits UTR atomically with utrClaims/{utrKey} (after Admin set pricing) -> status transitions ONLY to "Submitted for Verification"
   await assertSucceeds(
-    aliceDb.collection("bookingPayments").doc("pay_model_a1").update({
-      utrNumber: "432198765432",
-      screenshotDataUrl: "",
-      paymentStatus: "Submitted for Verification",
-      submittedAt: pastDate(3000),
-      updatedAt: pastDate(3000),
-    })
+    (async () => {
+      const batch = aliceDb.batch();
+      const ts = pastDate(3000);
+      batch.set(aliceDb.collection("utrClaims").doc("432198765432"), {
+        utrKey: "432198765432",
+        utrDisplay: "432198765432",
+        paymentId: "pay_model_a1",
+        claimedByUid: CUSTOMER_A_UID,
+        status: "active",
+        createdAt: ts,
+      });
+      batch.update(aliceDb.collection("bookingPayments").doc("pay_model_a1"), {
+        utrNumber: "432198765432",
+        utrKey: "432198765432",
+        screenshotDataUrl: "",
+        paymentStatus: "Submitted for Verification",
+        submittedAt: ts,
+        updatedAt: ts,
+      });
+      return batch.commit();
+    })()
   );
 
   // Customer A CANNOT self-verify, self-confirm, tamper with history, or alter totalPrice/paidAmount/remainingBalance
@@ -1613,16 +1627,30 @@ test("14. Payment Audit Hardening (High #1 & Medium #2): blocks forged create pr
     })
   );
 
-  // Valid compressed image data URL succeeds
+  // Valid compressed image data URL succeeds atomically with utrClaims/{utrKey}
   const validShot = "data:image/jpeg;base64," + "B".repeat(160);
   await assertSucceeds(
-    aliceDb.collection("bookingPayments").doc("pay_wed_audit_1").update({
-      utrNumber: "998877665544",
-      screenshotDataUrl: validShot,
-      paymentStatus: "Submitted for Verification",
-      submittedAt: pastDate(1400),
-      updatedAt: pastDate(1400),
-    })
+    (async () => {
+      const batch = aliceDb.batch();
+      const ts = pastDate(1400);
+      batch.set(aliceDb.collection("utrClaims").doc("998877665544"), {
+        utrKey: "998877665544",
+        utrDisplay: "998877665544",
+        paymentId: "pay_wed_audit_1",
+        claimedByUid: CUSTOMER_A_UID,
+        status: "active",
+        createdAt: ts,
+      });
+      batch.update(aliceDb.collection("bookingPayments").doc("pay_wed_audit_1"), {
+        utrNumber: "998877665544",
+        utrKey: "998877665544",
+        screenshotDataUrl: validShot,
+        paymentStatus: "Submitted for Verification",
+        submittedAt: ts,
+        updatedAt: ts,
+      });
+      return batch.commit();
+    })()
   );
 });
 
@@ -1776,6 +1804,147 @@ test("15. Audit Hardening (Medium #3, #4 & #5): Admin-only internal notes, profe
   await assertSucceeds(
     adminDb.collection("bookings").doc("bk_confirmed_a1").update({
       status: "Completed",
+      updatedAt: pastDate(500),
+    })
+  );
+});
+
+test("16. Atomic Duplicate UTR Protection: simultaneous submissions by two customers accept ONLY ONE, block direct bypass, hide utrClaims from customers, and preserve legacy records", async () => {
+  const createdAt = pastDate(6000);
+  const aliceDb = getCustomerAContext().firestore();
+  const bobDb = getCustomerBContext().firestore();
+  const adminDb = getAdminContext().firestore();
+
+  const makePricedPayment = (uid, name) => ({
+    customerUid: uid,
+    customerName: name,
+    customerContact: "+91 9811100009",
+    bookingId: "",
+    paymentCategory: "wedding_booking",
+    modelId: "",
+    modelName: "",
+    serviceType: "Wedding Photography",
+    eventType: "Wedding",
+    shootDate: "2026-12-27",
+    shootTime: "10:00 AM",
+    eventLocation: "Sirsa",
+    eventDetails: "Full wedding shoot",
+    totalPrice: 50000,
+    chargeMode: "percentage",
+    chargeValue: 25,
+    requiredAdvance: 12500,
+    paidAmount: 0,
+    remainingBalance: 50000,
+    priceSetByAdmin: true,
+    paymentStatus: "Payment Pending",
+    bookingStatus: "Payment Pending",
+    utrNumber: "",
+    utrKey: "",
+    screenshotDataUrl: "",
+    verifiedAmount: 0,
+    verifiedByAdminEmail: "",
+    rejectionReason: "",
+    refundAmount: 0,
+    refundReason: "",
+    refundStatus: "",
+    refundReference: "",
+    adminNotes: "",
+    history: [],
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  // Seed two priced customer payment records + one legacy payment record (without utrKey)
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("bookingPayments").doc("pay_race_alice").set(makePricedPayment(CUSTOMER_A_UID, "Alice"));
+    await db.collection("bookingPayments").doc("pay_race_bob").set(makePricedPayment(CUSTOMER_B_UID, "Bob"));
+    await db.collection("bookingPayments").doc("pay_alice_second").set(makePricedPayment(CUSTOMER_A_UID, "Alice"));
+    const legacyDoc = makePricedPayment(CUSTOMER_A_UID, "Alice Legacy");
+    delete legacyDoc.utrKey;
+    legacyDoc.utrNumber = "LEGACY998877";
+    legacyDoc.paymentStatus = "Submitted for Verification";
+    await db.collection("bookingPayments").doc("pay_legacy_keep").set(legacyDoc);
+  });
+
+  // 1. Direct client bypass without atomic utrClaims/{utrKey} MUST FAIL
+  await assertFails(
+    aliceDb.collection("bookingPayments").doc("pay_race_alice").update({
+      utrNumber: "UTR555666777888",
+      utrKey: "UTR555666777888",
+      screenshotDataUrl: "",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: pastDate(2000),
+      updatedAt: pastDate(2000),
+    })
+  );
+
+  // 2. Simultaneous race condition: Customer A and Customer B submit the SAME normalized UTR at the exact same time
+  const submitAtomicUtr = (db, uid, paymentId, displayUtr, utrKey) =>
+    db.runTransaction(async (tx) => {
+      const payRef = db.collection("bookingPayments").doc(paymentId);
+      const claimRef = db.collection("utrClaims").doc(utrKey);
+      const snap = await tx.get(payRef);
+      if (!snap.exists) throw new Error("missing");
+      const ts = pastDate(1500);
+      tx.set(claimRef, {
+        utrKey,
+        utrDisplay: displayUtr,
+        paymentId,
+        claimedByUid: uid,
+        status: "active",
+        createdAt: ts,
+      });
+      tx.update(payRef, {
+        utrNumber: displayUtr,
+        utrKey,
+        screenshotDataUrl: "",
+        paymentStatus: "Submitted for Verification",
+        submittedAt: ts,
+        updatedAt: ts,
+      });
+    });
+
+  const SHARED_UTR_KEY = "UTR778899001122";
+  const raceResults = await Promise.allSettled([
+    submitAtomicUtr(aliceDb, CUSTOMER_A_UID, "pay_race_alice", "UTR778899001122", SHARED_UTR_KEY),
+    submitAtomicUtr(bobDb, CUSTOMER_B_UID, "pay_race_bob", "UTR-7788-9900-1122", SHARED_UTR_KEY),
+  ]);
+
+  const succeededCount = raceResults.filter((r) => r.status === "fulfilled").length;
+  const rejectedCount = raceResults.filter((r) => r.status === "rejected").length;
+  if (succeededCount !== 1 || rejectedCount !== 1) {
+    throw new Error(
+      `Expected EXACTLY 1 winner and 1 rejection in simultaneous duplicate UTR race, got ${succeededCount} fulfilled / ${rejectedCount} rejected`
+    );
+  }
+
+  // 3. Subsequent duplicate attempt by same customer on another booking MUST FAIL
+  await assertFails(
+    submitAtomicUtr(aliceDb, CUSTOMER_A_UID, "pay_alice_second", "UTR778899001122", SHARED_UTR_KEY)
+  );
+
+  // 4. Privacy: Customers CANNOT read, list, update, or delete utrClaims; Admin CAN read utrClaims
+  await assertFails(aliceDb.collection("utrClaims").doc(SHARED_UTR_KEY).get());
+  await assertFails(bobDb.collection("utrClaims").doc(SHARED_UTR_KEY).get());
+  await assertFails(aliceDb.collection("utrClaims").get());
+  await assertFails(aliceDb.collection("utrClaims").doc(SHARED_UTR_KEY).delete());
+  await assertSucceeds(adminDb.collection("utrClaims").doc(SHARED_UTR_KEY).get());
+  await assertSucceeds(adminDb.collection("utrClaims").get());
+
+  // 5. Legacy record (without utrKey) remains 100% readable by owner and verifiable by Admin untouched
+  await assertSucceeds(aliceDb.collection("bookingPayments").doc("pay_legacy_keep").get());
+  await assertSucceeds(
+    adminDb.collection("bookingPayments").doc("pay_legacy_keep").update({
+      paidAmount: 12500,
+      verifiedAmount: 12500,
+      remainingBalance: 37500,
+      paymentStatus: "Partially Paid",
+      bookingStatus: "Confirmed",
+      verifiedAt: pastDate(500),
+      verifiedByAdminEmail: AUTHORIZED_ADMIN_EMAIL,
+      rejectionReason: "",
+      adminNotes: "",
       updatedAt: pastDate(500),
     })
   );

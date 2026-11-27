@@ -15,9 +15,11 @@ import {
 } from "./booking-calendar.js";
 import {
   DEFAULT_PAYMENT_CONFIG,
+  DUPLICATE_UTR_ERROR_MESSAGE,
   calculateAdvanceAndBalance,
   computeVerifiedPaymentTransition,
   isAllowedPaymentImageSrc,
+  normalizeUtrKey,
   validateAdminPaymentConfigPayload,
   validateModelAdvanceRequestPayload,
   validateUtrReference,
@@ -2450,7 +2452,7 @@ export async function adminDeleteCustomerSlot(slotId) {
 // UPI ADVANCE PAYMENT & WEDDING BOOKING PAYMENT SYSTEM
 // ============================================================================
 
-export async function fetchPaymentSettings() {
+export async function fetchPaymentSettings({ throwOnError = false } = {}) {
   const ctx = await initFirebaseClient();
   if (!hasVerifiedMemberAuth(ctx)) return { ...DEFAULT_PAYMENT_CONFIG };
   const { fsMod, db } = ctx;
@@ -2458,7 +2460,8 @@ export async function fetchPaymentSettings() {
     const snap = await fsMod.getDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"));
     if (!snap.exists()) return { ...DEFAULT_PAYMENT_CONFIG };
     return { ...DEFAULT_PAYMENT_CONFIG, ...snap.data() };
-  } catch {
+  } catch (err) {
+    if (throwOnError) throw err;
     return { ...DEFAULT_PAYMENT_CONFIG };
   }
 }
@@ -2469,13 +2472,18 @@ export async function adminSavePaymentSettings(input = {}) {
   const check = validateAdminPaymentConfigPayload(input);
   if (!check.valid) throw new Error(check.error);
   const { fsMod, db } = ctx;
+  const updatedByEmail = String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase();
   const payload = {
     ...check.clean,
-    updatedByEmail: String(adminUser.email || STUDIO_CONTACT.adminEmail).trim().toLowerCase(),
+    updatedByEmail,
     updatedAt: fsMod.serverTimestamp()
   };
   await fsMod.setDoc(fsMod.doc(db, "paymentConfig", "paymentSettings"), payload);
-  return payload;
+  return {
+    ...DEFAULT_PAYMENT_CONFIG,
+    ...check.clean,
+    updatedByEmail
+  };
 }
 
 export async function fetchMyBookingPayments(uid) {
@@ -2538,6 +2546,7 @@ export async function createModelAdvancePaymentRequest(payload = {}) {
     paymentStatus: "Payment Pending",
     bookingStatus: "Payment Pending",
     utrNumber: "",
+    utrKey: "",
     screenshotDataUrl: "",
     verifiedAmount: 0,
     verifiedByAdminEmail: "",
@@ -2598,6 +2607,7 @@ export async function createWeddingBookingPaymentRequest(payload = {}) {
     paymentStatus: "Payment Pending",
     bookingStatus: "Pending Admin Pricing",
     utrNumber: "",
+    utrKey: "",
     screenshotDataUrl: "",
     verifiedAmount: 0,
     verifiedByAdminEmail: "",
@@ -2633,24 +2643,85 @@ export async function submitCustomerPaymentUtr({ paymentId, utrNumber, screensho
   }
 
   const { fsMod, db, auth } = ctx;
-  const ref = fsMod.doc(db, "bookingPayments", paymentId);
-  const snap = await fsMod.getDoc(ref);
-  if (!snap.exists()) throw new Error("Payment record not found.");
-  const existing = snap.data() || {};
-  if (existing.customerUid !== auth.currentUser.uid) {
-    throw new Error("Unauthorized access to another customer's payment record.");
-  }
-  if (!existing.priceSetByAdmin || Number(existing.requiredAdvance || 0) <= 0 || Number(existing.remainingBalance || 0) <= 0) {
-    throw new Error("Admin must finalize the booking price and required advance before UTR submission.");
+  const uid = auth.currentUser.uid;
+  const canonicalKey = utrCheck.canonicalKey || normalizeUtrKey(utrCheck.clean);
+
+  // Fast check against this customer's own existing payment records (including legacy records without utrClaims)
+  try {
+    const ownQuery = fsMod.query(
+      fsMod.collection(db, "bookingPayments"),
+      fsMod.where("customerUid", "==", uid)
+    );
+    const ownSnap = await fsMod.getDocs(ownQuery);
+    const hasOwnDuplicate = ownSnap.docs.some((d) => {
+      const data = d.data() || {};
+      const existingKey = normalizeUtrKey(data.utrKey || data.utrNumber || "");
+      return existingKey.length >= 6 && existingKey === canonicalKey;
+    });
+    if (hasOwnDuplicate) {
+      throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
+    }
+  } catch (preErr) {
+    if (preErr?.message === DUPLICATE_UTR_ERROR_MESSAGE) throw preErr;
   }
 
-  await fsMod.updateDoc(ref, {
-    utrNumber: utrCheck.clean,
-    screenshotDataUrl: cleanShot || existing.screenshotDataUrl || "",
-    paymentStatus: "Submitted for Verification",
-    submittedAt: fsMod.serverTimestamp(),
-    updatedAt: fsMod.serverTimestamp()
-  });
+  const paymentRef = fsMod.doc(db, "bookingPayments", paymentId);
+  const claimRef = fsMod.doc(db, "utrClaims", canonicalKey);
+
+  // Atomic Firestore Transaction: claims utrClaims/{canonicalKey} and updates bookingPayments/{paymentId} together.
+  // If two customers submit the exact same UTR simultaneously, Firestore atomically commits ONLY ONE and rejects the second.
+  try {
+    await fsMod.runTransaction(db, async (tx) => {
+      const snap = await tx.get(paymentRef);
+      if (!snap.exists()) throw new Error("Payment record not found.");
+      const existing = snap.data() || {};
+      if (existing.customerUid !== uid) {
+        throw new Error("Unauthorized access to another customer's payment record.");
+      }
+      if (
+        !existing.priceSetByAdmin ||
+        Number(existing.requiredAdvance || 0) <= 0 ||
+        Number(existing.remainingBalance || 0) <= 0
+      ) {
+        throw new Error("Admin must finalize the booking price and required advance before UTR submission.");
+      }
+      if (!["Payment Pending", "Payment Rejected", "Partially Paid"].includes(existing.paymentStatus)) {
+        throw new Error("UTR submission is not available for the current payment status.");
+      }
+      if (normalizeUtrKey(existing.utrKey || existing.utrNumber || "") === canonicalKey) {
+        throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
+      }
+
+      tx.set(claimRef, {
+        utrKey: canonicalKey,
+        utrDisplay: utrCheck.clean,
+        paymentId: String(paymentId),
+        claimedByUid: uid,
+        status: "active",
+        createdAt: fsMod.serverTimestamp()
+      });
+
+      tx.update(paymentRef, {
+        utrNumber: utrCheck.clean,
+        utrKey: canonicalKey,
+        screenshotDataUrl: cleanShot || existing.screenshotDataUrl || "",
+        paymentStatus: "Submitted for Verification",
+        submittedAt: fsMod.serverTimestamp(),
+        updatedAt: fsMod.serverTimestamp()
+      });
+    });
+  } catch (err) {
+    const code = String(err?.code || "").toLowerCase();
+    if (
+      code.includes("permission-denied") ||
+      code.includes("already-exists") ||
+      code.includes("aborted") ||
+      code.includes("failed-precondition")
+    ) {
+      throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
+    }
+    throw err;
+  }
 }
 
 export async function requestCustomerPaymentRefund({ paymentId, refundReason = "" } = {}) {

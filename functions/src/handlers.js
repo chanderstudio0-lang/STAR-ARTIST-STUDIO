@@ -172,6 +172,11 @@ export async function handleNewBookingCreated(
     };
   } catch (err) {
     const safeError = sanitizeSmtpErrorMessage(err, smtpConfig.pass);
+    logger.error?.("Failed to send admin email alert for new booking.", {
+      bookingId,
+      recipient: smtpConfig.adminEmail,
+      error: safeError
+    });
     await safeRecordAlertLog(
       recordAlertLog,
       {
@@ -188,7 +193,7 @@ export async function handleNewBookingCreated(
       },
       logger
     );
-    throw err;
+    throw new Error(safeError);
   }
 }
 
@@ -299,6 +304,11 @@ export async function handleNewModelApplicationCreated(
     };
   } catch (err) {
     const safeError = sanitizeSmtpErrorMessage(err, smtpConfig.pass);
+    logger.error?.("Failed to send admin email alert for new 18+ model application.", {
+      modelId,
+      recipient: smtpConfig.adminEmail,
+      error: safeError
+    });
     await safeRecordAlertLog(
       recordAlertLog,
       {
@@ -315,7 +325,7 @@ export async function handleNewModelApplicationCreated(
       },
       logger
     );
-    throw err;
+    throw new Error(safeError);
   }
 }
 
@@ -426,6 +436,11 @@ export async function handleNewCompanyBookingCreated(
     };
   } catch (err) {
     const safeError = sanitizeSmtpErrorMessage(err, smtpConfig.pass);
+    logger.error?.("Failed to send admin email alert for new company booking.", {
+      requestId,
+      recipient: smtpConfig.adminEmail,
+      error: safeError
+    });
     await safeRecordAlertLog(
       recordAlertLog,
       {
@@ -442,7 +457,7 @@ export async function handleNewCompanyBookingCreated(
       },
       logger
     );
-    throw err;
+    throw new Error(safeError);
   }
 }
 
@@ -491,6 +506,10 @@ function sanitizeSmtpErrorMessage(err, smtpPass = "") {
   let msg = String(err?.message || err || "SMTP delivery failed.").trim();
   if (smtpPass && smtpPass.length >= 4) {
     msg = msg.split(smtpPass).join("[REDACTED]");
+    const encodedPass = Buffer.from(smtpPass, "utf8").toString("base64");
+    if (encodedPass && encodedPass.length >= 4) {
+      msg = msg.split(encodedPass).join("[REDACTED]");
+    }
   }
   return msg.slice(0, 280);
 }

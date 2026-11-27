@@ -152,8 +152,13 @@ export function resolveSmtpConfig(env = process.env, { smtpUser = "", smtpPass =
   const rawAdminEmail = String(env.ADMIN_ALERT_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase();
   const adminEmail = SIMPLE_EMAIL_RE.test(rawAdminEmail) ? rawAdminEmail : DEFAULT_ADMIN_EMAIL;
 
-  const fromEmail = String(env.SMTP_FROM || user || adminEmail).trim();
-  const brandName = String(env.EMAIL_BRAND_NAME || STUDIO_NAME).trim() || STUDIO_NAME;
+  const fromEmail = String(env.SMTP_FROM || user || adminEmail)
+    .replace(/[\r\n\t\x00-\x1f\x7f]+/g, "")
+    .trim();
+  const brandName = (String(env.EMAIL_BRAND_NAME || STUDIO_NAME)
+    .replace(/[\r\n\t\x00-\x1f\x7f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()) || STUDIO_NAME;
   const dashboardUrl = safeBrandUrl(env.STUDIO_DASHBOARD_URL || DEFAULT_DASHBOARD_URL) || DEFAULT_DASHBOARD_URL;
 
   return {

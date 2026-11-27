@@ -1063,7 +1063,67 @@
             <div class="gallery-upload-preview-info">
               <strong id="galleryUploadPreviewName">studio-photo.jpg</strong>
               <span id="galleryUploadPreviewMeta" class="gallery-upload-meta">Ready for upload</span>
-              <button id="clearGalleryImageBtn" type="button" class="btn-outline btn-sm" data-i18n="removePhotoBtn">Remove Photo</button>
+              <div class="gallery-upload-preview-actions">
+                <button id="toggleGalleryEditorBtn" type="button" class="btn-outline btn-sm" aria-expanded="false" aria-controls="galleryImageEditorPanel" data-i18n="editPhotoBtn">Crop &amp; Brightness</button>
+                <button id="clearGalleryImageBtn" type="button" class="btn-outline btn-sm" data-i18n="removePhotoBtn">Remove Photo</button>
+              </div>
+            </div>
+          </div>
+          <div id="galleryImageEditorPanel" class="gallery-image-editor hidden" aria-label="Image crop and brightness editor">
+            <div class="gallery-editor-header">
+              <div>
+                <strong data-i18n="editorHeading">Crop &amp; Aspect-Ratio Studio</strong>
+                <p class="gallery-editor-hint" data-i18n="editorDragHint">Drag the gold crop box to frame your shot • Adjust aspect ratio &amp; brightness</p>
+              </div>
+              <span id="galleryEditorDimsBadge" class="gallery-editor-badge">Original</span>
+            </div>
+            <div class="gallery-editor-stage-grid">
+              <div class="gallery-editor-canvas-wrap">
+                <canvas id="galleryEditorCanvas" class="gallery-editor-canvas" tabindex="0" aria-label="Interactive crop frame canvas — drag or use arrow keys to reposition"></canvas>
+              </div>
+              <div class="gallery-editor-result-card">
+                <div class="gallery-editor-result-head">
+                  <span class="gallery-editor-label" data-i18n="croppedPreviewTitle">Live Cropped Preview</span>
+                  <span id="galleryCroppedOutputMeta" class="gallery-editor-result-meta">Original</span>
+                </div>
+                <div class="gallery-editor-result-frame">
+                  <canvas id="galleryCroppedPreviewCanvas" class="gallery-editor-result-canvas" aria-label="Live cropped output preview before upload"></canvas>
+                </div>
+              </div>
+            </div>
+            <div class="gallery-editor-controls">
+              <div class="gallery-editor-control-group">
+                <span class="gallery-editor-label" data-i18n="cropAspectLabel">Crop Aspect Ratio</span>
+                <div id="galleryCropAspectGroup" class="gallery-editor-aspect-chips" role="group" aria-label="Crop aspect ratio presets">
+                  <button type="button" class="chip-btn active" data-crop-aspect="original" data-i18n="cropAspectOriginal">Original</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="1:1">1:1</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="4:3">4:3</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="4:5">4:5</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="16:9">16:9</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="3:4">3:4</button>
+                  <button type="button" class="chip-btn" data-crop-aspect="9:16">9:16</button>
+                </div>
+              </div>
+              <div class="gallery-editor-sliders">
+                <label class="gallery-editor-slider-row" for="galleryCropZoom">
+                  <span class="gallery-editor-slider-head">
+                    <span class="gallery-editor-label" data-i18n="cropZoomLabel">Crop Zoom</span>
+                    <output id="galleryCropZoomValue" for="galleryCropZoom">1.0×</output>
+                  </span>
+                  <input id="galleryCropZoom" class="gallery-editor-range" type="range" min="1" max="3" step="0.05" value="1" />
+                </label>
+                <label class="gallery-editor-slider-row" for="galleryBrightnessRange">
+                  <span class="gallery-editor-slider-head">
+                    <span class="gallery-editor-label" data-i18n="brightnessLabel">Brightness</span>
+                    <output id="galleryBrightnessValue" for="galleryBrightnessRange">100%</output>
+                  </span>
+                  <input id="galleryBrightnessRange" class="gallery-editor-range" type="range" min="50" max="150" step="1" value="100" />
+                </label>
+              </div>
+              <div class="gallery-editor-actions">
+                <button id="resetGalleryEditorBtn" type="button" class="btn-outline btn-sm" data-i18n="resetEditsBtn">Reset</button>
+                <button id="applyGalleryEditsBtn" type="button" class="btn-gold btn-sm" data-i18n="applyEditsBtn">Apply Crop &amp; Edits</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1444,6 +1504,10 @@
             <span data-i18n="adminTabBookings">Bookings</span>
             <span class="filter-count-badge" data-admin-count="bookings">0</span>
           </button>
+          <button type="button" class="chip-btn admin-tab-payments-btn" data-admin-tab="payments">
+            <span data-i18n="adminTabPayments">UPI Payments &amp; Settings</span>
+            <span class="filter-count-badge" data-admin-count="payments">0</span>
+          </button>
           <button type="button" class="chip-btn" data-admin-tab="models">
             <span data-i18n="adminTabModels">Models</span>
             <span class="filter-count-badge" data-admin-count="models">0</span>
@@ -1499,10 +1563,6 @@
           <button type="button" class="chip-btn" data-admin-tab="customer-portal">
             <span data-i18n="adminTabCustomerPortal">Customer Portal</span>
             <span class="filter-count-badge" data-admin-count="customer-portal">0</span>
-          </button>
-          <button type="button" class="chip-btn" data-admin-tab="payments">
-            <span data-i18n="adminTabPayments">UPI Payments</span>
-            <span class="filter-count-badge" data-admin-count="payments">0</span>
           </button>
         </div>
         <div id="adminTabBody" style="display: flex; flex-direction: column; gap: 14px;"></div>
