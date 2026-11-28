@@ -16,14 +16,18 @@ import {
 import {
   DEFAULT_PAYMENT_CONFIG,
   DUPLICATE_UTR_ERROR_MESSAGE,
+  OFFICIAL_STUDIO_UPI_ID,
   calculateAdvanceAndBalance,
+  checkAndClaimPaymentTransactionUtr,
   computeVerifiedPaymentTransition,
+  createDuplicateUtrError,
   isAllowedPaymentImageSrc,
   normalizeUtrKey,
   validateAdminPaymentConfigPayload,
   validateModelAdvanceRequestPayload,
   validateUtrReference,
-  validateWeddingPaymentRequestPayload
+  validateWeddingPaymentRequestPayload,
+  verifyQrCode
 } from "./payment-system.js";
 
 const LEGACY_STORAGE_CONFIG_KEY = "star_artist_firebase_web_config_v1";
@@ -2520,6 +2524,17 @@ export async function adminSavePaymentSettings(input = {}) {
   const verifiedAdmin = await verifyAuthorizedAdminToken(adminUser);
   const check = validateAdminPaymentConfigPayload(input);
   if (!check.valid) throw new Error(check.error);
+  if (check.clean.qrImageDataUrl) {
+    if (String(check.clean.upiId || "").trim().toLowerCase() !== OFFICIAL_STUDIO_UPI_ID.toLowerCase()) {
+      throw new Error(`Official Studio UPI ID must remain "${OFFICIAL_STUDIO_UPI_ID}".`);
+    }
+    if (typeof document !== "undefined" && typeof Image !== "undefined") {
+      const qrDecodeCheck = await verifyQrCode(check.clean.qrImageDataUrl);
+      if (!qrDecodeCheck.valid) {
+        throw new Error(qrDecodeCheck.error);
+      }
+    }
+  }
   const { fsMod, db } = ctx;
   const updatedByEmail = verifiedAdmin.email;
   const payload = {
@@ -2572,6 +2587,94 @@ export async function fetchMyBookingPayments(uid) {
   } catch {
     return [];
   }
+}
+
+function getFirestoreTimestampMs(val) {
+  if (!val) return 0;
+  if (typeof val === "number") return Number.isFinite(val) ? val : 0;
+  if (typeof val === "string") {
+    const ms = Date.parse(val);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  if (typeof val === "object") {
+    if (typeof val.toMillis === "function") return val.toMillis();
+    if (typeof val.seconds === "number") return val.seconds * 1000;
+  }
+  return 0;
+}
+
+/**
+ * Fetches all past UPI payment records for the authenticated customer from Firestore
+ * (`bookingPayments` strictly scoped to `customerUid == authUid`), and safely enriches
+ * records containing a UTR with any matching `paymentTransactions/{utrKey}` lock metadata
+ * (strictly respecting Firestore rules where customers may only read their own UID docs).
+ */
+export async function fetchMyUpiPaymentHistory(uid) {
+  const ctx = await initFirebaseClient();
+  if (!hasVerifiedMemberAuth(ctx)) {
+    return [];
+  }
+  const authUid = ctx.auth.currentUser.uid;
+  const targetUid = String(uid || authUid).trim();
+  if (!targetUid || (targetUid !== authUid && !isAuthorizedAdminUser(ctx.auth.currentUser))) {
+    return [];
+  }
+
+  const { fsMod, db } = ctx;
+  const q = fsMod.query(
+    fsMod.collection(db, "bookingPayments"),
+    fsMod.where("customerUid", "==", targetUid)
+  );
+  const snap = await fsMod.getDocs(q);
+  const owned = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((p) => String(p.customerUid || "").trim() === targetUid);
+
+  const enriched = await Promise.all(
+    owned.map(async (payment) => {
+      const canonicalUtr = normalizeUtrKey(payment.utrKey || payment.utrNumber || "");
+      if (!canonicalUtr || canonicalUtr.length < 6) {
+        return payment;
+      }
+      try {
+        const txSnap = await fsMod.getDoc(fsMod.doc(db, "paymentTransactions", canonicalUtr));
+        if (txSnap.exists()) {
+          const txData = txSnap.data() || {};
+          if (String(txData.customerUid || "").trim() === targetUid) {
+            return {
+              ...payment,
+              utrNumber: payment.utrNumber || txData.utrNumber || canonicalUtr,
+              utrKey: payment.utrKey || canonicalUtr,
+              transactionAmount: Number(txData.amount || 0),
+              transactionStatus: txData.status || "",
+              transactionCreatedAt: txData.createdAt || null
+            };
+          }
+        }
+      } catch {
+        // Non-fatal: paymentTransactions doc may not exist for legacy or unsubmitted records
+      }
+      return payment;
+    })
+  );
+
+  return enriched.sort((a, b) => {
+    const aMs = Math.max(
+      getFirestoreTimestampMs(a.submittedAt),
+      getFirestoreTimestampMs(a.verifiedAt),
+      getFirestoreTimestampMs(a.transactionCreatedAt),
+      getFirestoreTimestampMs(a.updatedAt),
+      getFirestoreTimestampMs(a.createdAt)
+    );
+    const bMs = Math.max(
+      getFirestoreTimestampMs(b.submittedAt),
+      getFirestoreTimestampMs(b.verifiedAt),
+      getFirestoreTimestampMs(b.transactionCreatedAt),
+      getFirestoreTimestampMs(b.updatedAt),
+      getFirestoreTimestampMs(b.createdAt)
+    );
+    return bMs - aMs;
+  });
 }
 
 export async function createModelAdvancePaymentRequest(payload = {}) {
@@ -2723,19 +2826,33 @@ export async function submitCustomerPaymentUtr({ paymentId, utrNumber, screensho
       return existingKey.length >= 6 && existingKey === canonicalKey;
     });
     if (hasOwnDuplicate) {
-      throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
+      throw createDuplicateUtrError({
+        utrKey: canonicalKey,
+        utrNumber: utrCheck.clean
+      });
     }
   } catch (preErr) {
-    if (preErr?.message === DUPLICATE_UTR_ERROR_MESSAGE) throw preErr;
+    if (preErr?.message === DUPLICATE_UTR_ERROR_MESSAGE || preErr?.isDuplicateUtr) throw preErr;
   }
 
   const paymentRef = fsMod.doc(db, "bookingPayments", paymentId);
   const claimRef = fsMod.doc(db, "utrClaims", canonicalKey);
 
-  // Atomic Firestore Transaction: claims utrClaims/{canonicalKey} and updates bookingPayments/{paymentId} together.
-  // If two customers submit the exact same UTR simultaneously, Firestore atomically commits ONLY ONE and rejects the second.
-  try {
-    await fsMod.runTransaction(db, async (tx) => {
+  // Atomic Firestore Transaction via checkAndClaimPaymentTransactionUtr (uses fsMod.runTransaction):
+  // atomically checks & claims paymentTransactions/{canonicalKey}, claims utrClaims/{canonicalKey},
+  // and updates bookingPayments/{paymentId} in a single atomic commit.
+  await checkAndClaimPaymentTransactionUtr({
+    db,
+    fsMod: {
+      doc: fsMod.doc,
+      runTransaction: fsMod.runTransaction,
+      serverTimestamp: fsMod.serverTimestamp
+    },
+    utrNumber: utrCheck.clean,
+    paymentId: String(paymentId),
+    customerUid: uid,
+    throwOnDuplicate: true,
+    beforeClaim: async (tx) => {
       const snap = await tx.get(paymentRef);
       if (!snap.exists()) throw new Error("Payment record not found.");
       const existing = snap.data() || {};
@@ -2753,9 +2870,15 @@ export async function submitCustomerPaymentUtr({ paymentId, utrNumber, screensho
         throw new Error("UTR submission is not available for the current payment status.");
       }
       if (normalizeUtrKey(existing.utrKey || existing.utrNumber || "") === canonicalKey) {
-        throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
+        throw createDuplicateUtrError({
+          utrKey: canonicalKey,
+          utrNumber: utrCheck.clean
+        });
       }
-
+      return existing;
+    },
+    afterClaim: async (tx, { beforeResult }) => {
+      const existing = beforeResult || {};
       tx.set(claimRef, {
         utrKey: canonicalKey,
         utrDisplay: utrCheck.clean,
@@ -2773,19 +2896,8 @@ export async function submitCustomerPaymentUtr({ paymentId, utrNumber, screensho
         submittedAt: fsMod.serverTimestamp(),
         updatedAt: fsMod.serverTimestamp()
       });
-    });
-  } catch (err) {
-    const code = String(err?.code || "").toLowerCase();
-    if (
-      code.includes("permission-denied") ||
-      code.includes("already-exists") ||
-      code.includes("aborted") ||
-      code.includes("failed-precondition")
-    ) {
-      throw new Error(DUPLICATE_UTR_ERROR_MESSAGE);
     }
-    throw err;
-  }
+  });
 }
 
 export async function requestCustomerPaymentRefund({ paymentId, refundReason = "" } = {}) {

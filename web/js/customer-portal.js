@@ -3,8 +3,10 @@ import { renderUserPrivateChatHtml } from "./private-chat.js";
 import {
   DEFAULT_PAYMENT_CONFIG,
   filterCustomerPayments,
+  renderCustomerPaymentHistoryHtml,
   renderCustomerPaymentsPortalHtml
 } from "./payment-system.js";
+import { renderScannedUpiPrefillPanelHtml } from "./qr-pay-scanner.js";
 
 export const CUSTOMER_PORTAL_TABS = [
   "my-catalog",
@@ -13,6 +15,7 @@ export const CUSTOMER_PORTAL_TABS = [
   "approval-status",
   "my-bookings",
   "my-payments",
+  "payment-history",
   "my-messages"
 ];
 
@@ -439,6 +442,10 @@ export function renderCustomerPortalHtml({
   paymentConfig = DEFAULT_PAYMENT_CONFIG,
   publicModels = [],
   activePaymentForm = "model",
+  scannedUpiPayment = null,
+  paymentHistoryFilter = "all",
+  isPaymentHistoryLoading = false,
+  paymentHistoryError = "",
   activeTab = "my-catalog",
   deniedResourceNotice = "",
   highlightedBookingId = "",
@@ -507,6 +514,10 @@ export function renderCustomerPortalHtml({
       </button>
       <button type="button" class="chip-btn ${safeTab === "my-payments" ? "active" : ""}" role="tab" aria-selected="${safeTab === "my-payments"}" data-portal-tab="my-payments">
         <span>${escapeHtml(t("portalTabMyPayments"))}</span>
+        <span class="filter-count-badge">${ownPayments.length}</span>
+      </button>
+      <button type="button" class="chip-btn ${safeTab === "payment-history" ? "active" : ""}" role="tab" aria-selected="${safeTab === "payment-history"}" data-portal-tab="payment-history">
+        <span>${escapeHtml(t("portalTabPaymentHistory"))}</span>
         <span class="filter-count-badge">${ownPayments.length}</span>
       </button>
       <button type="button" class="chip-btn ${safeTab === "my-messages" ? "active" : ""}" role="tab" aria-selected="${safeTab === "my-messages"}" data-portal-tab="my-messages">
@@ -793,6 +804,9 @@ export function renderCustomerPortalHtml({
         }
       </div>`;
   } else if (safeTab === "my-payments") {
+    const scannedUpiPanelHtml = scannedUpiPayment
+      ? renderScannedUpiPrefillPanelHtml(scannedUpiPayment, { t, escapeHtml })
+      : "";
     panelHtml = `
       <div class="portal-section-panel" data-portal-panel="my-payments">
         ${renderCustomerPaymentsPortalHtml({
@@ -802,6 +816,21 @@ export function renderCustomerPortalHtml({
           currentUserUid: uid,
           currentUserName: safeProfile?.displayName || user?.displayName || "",
           activePaymentForm,
+          scannedUpiPanelHtml,
+          lang,
+          t,
+          escapeHtml
+        })}
+      </div>`;
+  } else if (safeTab === "payment-history") {
+    panelHtml = `
+      <div class="portal-section-panel" data-portal-panel="payment-history">
+        ${renderCustomerPaymentHistoryHtml({
+          payments: ownPayments,
+          currentUserUid: uid,
+          statusFilter: paymentHistoryFilter,
+          isLoading: isPaymentHistoryLoading,
+          errorMessage: paymentHistoryError,
           lang,
           t,
           escapeHtml
@@ -831,9 +860,20 @@ export function renderCustomerPortalHtml({
   return `
     <div class="portal-privacy-banner studio-card" role="note" data-portal-owner-uid="${escapeHtml(uid)}">
       <div class="portal-privacy-icon" aria-hidden="true">🔒</div>
-      <div>
+      <div style="flex:1;min-width:0;">
         <strong style="color:var(--gold);">${escapeHtml(t("portalPrivacyTitle"))}</strong>
         <p style="margin:3px 0 0;font-size:0.85rem;color:var(--text-secondary);">${escapeHtml(t("portalPrivacyDesc"))}</p>
+      </div>
+      <div class="portal-quick-pay-action">
+        <button
+          id="portalScanQrToPayBtn"
+          type="button"
+          class="btn-gold portal-scan-qr-btn"
+          data-open-portal-qr-scanner="true"
+        >
+          <span aria-hidden="true">📷</span>
+          <span>${escapeHtml(t("portalScanQrToPayBtn"))}</span>
+        </button>
       </div>
     </div>
     ${deniedBannerHtml}

@@ -42,6 +42,10 @@ export const WEDDING_EVENT_TYPES = [
 
 export const OFFICIAL_STUDIO_UPI_ID = "9812890081@ybl";
 
+export const PAYMENT_TRANSACTIONS_COLLECTION = "paymentTransactions";
+
+export const DUPLICATE_UTR_ALERT_TITLE = "Duplicate UTR Detected";
+
 export const DUPLICATE_UTR_ERROR_MESSAGE =
   "This UTR has already been submitted. Please check your transaction reference number.";
 
@@ -128,6 +132,434 @@ export function isAllowedPaymentImageFileMeta(file) {
     return { valid: false, error: "Selected image file is too large (max 15 MB). Please choose a smaller QR image." };
   }
   return { valid: true };
+}
+
+export const QR_DECODER_CDN_URL = "https://esm.sh/jsqr@1.4.0";
+
+let cachedQrDecoderPromise = null;
+
+/**
+ * Parses a standard UPI deep-link QR payload (e.g. upi://pay?pa=9812890081@ybl&pn=...).
+ * Strictly rejects non-UPI URLs, missing payee addresses, or invalid UPI IDs.
+ */
+export function parseUpiQrPayload(rawText = "") {
+  const rawPayload = String(rawText || "").trim();
+  if (!rawPayload) {
+    return {
+      valid: false,
+      upiId: "",
+      payeeName: "",
+      rawPayload: "",
+      error: "No QR code payload could be decoded from the selected image."
+    };
+  }
+  if (!/^upi:\/\/pay(?:\?|$)/i.test(rawPayload)) {
+    return {
+      valid: false,
+      upiId: "",
+      payeeName: "",
+      rawPayload,
+      error: "Uploaded QR code is not a valid UPI payment QR (expected a upi://pay link)."
+    };
+  }
+
+  const qIdx = rawPayload.indexOf("?");
+  const queryPart = qIdx >= 0 ? rawPayload.slice(qIdx + 1) : "";
+  const params = new URLSearchParams(queryPart);
+  let rawPa = params.get("pa");
+  let rawPn = params.get("pn");
+  if (rawPa === null || rawPn === null) {
+    for (const [key, value] of params.entries()) {
+      const lowerKey = String(key || "").trim().toLowerCase();
+      if (rawPa === null && lowerKey === "pa") rawPa = value;
+      if (rawPn === null && lowerKey === "pn") rawPn = value;
+    }
+  }
+  const upiId = String(rawPa || "").trim().toLowerCase();
+  const payeeName = String(rawPn || "").trim().slice(0, 120);
+
+  if (!upiId || !isValidUpiId(upiId)) {
+    return {
+      valid: false,
+      upiId: "",
+      payeeName,
+      rawPayload,
+      error: "Uploaded UPI QR code does not contain a valid payee UPI ID (pa parameter)."
+    };
+  }
+
+  return {
+    valid: true,
+    upiId,
+    payeeName,
+    rawPayload
+  };
+}
+
+/**
+ * Confirms a decoded QR payload resolves to the exact mandated Studio UPI ID (9812890081@ybl).
+ */
+export function verifyDecodedUpiQrPayload(rawPayload = "", expectedUpiId = OFFICIAL_STUDIO_UPI_ID) {
+  const expectedClean = String(expectedUpiId || OFFICIAL_STUDIO_UPI_ID).trim().toLowerCase();
+  if (!isValidUpiId(expectedClean)) {
+    return {
+      valid: false,
+      decodedUpiId: "",
+      expectedUpiId: expectedClean,
+      rawPayload: String(rawPayload || "").trim(),
+      payeeName: "",
+      error: "Expected Studio UPI ID configuration is invalid."
+    };
+  }
+
+  const parsed = parseUpiQrPayload(rawPayload);
+  if (!parsed.valid) {
+    return {
+      valid: false,
+      decodedUpiId: "",
+      expectedUpiId: expectedClean,
+      rawPayload: parsed.rawPayload,
+      payeeName: parsed.payeeName,
+      error: parsed.error
+    };
+  }
+
+  if (parsed.upiId !== expectedClean) {
+    return {
+      valid: false,
+      decodedUpiId: parsed.upiId,
+      expectedUpiId: expectedClean,
+      rawPayload: parsed.rawPayload,
+      payeeName: parsed.payeeName,
+      error: `QR code UPI ID mismatch: scanned "${parsed.upiId}", but the official Studio UPI ID must be "${expectedClean}". Upload the matching QR image before saving.`
+    };
+  }
+
+  return {
+    valid: true,
+    decodedUpiId: parsed.upiId,
+    expectedUpiId: expectedClean,
+    rawPayload: parsed.rawPayload,
+    payeeName: parsed.payeeName
+  };
+}
+
+function resolveJsQrDecodeFn(mod) {
+  if (typeof mod === "function") return mod;
+  if (typeof mod?.default === "function") return mod.default;
+  if (typeof mod?.default?.default === "function") return mod.default.default;
+  return null;
+}
+
+/**
+ * Lazily loads the browser-based jsQR decoder library (or an injected loader for unit tests).
+ */
+export async function loadQrDecoderRuntime({ customLoader = null } = {}) {
+  if (typeof customLoader === "function") {
+    const mod = await customLoader();
+    const decodeFn = resolveJsQrDecodeFn(mod);
+    if (typeof decodeFn !== "function") {
+      throw new Error("QR decoder runtime did not expose a callable decode function.");
+    }
+    return decodeFn;
+  }
+
+  if (!cachedQrDecoderPromise) {
+    cachedQrDecoderPromise = import(/* @vite-ignore */ QR_DECODER_CDN_URL)
+      .then((mod) => {
+        const decodeFn = resolveJsQrDecodeFn(mod);
+        if (typeof decodeFn !== "function") {
+          throw new Error("jsQR library export is unavailable.");
+        }
+        return decodeFn;
+      })
+      .catch((err) => {
+        cachedQrDecoderPromise = null;
+        throw err;
+      });
+  }
+  return cachedQrDecoderPromise;
+}
+
+/**
+ * Decodes a QR string from raw RGBA ImageData using jsQR.
+ */
+export async function decodeQrFromImageData(imageData, { customDecoder = null, customLoader = null } = {}) {
+  if (
+    !imageData ||
+    typeof imageData !== "object" ||
+    !imageData.data ||
+    !Number.isInteger(imageData.width) ||
+    !Number.isInteger(imageData.height) ||
+    imageData.width <= 0 ||
+    imageData.height <= 0 ||
+    imageData.data.length < imageData.width * imageData.height * 4
+  ) {
+    return "";
+  }
+
+  const decoder = typeof customDecoder === "function"
+    ? customDecoder
+    : await loadQrDecoderRuntime({ customLoader });
+  const result = decoder(imageData.data, imageData.width, imageData.height, {
+    inversionAttempts: "attemptBoth"
+  });
+  return String(result?.data || "").trim();
+}
+
+function loadBrowserImageForQrScan(source) {
+  return new Promise((resolve, reject) => {
+    if (typeof Image === "undefined") {
+      reject(new Error("Browser Image API is unavailable to verify the QR image."));
+      return;
+    }
+
+    const loadDataUrl = (dataUrl) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Invalid or corrupted QR image file. Please select a valid JPG, PNG, or WebP QR image."));
+      img.src = dataUrl;
+    };
+
+    if (typeof source === "string") {
+      loadDataUrl(source);
+      return;
+    }
+
+    if (typeof FileReader === "undefined") {
+      reject(new Error("Browser FileReader API is unavailable to verify the QR image."));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read the selected QR image file."));
+    reader.onload = () => loadDataUrl(String(reader.result || ""));
+    reader.readAsDataURL(source);
+  });
+}
+
+async function decodeQrFromBrowserImage(img, { customDecoder = null, customLoader = null, barcodeDetector = null } = {}) {
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    throw new Error("Browser canvas is unavailable to decode the uploaded QR image.");
+  }
+
+  const srcW = Math.max(1, img.naturalWidth || img.width || 1);
+  const srcH = Math.max(1, img.naturalHeight || img.height || 1);
+
+  const renderCropToImageData = ({ sx = 0, sy = 0, sw = srcW, sh = srcH, maxDim = 1000 }) => {
+    const scale = Math.min(1, maxDim / Math.max(sw, sh));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
+    const ctx2d = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx2d) {
+      throw new Error("Browser 2D canvas context is unavailable to decode the QR image.");
+    }
+    ctx2d.fillStyle = "#FFFFFF";
+    ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+    ctx2d.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return { canvas, imageData: ctx2d.getImageData(0, 0, canvas.width, canvas.height) };
+  };
+
+  // Build multi-pass scan regions: full scaled image, center QR band for tall payment posters (PhonePe/GPay/Paytm), and higher-res full scan
+  const scanPasses = [{ sx: 0, sy: 0, sw: srcW, sh: srcH, maxDim: 1000 }];
+  if (srcH > srcW * 1.15) {
+    scanPasses.push({
+      sx: 0,
+      sy: Math.round(srcH * 0.14),
+      sw: srcW,
+      sh: Math.round(srcH * 0.72),
+      maxDim: 800
+    });
+  } else {
+    scanPasses.push({
+      sx: Math.round(srcW * 0.08),
+      sy: Math.round(srcH * 0.08),
+      sw: Math.round(srcW * 0.84),
+      sh: Math.round(srcH * 0.84),
+      maxDim: 800
+    });
+  }
+  if (Math.max(srcW, srcH) > 1000) {
+    scanPasses.push({ sx: 0, sy: 0, sw: srcW, sh: srcH, maxDim: 1600 });
+  }
+
+  let jsQrLoadError = null;
+  let decoder = typeof customDecoder === "function" ? customDecoder : null;
+  if (!decoder) {
+    try {
+      decoder = await loadQrDecoderRuntime({ customLoader });
+    } catch (err) {
+      jsQrLoadError = err;
+    }
+  }
+
+  let lastCanvas = null;
+  let firstImageData = null;
+  for (const pass of scanPasses) {
+    const { canvas, imageData } = renderCropToImageData(pass);
+    lastCanvas = canvas;
+    if (!firstImageData) firstImageData = imageData;
+    if (decoder) {
+      const decoded = await decodeQrFromImageData(imageData, { customDecoder: decoder });
+      if (decoded) return decoded;
+    }
+  }
+
+  // High-contrast grayscale fallback pass for low-contrast phone screenshots or stylized QR posters
+  if (decoder && firstImageData?.data?.length) {
+    const boosted = new Uint8ClampedArray(firstImageData.data.length);
+    for (let i = 0; i < firstImageData.data.length; i += 4) {
+      const lum =
+        0.299 * firstImageData.data[i] +
+        0.587 * firstImageData.data[i + 1] +
+        0.114 * firstImageData.data[i + 2];
+      const bw = lum >= 145 ? 255 : 0;
+      boosted[i] = bw;
+      boosted[i + 1] = bw;
+      boosted[i + 2] = bw;
+      boosted[i + 3] = 255;
+    }
+    const decodedBoosted = await decodeQrFromImageData(
+      { data: boosted, width: firstImageData.width, height: firstImageData.height },
+      { customDecoder: decoder }
+    );
+    if (decodedBoosted) return decodedBoosted;
+  }
+
+  // Fallback to native browser BarcodeDetector API if available (works even offline on supported Chromium/Android browsers)
+  const detectorInstance =
+    barcodeDetector ||
+    (typeof globalThis !== "undefined" && typeof globalThis.BarcodeDetector === "function"
+      ? new globalThis.BarcodeDetector({ formats: ["qr_code"] })
+      : null);
+  if (detectorInstance && typeof detectorInstance.detect === "function") {
+    try {
+      const detected = await detectorInstance.detect(lastCanvas || img);
+      const firstValue = String(detected?.[0]?.rawValue || "").trim();
+      if (firstValue) return firstValue;
+    } catch {
+      // Ignore fallback detector failure and fail closed below
+    }
+  }
+
+  if (jsQrLoadError) {
+    throw new Error(
+      `Unable to load browser QR decoder to verify official UPI ID (${OFFICIAL_STUDIO_UPI_ID}). Check internet connectivity and retry.`
+    );
+  }
+  return "";
+}
+
+/**
+ * Verifies that an uploaded QR image Blob (or File, Data URL, or ImageData) decodes cleanly
+ * via browser-based QR decoding (jsQR + BarcodeDetector fallback) and resolves to the exact
+ * mandated official Studio UPI ID (9812890081@ybl).
+ * Fails closed whenever decoding fails or the decoded UPI ID does not match.
+ */
+export async function verifyQrCode(
+  qrImageBlob,
+  {
+    expectedUpiId = OFFICIAL_STUDIO_UPI_ID,
+    customDecoder = null,
+    customLoader = null,
+    barcodeDetector = null
+  } = {}
+) {
+  const expectedClean = String(expectedUpiId || OFFICIAL_STUDIO_UPI_ID).trim().toLowerCase();
+  const fail = (error) => ({
+    valid: false,
+    decodedUpiId: "",
+    expectedUpiId: expectedClean,
+    rawPayload: "",
+    payeeName: "",
+    error
+  });
+
+  if (!qrImageBlob) {
+    return fail("Please select a JPG, PNG, or WebP UPI QR image to verify.");
+  }
+
+  try {
+    // 1. Direct ImageData-like object { data, width, height }
+    if (
+      typeof qrImageBlob === "object" &&
+      qrImageBlob.data &&
+      Number.isInteger(qrImageBlob.width) &&
+      Number.isInteger(qrImageBlob.height)
+    ) {
+      const decodedText = await decodeQrFromImageData(qrImageBlob, { customDecoder, customLoader });
+      if (!decodedText) {
+        return fail(
+          `Could not detect a readable QR code in the uploaded image. Upload a clear UPI QR code for ${expectedClean}.`
+        );
+      }
+      return verifyDecodedUpiQrPayload(decodedText, expectedClean);
+    }
+
+    // 2. Base64 Data URL string
+    if (typeof qrImageBlob === "string") {
+      const cleanUrl = qrImageBlob.trim();
+      if (!isUploadedQrImageDataUrl(cleanUrl)) {
+        return fail("Official UPI QR image must be an uploaded JPG, PNG, or WebP image under 180 KB.");
+      }
+      const img = await loadBrowserImageForQrScan(cleanUrl);
+      const decodedText = await decodeQrFromBrowserImage(img, {
+        customDecoder,
+        customLoader,
+        barcodeDetector
+      });
+      if (!decodedText) {
+        return fail(
+          `Could not decode a readable QR code from the uploaded image. Upload a sharp UPI QR image for ${expectedClean}.`
+        );
+      }
+      return verifyDecodedUpiQrPayload(decodedText, expectedClean);
+    }
+
+    // 3. Browser Blob / File
+    if (typeof qrImageBlob === "object") {
+      const blobType = String(qrImageBlob.type || "").trim().toLowerCase();
+      const blobName = String(qrImageBlob.name || "").trim();
+      const blobSize = Number(qrImageBlob.size || 0);
+      const isGenericNamelessBlob = !blobName && (!blobType || blobType === "application/octet-stream");
+
+      if (blobSize <= 0) {
+        return fail("Selected QR image file is empty. Please choose a valid JPG, PNG, or WebP QR image.");
+      }
+      if (blobSize > 15 * 1024 * 1024) {
+        return fail("Selected image file is too large (max 15 MB). Please choose a smaller QR image.");
+      }
+      if (!isGenericNamelessBlob && ("name" in qrImageBlob || "type" in qrImageBlob)) {
+        const metaCheck = isAllowedPaymentImageFileMeta(qrImageBlob);
+        if (!metaCheck.valid) {
+          return fail(metaCheck.error);
+        }
+      }
+      const img = await loadBrowserImageForQrScan(qrImageBlob);
+      const decodedText = await decodeQrFromBrowserImage(img, {
+        customDecoder,
+        customLoader,
+        barcodeDetector
+      });
+      if (!decodedText) {
+        return fail(
+          `Could not decode a readable QR code from the selected image. Upload a clear PhonePe/UPI QR image for ${expectedClean}.`
+        );
+      }
+      return verifyDecodedUpiQrPayload(decodedText, expectedClean);
+    }
+
+    return fail("Unsupported QR image input.");
+  } catch (err) {
+    return fail(
+      err?.message || `Unable to verify uploaded QR code against official UPI ID (${expectedClean}).`
+    );
+  }
+}
+
+export async function verifyUploadedQrImageMatchesOfficialUpi(source, options = {}) {
+  return verifyQrCode(source, options);
 }
 
 /**
@@ -230,6 +662,171 @@ export function detectDuplicateUtrGroups(payments = []) {
     groups,
     duplicateCount: groups.length
   };
+}
+
+export function createDuplicateUtrError({
+  utrKey = "",
+  utrNumber = "",
+  message = DUPLICATE_UTR_ERROR_MESSAGE
+} = {}) {
+  const err = new Error(message || DUPLICATE_UTR_ERROR_MESSAGE);
+  err.code = "payment/duplicate-utr";
+  err.isDuplicateUtr = true;
+  err.utrKey = String(utrKey || "").trim();
+  err.utrNumber = String(utrNumber || "").trim();
+  return err;
+}
+
+export function isDuplicateUtrError(err) {
+  if (!err || typeof err !== "object") return false;
+  return (
+    err.code === "payment/duplicate-utr" ||
+    err.isDuplicateUtr === true ||
+    err.message === DUPLICATE_UTR_ERROR_MESSAGE
+  );
+}
+
+/**
+ * Atomically checks for duplicate UTR numbers within the `paymentTransactions` collection
+ * using a Firestore transaction (deterministic doc ID `paymentTransactions/{canonicalUtrKey}`)
+ * and reserves the UTR in a single atomic commit.
+ *
+ * All reads (`beforeClaim` + `tx.get(paymentTransactions/{canonicalKey})`) execute strictly
+ * before any writes (`tx.set(paymentTransactions/{canonicalKey})` + `afterClaim`).
+ */
+export async function checkAndClaimPaymentTransactionUtr({
+  db,
+  fsMod,
+  utrNumber = "",
+  paymentId = "",
+  customerUid = "",
+  beforeClaim = null,
+  afterClaim = null,
+  throwOnDuplicate = false
+} = {}) {
+  const utrCheck = validateUtrReference(utrNumber);
+  if (!utrCheck.valid) {
+    throw new Error(utrCheck.error);
+  }
+  const cleanPaymentId = String(paymentId || "").trim();
+  if (!cleanPaymentId) {
+    throw new Error("A valid payment record ID is required to register a UTR.");
+  }
+  const cleanUid = String(customerUid || "").trim();
+  if (!cleanUid) {
+    throw new Error("Authenticated user ID is required to register a UTR.");
+  }
+  if (
+    !db ||
+    !fsMod ||
+    typeof fsMod.doc !== "function" ||
+    typeof fsMod.runTransaction !== "function"
+  ) {
+    throw new Error("Firestore transaction engine is unavailable.");
+  }
+
+  const canonicalKey = utrCheck.canonicalKey || normalizeUtrKey(utrCheck.clean);
+  const txDocRef = fsMod.doc(db, PAYMENT_TRANSACTIONS_COLLECTION, canonicalKey);
+  const timestampValue =
+    typeof fsMod.serverTimestamp === "function" ? fsMod.serverTimestamp() : new Date();
+
+  try {
+    await fsMod.runTransaction(db, async (tx) => {
+      let beforeResult = null;
+      if (typeof beforeClaim === "function") {
+        beforeResult = await beforeClaim(tx, {
+          canonicalKey,
+          cleanUtr: utrCheck.clean,
+          txDocRef
+        });
+      }
+
+      const existingTxSnap = await tx.get(txDocRef);
+      if (existingTxSnap && typeof existingTxSnap.exists === "function" && existingTxSnap.exists()) {
+        throw createDuplicateUtrError({
+          utrKey: canonicalKey,
+          utrNumber: utrCheck.clean
+        });
+      }
+
+      tx.set(txDocRef, {
+        utrKey: canonicalKey,
+        utrNumber: utrCheck.clean,
+        paymentId: cleanPaymentId,
+        customerUid: cleanUid,
+        status: "Submitted for Verification",
+        createdAt: timestampValue,
+        updatedAt: timestampValue
+      });
+
+      if (typeof afterClaim === "function") {
+        await afterClaim(tx, {
+          canonicalKey,
+          cleanUtr: utrCheck.clean,
+          txDocRef,
+          beforeResult
+        });
+      }
+    });
+
+    return {
+      ok: true,
+      duplicate: false,
+      utrKey: canonicalKey,
+      utrNumber: utrCheck.clean,
+      collection: PAYMENT_TRANSACTIONS_COLLECTION
+    };
+  } catch (err) {
+    const code = String(err?.code || "").toLowerCase();
+    const isCollision =
+      isDuplicateUtrError(err) ||
+      code.includes("permission-denied") ||
+      code.includes("already-exists") ||
+      code.includes("aborted") ||
+      code.includes("failed-precondition");
+
+    if (isCollision) {
+      if (throwOnDuplicate) {
+        throw createDuplicateUtrError({
+          utrKey: canonicalKey,
+          utrNumber: utrCheck.clean
+        });
+      }
+      return {
+        ok: false,
+        duplicate: true,
+        utrKey: canonicalKey,
+        utrNumber: utrCheck.clean,
+        collection: PAYMENT_TRANSACTIONS_COLLECTION,
+        error: DUPLICATE_UTR_ERROR_MESSAGE
+      };
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * Renders a prominent, accessible alert banner specifically when a duplicate UTR is detected.
+ */
+export function renderDuplicateUtrAlertHtml({
+  utrNumber = "",
+  message = DUPLICATE_UTR_ERROR_MESSAGE,
+  title = DUPLICATE_UTR_ALERT_TITLE,
+  hint = "Check your PhonePe / GPay / UPI app payment history and enter a unique, unused 12-digit UTR reference number.",
+  escapeHtml = defaultEscapeHtml
+} = {}) {
+  const cleanUtr = String(utrNumber || "").trim();
+  return `
+    <div class="payment-utr-duplicate-alert-inner" data-duplicate-utr-alert="true">
+      <div class="payment-utr-duplicate-alert-head">
+        <strong>⚠ ${escapeHtml(title || DUPLICATE_UTR_ALERT_TITLE)}</strong>
+        ${cleanUtr ? `<span class="payment-utr-duplicate-utr-code">UTR: ${escapeHtml(cleanUtr)}</span>` : ""}
+      </div>
+      <p class="payment-utr-duplicate-alert-msg">${escapeHtml(message || DUPLICATE_UTR_ERROR_MESSAGE)}</p>
+      ${hint ? `<small class="payment-utr-duplicate-alert-hint">${escapeHtml(hint)}</small>` : ""}
+    </div>
+  `;
 }
 
 /**
@@ -627,6 +1224,7 @@ export function renderCustomerPaymentsPortalHtml({
   currentUserUid = "",
   currentUserName = "",
   activePaymentForm = "model",
+  scannedUpiPanelHtml = "",
   lang = "en",
   t = (k) => k,
   escapeHtml = defaultEscapeHtml
@@ -746,6 +1344,7 @@ export function renderCustomerPaymentsPortalHtml({
                         />
                         <button type="submit" class="btn-gold">${escapeHtml(t("paySubmitUtrBtn"))}</button>
                       </div>
+                      <div class="payment-utr-duplicate-alert hidden" data-duplicate-utr-alert-box role="alert" aria-live="assertive"></div>
                       <div class="payment-utr-error hidden" data-utr-error-box role="alert" aria-live="polite"></div>
                       <small class="payment-helper-note">${escapeHtml(t("payManualVerifyNote"))}</small>
                     </form>
@@ -788,10 +1387,22 @@ export function renderCustomerPaymentsPortalHtml({
 
   return `
     <div class="customer-payments-portal" data-customer-payments-portal="true">
-      <div class="payment-section-banner">
-        <strong>💳 ${escapeHtml(t("payPortalTitle"))}</strong>
-        <p>${escapeHtml(t("payPortalSubtitle"))}</p>
+      <div class="payment-section-banner payment-section-banner-row">
+        <div>
+          <strong>💳 ${escapeHtml(t("payPortalTitle"))}</strong>
+          <p>${escapeHtml(t("payPortalSubtitle"))}</p>
+        </div>
+        <button
+          type="button"
+          class="btn-gold btn-sm portal-scan-qr-btn"
+          data-open-portal-qr-scanner="true"
+        >
+          <span aria-hidden="true">📷</span>
+          <span>${escapeHtml(t("portalScanQrToPayBtn"))}</span>
+        </button>
       </div>
+
+      ${scannedUpiPanelHtml || ""}
 
       ${renderUpiPaymentPanelHtml({
         config: paymentConfig,
@@ -1205,3 +1816,345 @@ export function renderAdminPaymentDashboardHtml({
     </div>
   `;
 }
+
+export const PAYMENT_HISTORY_STATUS_FILTERS = ["all", "verified", "pending", "rejected"];
+
+export function resolvePaymentHistoryTimestampMs(raw) {
+  if (!raw) return 0;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
+  if (typeof raw === "string") {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  if (typeof raw === "object") {
+    if (typeof raw.toMillis === "function") return raw.toMillis();
+    if (typeof raw.seconds === "number") return raw.seconds * 1000;
+  }
+  return 0;
+}
+
+export function classifyPaymentVerificationBucket(paymentStatus = "") {
+  const norm = String(paymentStatus || "").trim().toLowerCase();
+  if (norm === "payment verified" || norm === "fully paid" || norm === "partially paid") {
+    return "verified";
+  }
+  if (norm === "payment rejected" || norm === "rejected") {
+    return "rejected";
+  }
+  if (norm === "refund requested" || norm === "refund processed") {
+    return "refunded";
+  }
+  return "pending";
+}
+
+/**
+ * Normalizes a customer's Firestore UPI payment records for the scrollable Payment History list.
+ * Strictly enforces customer UID isolation and strips all admin-only internal fields.
+ */
+export function normalizeUpiPaymentHistoryItems(payments = [], currentUserUid = "") {
+  const owned = filterCustomerPayments(payments, currentUserUid);
+  return owned
+    .map((p) => {
+      const utrNumber = String(p.utrNumber || p.utrKey || "").trim();
+      const verifiedAmt = Number(p.verifiedAmount || 0);
+      const paidAmt = Number(p.paidAmount || 0);
+      const txAmt = Number(p.transactionAmount || 0);
+      const advanceAmt = Number(p.requiredAdvance || 0);
+      const totalAmt = Number(p.totalPrice || 0);
+
+      let amount = 0;
+      let amountContext = "due";
+      if (verifiedAmt > 0) {
+        amount = verifiedAmt;
+        amountContext = "verified";
+      } else if (paidAmt > 0) {
+        amount = paidAmt;
+        amountContext = "paid";
+      } else if (txAmt > 0) {
+        amount = txAmt;
+        amountContext = "submitted";
+      } else if (advanceAmt > 0) {
+        amount = advanceAmt;
+        amountContext = "advance";
+      } else if (totalAmt > 0) {
+        amount = totalAmt;
+        amountContext = "due";
+      }
+
+      const rawStatus = String(p.paymentStatus || "Payment Pending").trim();
+      const verificationBucket = classifyPaymentVerificationBucket(rawStatus);
+      const dateValue =
+        p.submittedAt ||
+        p.verifiedAt ||
+        p.transactionCreatedAt ||
+        p.updatedAt ||
+        p.createdAt ||
+        p.shootDate ||
+        "";
+      const sortTimestampMs = Math.max(
+        resolvePaymentHistoryTimestampMs(p.submittedAt),
+        resolvePaymentHistoryTimestampMs(p.verifiedAt),
+        resolvePaymentHistoryTimestampMs(p.transactionCreatedAt),
+        resolvePaymentHistoryTimestampMs(p.updatedAt),
+        resolvePaymentHistoryTimestampMs(p.createdAt)
+      );
+      const title =
+        p.paymentCategory === "wedding_booking"
+          ? String(p.eventType || p.serviceType || "Wedding / Event Booking").trim()
+          : `${String(p.modelName || "Studio Model").trim()} — ${String(p.serviceType || "Model Shoot").trim()}`;
+
+      return {
+        id: String(p.id || ""),
+        utrNumber,
+        hasUtr: utrNumber.length > 0,
+        amount,
+        amountContext,
+        totalPrice: totalAmt,
+        paidAmount: paidAmt,
+        verifiedAmount: verifiedAmt,
+        dateValue,
+        sortTimestampMs,
+        shootDate: String(p.shootDate || "").trim(),
+        paymentStatus: rawStatus,
+        verificationBucket,
+        statusClass: getPaymentStatusClass(rawStatus),
+        paymentCategory: p.paymentCategory === "wedding_booking" ? "wedding_booking" : "model_booking",
+        title,
+        rejectionReason: String(p.rejectionReason || "").trim(),
+        receiptNumber: String(p.receiptNumber || "").trim()
+      };
+    })
+    .sort((a, b) => b.sortTimestampMs - a.sortTimestampMs);
+}
+
+export function filterPaymentHistoryByStatus(items = [], statusFilter = "all") {
+  const safeFilter = PAYMENT_HISTORY_STATUS_FILTERS.includes(statusFilter) ? statusFilter : "all";
+  if (safeFilter === "all") return items;
+  return items.filter((item) => item.verificationBucket === safeFilter);
+}
+
+/**
+ * Renders the Customer Portal 'Payment History' section displaying all past UPI payments
+ * fetched from Firestore in a clean scrollable list with Transaction UTR, Amount, Date,
+ * and Verification Status.
+ */
+export function renderCustomerPaymentHistoryHtml({
+  payments = [],
+  currentUserUid = "",
+  statusFilter = "all",
+  isLoading = false,
+  errorMessage = "",
+  lang = "en",
+  t = (k) => k,
+  escapeHtml = defaultEscapeHtml
+} = {}) {
+  if (!String(currentUserUid || "").trim()) {
+    return `<div class="portal-empty-card"><p>${escapeHtml(t("portalSignInRequired"))}</p></div>`;
+  }
+
+  const allItems = normalizeUpiPaymentHistoryItems(payments, currentUserUid);
+  const safeFilter = PAYMENT_HISTORY_STATUS_FILTERS.includes(statusFilter) ? statusFilter : "all";
+  const visibleItems = filterPaymentHistoryByStatus(allItems, safeFilter);
+
+  const verifiedItems = allItems.filter((i) => i.verificationBucket === "verified");
+  const pendingItems = allItems.filter((i) => i.verificationBucket === "pending");
+  const rejectedItems = allItems.filter((i) => i.verificationBucket === "rejected");
+  const totalVerifiedPaid = verifiedItems.reduce((sum, i) => sum + Number(i.verifiedAmount || i.paidAmount || i.amount || 0), 0);
+
+  const filterLabelMap = {
+    all: `${t("portalPayHistoryFilterAll")} (${allItems.length})`,
+    verified: `${t("portalPayHistoryFilterVerified")} (${verifiedItems.length})`,
+    pending: `${t("portalPayHistoryFilterPending")} (${pendingItems.length})`,
+    rejected: `${t("portalPayHistoryFilterRejected")} (${rejectedItems.length})`
+  };
+
+  const filterChipsHtml = PAYMENT_HISTORY_STATUS_FILTERS.map(
+    (key) => `
+      <button
+        type="button"
+        class="chip-btn ${safeFilter === key ? "active" : ""}"
+        data-payment-history-filter="${escapeHtml(key)}"
+        aria-pressed="${safeFilter === key ? "true" : "false"}"
+      >
+        ${escapeHtml(filterLabelMap[key])}
+      </button>
+    `
+  ).join("");
+
+  const loadingHtml = isLoading
+    ? `<div class="payment-history-loading-bar" role="status" aria-live="polite">⏳ ${escapeHtml(t("portalPayHistoryLoading"))}</div>`
+    : "";
+
+  const errorHtml = errorMessage
+    ? `<div class="payment-utr-error" role="alert" aria-live="assertive">⚠ ${escapeHtml(errorMessage)}</div>`
+    : "";
+
+  const rowsHtml = visibleItems.length
+    ? visibleItems
+        .map((item) => {
+          const formattedDate = item.dateValue
+            ? formatNetworkTimestamp(item.dateValue, lang)
+            : "—";
+          const amountDisplay = item.amount > 0 ? formatInrAmount(item.amount) : t("payAwaitingAdminPrice");
+          const amountSubLabel =
+            item.amountContext === "verified" || item.amountContext === "paid"
+              ? t("portalPayHistoryAmtPaidLabel")
+              : item.amountContext === "submitted"
+              ? t("portalPayHistoryAmtSubmittedLabel")
+              : t("portalPayHistoryAmtDueLabel");
+
+          return `
+            <article
+              class="payment-history-row"
+              role="listitem"
+              data-payment-history-id="${escapeHtml(item.id)}"
+              data-payment-history-bucket="${escapeHtml(item.verificationBucket)}"
+            >
+              <div class="payment-history-row-head">
+                <div class="payment-history-title-wrap">
+                  <span class="payment-cat-tag">${escapeHtml(item.paymentCategory === "wedding_booking" ? t("payWeddingCategory") : t("payModelCategory"))}</span>
+                  <h4 class="payment-history-title">${escapeHtml(item.title)}</h4>
+                </div>
+                <span
+                  class="payment-status-pill ${escapeHtml(item.statusClass)}"
+                  data-payment-history-status="${escapeHtml(item.paymentStatus)}"
+                >
+                  ${escapeHtml(item.paymentStatus)}
+                </span>
+              </div>
+
+              <div class="payment-history-fields-grid">
+                <div class="payment-history-field">
+                  <span class="payment-history-field-label">${escapeHtml(t("portalPayHistoryUtrCol"))}</span>
+                  <div class="payment-history-utr-wrap">
+                    <strong class="payment-history-utr-value" data-payment-history-utr="${escapeHtml(item.utrNumber)}">
+                      ${escapeHtml(item.hasUtr ? item.utrNumber : t("portalPayHistoryNoUtr"))}
+                    </strong>
+                    ${
+                      item.hasUtr
+                        ? `<button
+                             type="button"
+                             class="payment-history-copy-btn"
+                             data-copy-history-utr="${escapeHtml(item.utrNumber)}"
+                             aria-label="${escapeHtml(t("portalPayHistoryCopyUtrAria"))}"
+                             title="${escapeHtml(t("portalPayHistoryCopyUtrAria"))}"
+                           >📋</button>`
+                        : ""
+                    }
+                  </div>
+                </div>
+
+                <div class="payment-history-field">
+                  <span class="payment-history-field-label">${escapeHtml(t("portalPayHistoryAmountCol"))}</span>
+                  <div class="payment-history-amount-wrap">
+                    <strong class="payment-history-amount-value" data-payment-history-amount="${escapeHtml(String(item.amount))}">
+                      ${escapeHtml(amountDisplay)}
+                    </strong>
+                    <small class="payment-history-amount-sub">${escapeHtml(amountSubLabel)}</small>
+                  </div>
+                </div>
+
+                <div class="payment-history-field">
+                  <span class="payment-history-field-label">${escapeHtml(t("portalPayHistoryDateCol"))}</span>
+                  <strong class="payment-history-date-value" data-payment-history-date="${escapeHtml(formattedDate)}">
+                    ${escapeHtml(formattedDate)}
+                  </strong>
+                  ${item.shootDate ? `<small class="payment-history-amount-sub">📅 ${escapeHtml(item.shootDate)}</small>` : ""}
+                </div>
+
+                <div class="payment-history-field">
+                  <span class="payment-history-field-label">${escapeHtml(t("portalPayHistoryStatusCol"))}</span>
+                  <strong class="payment-history-verify-text ${escapeHtml(item.statusClass)}">
+                    ${escapeHtml(item.paymentStatus)}
+                  </strong>
+                </div>
+              </div>
+
+              ${
+                item.rejectionReason
+                  ? `<div class="payment-reject-note" style="margin-top:8px;">⚠ ${escapeHtml(t("payRejectionReasonLabel"))}: ${escapeHtml(item.rejectionReason)}</div>`
+                  : ""
+              }
+
+              <div class="payment-history-row-footer">
+                <span class="payment-history-ref-id">ID: ${escapeHtml(item.receiptNumber || item.id)}</span>
+                <button
+                  type="button"
+                  class="btn-outline btn-sm"
+                  data-print-payment-receipt="${escapeHtml(item.id)}"
+                >
+                  🖨 ${escapeHtml(t("payDownloadReceiptBtn"))}
+                </button>
+              </div>
+            </article>
+          `;
+        })
+        .join("")
+    : `
+      <div class="studio-card portal-empty-card payment-history-empty">
+        <p style="margin:0 0 12px;color:var(--text-secondary);">
+          ${escapeHtml(allItems.length ? t("portalPayHistoryNoFilterMatch") : t("portalPayHistoryEmpty"))}
+        </p>
+        <div class="payment-history-empty-actions">
+          <button type="button" class="btn-gold btn-sm" data-open-portal-qr-scanner="true">
+            📷 ${escapeHtml(t("portalScanQrToPayBtn"))}
+          </button>
+          <button type="button" class="btn-outline btn-sm" data-portal-tab="my-payments">
+            💳 ${escapeHtml(t("portalTabMyPayments"))}
+          </button>
+        </div>
+      </div>
+    `;
+
+  return `
+    <div class="portal-payment-history-panel" data-portal-payment-history="true">
+      <div class="portal-payment-history-header">
+        <div>
+          <h3 style="margin:0;color:var(--gold);">🧾 ${escapeHtml(t("portalTabPaymentHistory"))}</h3>
+          <p style="margin:4px 0 0;font-size:0.86rem;color:var(--text-secondary);">${escapeHtml(t("portalPayHistorySubtitle"))}</p>
+        </div>
+        <button
+          id="portalRefreshPaymentHistoryBtn"
+          type="button"
+          class="btn-outline btn-sm"
+          data-refresh-payment-history="true"
+          ${isLoading ? "disabled" : ""}
+        >
+          ↻ ${escapeHtml(t("portalPayHistoryRefreshBtn"))}
+        </button>
+      </div>
+
+      <div class="payment-history-kpi-grid">
+        <div class="payment-history-kpi-card">
+          <span>${escapeHtml(t("portalPayHistoryKpiTotalCount"))}</span>
+          <strong>${allItems.length}</strong>
+        </div>
+        <div class="payment-history-kpi-card is-verified">
+          <span>${escapeHtml(t("portalPayHistoryKpiVerifiedPaid"))}</span>
+          <strong>${escapeHtml(formatInrAmount(totalVerifiedPaid))}</strong>
+        </div>
+        <div class="payment-history-kpi-card is-pending">
+          <span>${escapeHtml(t("portalPayHistoryKpiPending"))}</span>
+          <strong>${pendingItems.length}</strong>
+        </div>
+      </div>
+
+      <div class="payment-history-filters" role="group" aria-label="${escapeHtml(t("portalTabPaymentHistory"))}">
+        ${filterChipsHtml}
+      </div>
+
+      ${loadingHtml}
+      ${errorHtml}
+
+      <div
+        id="portalPaymentHistoryList"
+        class="portal-payment-history-scroll"
+        role="list"
+        aria-label="${escapeHtml(t("portalTabPaymentHistory"))}"
+      >
+        ${rowsHtml}
+      </div>
+    </div>
+  `;
+}
+

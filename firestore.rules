@@ -673,6 +673,23 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
+    function isValidPaymentTransaction(data, utrKey) {
+      return isValidId(utrKey) &&
+             utrKey.size() >= 6 &&
+             utrKey.size() <= 60 &&
+             utrKey.matches('^[A-Z0-9]{6,60}$') &&
+             data.keys().hasOnly([
+               'utrKey', 'utrNumber', 'paymentId', 'customerUid', 'status', 'createdAt', 'updatedAt'
+             ]) &&
+             data.utrKey == utrKey &&
+             data.utrNumber is string && data.utrNumber.size() >= 6 && data.utrNumber.size() <= 60 &&
+             isValidId(data.paymentId) &&
+             data.customerUid is string && data.customerUid.size() > 0 && data.customerUid.size() <= 128 &&
+             data.status == 'Submitted for Verification' &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
     // Default deny all unknown collections
     match /{document=**} {
       allow read, write: if false;
@@ -1271,6 +1288,24 @@ service cloud.firestore {
                        isAdmin() || (
                          isSignedIn() &&
                          incoming().claimedByUid == request.auth.uid &&
+                         existsAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)) &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.customerUid == request.auth.uid &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.utrKey == utrKey &&
+                         getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.paymentStatus == 'Submitted for Verification'
+                       )
+                     );
+      allow update, delete: if isAdmin();
+    }
+
+    // Atomic Duplicate UTR Lock Collection (paymentTransactions/{utrKey})
+    // Customers can never read another user's transaction, list the collection, or overwrite/delete an existing UTR.
+    match /paymentTransactions/{utrKey} {
+      allow get: if isAdmin() || (isSignedIn() && (resource == null || resource.data.customerUid == request.auth.uid));
+      allow list: if isAdmin();
+      allow create: if isValidPaymentTransaction(incoming(), utrKey) && (
+                       isAdmin() || (
+                         isSignedIn() &&
+                         incoming().customerUid == request.auth.uid &&
                          existsAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)) &&
                          getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.customerUid == request.auth.uid &&
                          getAfter(/databases/$(database)/documents/bookingPayments/$(incoming().paymentId)).data.utrKey == utrKey &&

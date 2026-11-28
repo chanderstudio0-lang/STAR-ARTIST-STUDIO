@@ -7335,36 +7335,961 @@ test("Admin JWT Token Verification & Payment Bounds strictly require verified ch
   assert.ok(checkAdminBody.includes("validateAdminTokenClaims"));
 });
 
+test("Client-side QR decoder utility strictly verifies uploaded QR images resolve to official UPI ID 9812890081@ybl before Admin save", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
 
+  // 1. Official CDN URL uses esm.sh (already in SW BYPASS_ORIGINS) and jsQR
+  assert.ok(payMod.QR_DECODER_CDN_URL.startsWith("https://esm.sh/jsqr@"));
+  assert.ok(swJs.includes('"esm.sh"'));
 
+  // 2. UPI QR payload parsing accepts standard official PhonePe URI and rejects non-UPI / malformed payloads
+  const officialPayload =
+    "upi://pay?pa=9812890081@ybl&pn=CHANDER%20PRAKASH&mc=0000&mode=02&purpose=00";
+  const parsedOfficial = payMod.parseUpiQrPayload(officialPayload);
+  assert.equal(parsedOfficial.valid, true);
+  assert.equal(parsedOfficial.upiId, "9812890081@ybl");
+  assert.equal(parsedOfficial.payeeName, "CHANDER PRAKASH");
 
+  assert.equal(payMod.parseUpiQrPayload("https://example.com/pay").valid, false);
+  assert.equal(payMod.parseUpiQrPayload("javascript:alert(1)").valid, false);
+  assert.equal(payMod.parseUpiQrPayload("upi://pay?pn=NoPayeeAddress").valid, false);
+  assert.equal(payMod.parseUpiQrPayload("").valid, false);
 
+  // 3. Decoded payload verification passes ONLY for exact official UPI ID 9812890081@ybl (case-insensitive)
+  const okUpper = payMod.verifyDecodedUpiQrPayload("UPI://PAY?pa=9812890081@YBL&pn=CHANDER%20PRAKASH");
+  assert.equal(okUpper.valid, true);
+  assert.equal(okUpper.decodedUpiId, "9812890081@ybl");
 
+  const mismatchIbl = payMod.verifyDecodedUpiQrPayload(
+    "upi://pay?pa=9812890081@ibl&pn=CHANDER%20PRAKASH&mc=0000&mode=02&purpose=00"
+  );
+  assert.equal(mismatchIbl.valid, false);
+  assert.equal(mismatchIbl.decodedUpiId, "9812890081@ibl");
+  assert.equal(mismatchIbl.expectedUpiId, "9812890081@ybl");
+  assert.match(mismatchIbl.error, /9812890081@ibl/);
+  assert.match(mismatchIbl.error, /9812890081@ybl/);
 
+  // 4. verifyQrCode(qrImageBlob) verification with browser jsQR decoder (via customDecoder & customLoader)
+  assert.equal(typeof payMod.verifyQrCode, "function");
+  const fakeImageData = { data: new Uint8ClampedArray(16 * 16 * 4), width: 16, height: 16 };
+  const passImgCheck = await payMod.verifyQrCode(fakeImageData, {
+    customLoader: async () => ({
+      default: () => ({ data: officialPayload })
+    })
+  });
+  assert.equal(passImgCheck.valid, true);
+  assert.equal(passImgCheck.decodedUpiId, "9812890081@ybl");
 
+  // Backward-compatible alias delegates to verifyQrCode
+  const passAliasCheck = await payMod.verifyUploadedQrImageMatchesOfficialUpi(fakeImageData, {
+    customDecoder: () => ({ data: officialPayload })
+  });
+  assert.equal(passAliasCheck.valid, true);
+  assert.equal(passAliasCheck.decodedUpiId, "9812890081@ybl");
 
+  const failMismatchCheck = await payMod.verifyQrCode(fakeImageData, {
+    customDecoder: () => ({ data: "upi://pay?pa=attacker@ybl&pn=FAKE" })
+  });
+  assert.equal(failMismatchCheck.valid, false);
+  assert.equal(failMismatchCheck.decodedUpiId, "attacker@ybl");
 
+  const failUnreadableCheck = await payMod.verifyQrCode(fakeImageData, {
+    customDecoder: () => null
+  });
+  assert.equal(failUnreadableCheck.valid, false);
+  assert.match(failUnreadableCheck.error, /Could not detect a readable QR code/);
 
+  // 5. Fail-closed on invalid/unsupported Blob/File/DataURL inputs or loader errors
+  const okUpperParam = payMod.verifyDecodedUpiQrPayload("UPI://PAY?PA=9812890081@YBL&PN=CHANDER%20PRAKASH");
+  assert.equal(okUpperParam.valid, true);
+  assert.equal(okUpperParam.decodedUpiId, "9812890081@ybl");
 
+  const failNull = await payMod.verifyQrCode(null);
+  assert.equal(failNull.valid, false);
 
+  const failEmptyBlob = await payMod.verifyQrCode(new Blob([], { type: "image/png" }));
+  assert.equal(failEmptyBlob.valid, false);
+  assert.match(failEmptyBlob.error, /empty/i);
 
+  const failSvg = await payMod.verifyQrCode(new Blob(["<svg></svg>"], { type: "image/svg+xml" }));
+  assert.equal(failSvg.valid, false);
 
+  const failOversizedBlob = await payMod.verifyQrCode({
+    size: 16 * 1024 * 1024,
+    type: "image/png"
+  });
+  assert.equal(failOversizedBlob.valid, false);
 
+  const failBadDataUrl = await payMod.verifyQrCode("data:image/svg+xml;base64,PHN2Zz4=");
+  assert.equal(failBadDataUrl.valid, false);
 
+  const failLoaderError = await payMod.verifyQrCode(fakeImageData, {
+    customLoader: async () => {
+      throw new Error("CDN offline");
+    }
+  });
+  assert.equal(failLoaderError.valid, false);
+  assert.match(failLoaderError.error, /CDN offline/);
 
+  // 6. Both Admin save pathways in app.js (#adminUpiConfigForm & #adminUpiQrFile) enforce verifyQrCode before adminSavePaymentSettings
+  const cfgSubmitStart = appJs.indexOf('const upiCfgForm = e.target.closest("#adminUpiConfigForm")');
+  const cfgSubmitEnd = appJs.indexOf("const setPriceForm = e.target.closest(");
+  assert.ok(cfgSubmitStart > 0 && cfgSubmitEnd > cfgSubmitStart);
+  const cfgSubmitBody = appJs.slice(cfgSubmitStart, cfgSubmitEnd);
+  assert.ok(cfgSubmitBody.includes("verifyQrCode(qrFile"));
+  assert.ok(cfgSubmitBody.includes("verifyQrCode(qrImageDataUrl"));
+  assert.ok(
+    cfgSubmitBody.indexOf("verifyQrCode(qrFile") <
+      cfgSubmitBody.indexOf("adminSavePaymentSettings("),
+    "Form submit must verify decoded QR UPI ID via verifyQrCode before calling adminSavePaymentSettings"
+  );
+  assert.ok(
+    cfgSubmitBody.indexOf("verifyQrCode(qrImageDataUrl") <
+      cfgSubmitBody.indexOf("adminSavePaymentSettings("),
+    "Form submit must verify compressed/saved QR via verifyQrCode before calling adminSavePaymentSettings"
+  );
 
+  const qrChangeStart = appJs.indexOf('const qrInput = e.target.closest("#adminUpiQrFile")');
+  const qrChangeEnd = appJs.indexOf("function compressPaymentImageFile");
+  assert.ok(qrChangeStart > 0 && qrChangeEnd > qrChangeStart);
+  const qrChangeBody = appJs.slice(qrChangeStart, qrChangeEnd);
+  assert.ok(qrChangeBody.includes("verifyQrCode(pickedFile"));
+  assert.ok(qrChangeBody.includes("verifyQrCode(compressedDataUrl"));
+  assert.ok(
+    qrChangeBody.indexOf("verifyQrCode(pickedFile") <
+      qrChangeBody.indexOf("adminSavePaymentSettings("),
+    "QR file upload auto-save must verify decoded QR UPI ID via verifyQrCode before calling adminSavePaymentSettings"
+  );
+  assert.ok(
+    qrChangeBody.indexOf("verifyQrCode(compressedDataUrl") <
+      qrChangeBody.indexOf("adminSavePaymentSettings("),
+    "Compressed QR Data URL must also decode to 9812890081@ybl via verifyQrCode before calling adminSavePaymentSettings"
+  );
 
+  // 7. Defense-in-depth inside firebase.js adminSavePaymentSettings itself before fsMod.setDoc
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const saveFnStart = firebaseJs.indexOf("export async function adminSavePaymentSettings");
+  const saveFnEnd = firebaseJs.indexOf("export async function fetchMyBookingPayments");
+  assert.ok(saveFnStart > 0 && saveFnEnd > saveFnStart);
+  const saveFnBody = firebaseJs.slice(saveFnStart, saveFnEnd);
+  assert.ok(saveFnBody.includes("verifyQrCode(check.clean.qrImageDataUrl"));
+  assert.ok(
+    saveFnBody.indexOf("verifyQrCode(") <
+      saveFnBody.indexOf("fsMod.setDoc("),
+    "adminSavePaymentSettings must verify decoded QR UPI ID via verifyQrCode before writing to Firestore"
+  );
+});
 
+test("Atomic paymentTransactions duplicate UTR check uses Firestore transaction and displays specific Duplicate UTR alert in UI", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+  const rules = fs.readFileSync(path.resolve(webDir, "..", "firestore.rules"), "utf8");
 
+  assert.equal(payMod.PAYMENT_TRANSACTIONS_COLLECTION, "paymentTransactions");
 
+  // 1. Simulated atomic Firestore store verifying reads-before-writes and atomic duplicate blocking
+  const store = new Map();
+  const opLog = [];
+  const fakeDb = { name: "local-test-db" };
+  const fakeFsMod = {
+    doc(_db, col, id) {
+      return { path: `${col}/${id}`, col, id };
+    },
+    serverTimestamp() {
+      return "SERVER_TS";
+    },
+    async runTransaction(_db, updateFn) {
+      const stagedWrites = [];
+      let sawWrite = false;
+      const tx = {
+        async get(ref) {
+          assert.equal(sawWrite, false, "Firestore transactions must execute all reads before writes");
+          opLog.push(`get:${ref.path}`);
+          const data = store.get(ref.path);
+          return {
+            exists: () => Boolean(data),
+            data: () => data
+          };
+        },
+        set(ref, value) {
+          sawWrite = true;
+          opLog.push(`set:${ref.path}`);
+          stagedWrites.push({ path: ref.path, value });
+        }
+      };
+      await updateFn(tx);
+      for (const w of stagedWrites) {
+        store.set(w.path, w.value);
+      }
+    }
+  };
 
+  // First unique UTR succeeds and writes to paymentTransactions/{canonicalKey}
+  const firstRes = await payMod.checkAndClaimPaymentTransactionUtr({
+    db: fakeDb,
+    fsMod: fakeFsMod,
+    utrNumber: "UTR 4123-4567-8901",
+    paymentId: "pay_tx_001",
+    customerUid: "cust_alice_1"
+  });
+  assert.equal(firstRes.ok, true);
+  assert.equal(firstRes.duplicate, false);
+  assert.equal(firstRes.utrKey, "UTR412345678901");
+  assert.equal(firstRes.collection, "paymentTransactions");
+  assert.ok(store.has("paymentTransactions/UTR412345678901"));
+  assert.equal(store.get("paymentTransactions/UTR412345678901").customerUid, "cust_alice_1");
 
+  // Second submission with same normalized UTR (different case/separators) is atomically flagged as duplicate
+  const dupRes = await payMod.checkAndClaimPaymentTransactionUtr({
+    db: fakeDb,
+    fsMod: fakeFsMod,
+    utrNumber: "utr_4123 4567/8901",
+    paymentId: "pay_tx_002",
+    customerUid: "cust_bob_2"
+  });
+  assert.equal(dupRes.ok, false);
+  assert.equal(dupRes.duplicate, true);
+  assert.equal(dupRes.error, payMod.DUPLICATE_UTR_ERROR_MESSAGE);
+  // Original owner record remains intact
+  assert.equal(store.get("paymentTransactions/UTR412345678901").customerUid, "cust_alice_1");
 
+  // throwOnDuplicate: true throws typed duplicate error recognized by isDuplicateUtrError()
+  await assert.rejects(
+    async () => {
+      await payMod.checkAndClaimPaymentTransactionUtr({
+        db: fakeDb,
+        fsMod: fakeFsMod,
+        utrNumber: "UTR412345678901",
+        paymentId: "pay_tx_003",
+        customerUid: "cust_bob_2",
+        throwOnDuplicate: true
+      });
+    },
+    (err) => payMod.isDuplicateUtrError(err) && err.code === "payment/duplicate-utr"
+  );
 
+  // Concurrent Firestore contention (permission-denied / already-exists / aborted) maps to duplicate UTR
+  const contendingFsMod = {
+    doc: fakeFsMod.doc,
+    serverTimestamp: fakeFsMod.serverTimestamp,
+    async runTransaction() {
+      const err = new Error("Aborted due to concurrent transaction");
+      err.code = "aborted";
+      throw err;
+    }
+  };
+  const raceRes = await payMod.checkAndClaimPaymentTransactionUtr({
+    db: fakeDb,
+    fsMod: contendingFsMod,
+    utrNumber: "UTR999988887777",
+    paymentId: "pay_tx_004",
+    customerUid: "cust_bob_2"
+  });
+  assert.equal(raceRes.ok, false);
+  assert.equal(raceRes.duplicate, true);
 
+  // Sensitive banking strings rejected before transaction runs
+  await assert.rejects(async () => {
+    await payMod.checkAndClaimPaymentTransactionUtr({
+      db: fakeDb,
+      fsMod: fakeFsMod,
+      utrNumber: "UPI PIN 1234",
+      paymentId: "pay_tx_005",
+      customerUid: "cust_alice_1"
+    });
+  });
 
+  // 2. Specific Duplicate UTR UI alert escapes HTML safely and renders dedicated alert markup
+  const alertHtml = payMod.renderDuplicateUtrAlertHtml({
+    utrNumber: "UTR412345678901<script>",
+    message: payMod.DUPLICATE_UTR_ERROR_MESSAGE,
+    title: i18nMod.TRANSLATIONS.en.payDupUtrAlertTitle,
+    hint: i18nMod.TRANSLATIONS.en.payDupUtrAlertHint
+  });
+  assert.ok(alertHtml.includes('data-duplicate-utr-alert="true"'));
+  assert.ok(alertHtml.includes("Duplicate UTR Detected"));
+  assert.ok(alertHtml.includes("UTR412345678901&lt;script&gt;"));
+  assert.equal(alertHtml.includes("<script>"), false);
 
+  // 3. Customer portal, app.js, firebase.js, i18n, CSS, and strict firestore.rules are wired together
+  const customerHtml = payMod.renderCustomerPaymentsPortalHtml({
+    currentUserUid: "cust_alice_1",
+    paymentConfig: {
+      ...payMod.DEFAULT_PAYMENT_CONFIG,
+      enabled: true,
+      qrVerified: true,
+      qrImageDataUrl: "data:image/jpeg;base64," + "A".repeat(160)
+    },
+    payments: [
+      {
+        id: "pay_tx_001",
+        customerUid: "cust_alice_1",
+        paymentCategory: "wedding_booking",
+        eventType: "Wedding",
+        shootDate: "2026-12-20",
+        totalPrice: 50000,
+        requiredAdvance: 12500,
+        paidAmount: 0,
+        remainingBalance: 50000,
+        priceSetByAdmin: true,
+        paymentStatus: "Payment Pending",
+        bookingStatus: "Payment Pending"
+      }
+    ],
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(customerHtml.includes("data-duplicate-utr-alert-box"));
+  assert.ok(appJs.includes("renderDuplicateUtrAlertHtml"));
+  assert.ok(appJs.includes("isDuplicateUtrError"));
+  assert.ok(appJs.includes("[data-duplicate-utr-alert-box]"));
+  assert.ok(firebaseJs.includes("checkAndClaimPaymentTransactionUtr"));
+  assert.ok(i18nMod.TRANSLATIONS.en.payDupUtrAlertTitle);
+  assert.ok(i18nMod.TRANSLATIONS.hi.payDupUtrAlertTitle);
+  assert.ok(css.includes(".payment-utr-duplicate-alert"));
+  assert.ok(css.includes(".is-duplicate-utr-input"));
+  assert.ok(rules.includes("match /paymentTransactions/{utrKey}"));
+  assert.ok(rules.includes("function isValidPaymentTransaction"));
+  assert.equal(/allow\s+write\s*:\s*if\s+true/i.test(rules), false);
+});
 
+test("Admin Console Payment Trends section uses Recharts to visualize daily total collection and successful vs. rejected transaction counts", async () => {
+  const trendsMod = await import(pathToFileURL(path.join(webDir, "js/admin-payment-trends.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
 
+  // 1. Canonical outcome classification
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Payment Verified" }), "successful");
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Partially Paid" }), "successful");
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Fully Paid" }), "successful");
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Payment Rejected" }), "rejected");
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Payment Pending" }), "other");
+  assert.equal(trendsMod.classifyPaymentOutcome({ paymentStatus: "Submitted for Verification" }), "other");
 
+  // 2. Daily series aggregation across Firestore Timestamps, ISO dates, and history fallback
+  const anchor = new Date("2026-11-27T12:00:00Z");
+  const samplePayments = [
+    {
+      id: "pay_1",
+      paymentStatus: "Payment Verified",
+      paidAmount: 15000,
+      verifiedAt: { seconds: Math.floor(new Date("2026-11-27T08:00:00Z").getTime() / 1000) }
+    },
+    {
+      id: "pay_2",
+      paymentStatus: "Fully Paid",
+      paidAmount: 25000,
+      verifiedAt: "2026-11-27T10:30:00Z"
+    },
+    {
+      id: "pay_3",
+      paymentStatus: "Payment Rejected",
+      paidAmount: 0,
+      updatedAt: "2026-11-27T09:15:00Z"
+    },
+    {
+      id: "pay_4",
+      paymentStatus: "Partially Paid",
+      paidAmount: 8000,
+      history: [{ action: "Payment Verified by Admin", status: "Partially Paid", at: "2026-11-25T14:00:00Z" }]
+    },
+    {
+      id: "pay_5",
+      paymentStatus: "Payment Rejected",
+      paidAmount: 0,
+      updatedAt: "2026-11-25T15:00:00Z"
+    },
+    {
+      id: "pay_6",
+      paymentStatus: "Submitted for Verification",
+      paidAmount: 0,
+      submittedAt: "2026-11-27T11:00:00Z"
+    },
+    {
+      id: "pay_old",
+      paymentStatus: "Fully Paid",
+      paidAmount: 50000,
+      verifiedAt: "2026-09-01T10:00:00Z"
+    }
+  ];
+
+  const series7 = trendsMod.buildPaymentTrendsSeries(samplePayments, { days: 7, now: anchor, utc: true });
+  assert.equal(series7.length, 7);
+  const nov27 = series7.find((d) => d.dateKey === "2026-11-27");
+  const nov25 = series7.find((d) => d.dateKey === "2026-11-25");
+  assert.ok(nov27 && nov25);
+  assert.equal(nov27.totalCollection, 40000);
+  assert.equal(nov27.successfulCount, 2);
+  assert.equal(nov27.rejectedCount, 1);
+  assert.equal(nov25.totalCollection, 8000);
+  assert.equal(nov25.successfulCount, 1);
+  assert.equal(nov25.rejectedCount, 1);
+
+  // 3. KPI summary accuracy
+  const summary = trendsMod.summarizePaymentTrends(series7, samplePayments);
+  assert.equal(summary.totalCollection, 48000);
+  assert.equal(summary.successfulCount, 3);
+  assert.equal(summary.rejectedCount, 2);
+  assert.equal(summary.successRate, 60);
+  assert.equal(summary.peakDay.dateKey, "2026-11-27");
+  assert.equal(summary.peakDay.totalCollection, 40000);
+  assert.equal(summary.allTimeCollection, 98000);
+
+  // 4. Recharts runtime mounting renders AreaChart (totalCollection) and BarChart (successfulCount vs rejectedCount)
+  let renderedTree = null;
+  let unmounted = false;
+  const fakeHost = { innerHTML: "" };
+  const fakeMetrics = { innerHTML: "" };
+  const fakeStatus = { textContent: "" };
+  const fakeReact = {
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children })
+  };
+  const fakeRecharts = {
+    ResponsiveContainer: "ResponsiveContainer",
+    AreaChart: "AreaChart",
+    Area: "Area",
+    BarChart: "BarChart",
+    Bar: "Bar",
+    CartesianGrid: "CartesianGrid",
+    XAxis: "XAxis",
+    YAxis: "YAxis",
+    Tooltip: "Tooltip",
+    Legend: "Legend"
+  };
+
+  const mountRes = await trendsMod.mountPaymentTrendsChart(fakeHost, {
+    payments: samplePayments,
+    metricsEl: fakeMetrics,
+    statusEl: fakeStatus,
+    days: 7,
+    now: anchor,
+    theme: "dark",
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k,
+    loaders: {
+      react: async () => fakeReact,
+      reactDomClient: async () => ({
+        createRoot: () => ({
+          render: (el) => {
+            renderedTree = el;
+          },
+          unmount: () => {
+            unmounted = true;
+          }
+        })
+      }),
+      recharts: async () => fakeRecharts
+    }
+  });
+  assert.equal(mountRes.engine, "recharts");
+  assert.ok(renderedTree);
+  const serialized = JSON.stringify(renderedTree);
+  assert.ok(serialized.includes('"type":"AreaChart"'));
+  assert.ok(serialized.includes('"dataKey":"totalCollection"'));
+  assert.ok(serialized.includes('"type":"BarChart"'));
+  assert.ok(serialized.includes('"dataKey":"successfulCount"'));
+  assert.ok(serialized.includes('"dataKey":"rejectedCount"'));
+  assert.ok(fakeMetrics.innerHTML.includes("48,000"));
+  assert.ok(fakeMetrics.innerHTML.includes("60%"));
+
+  trendsMod.unmountPaymentTrendsChart(fakeHost);
+  assert.equal(unmounted, true);
+
+  // 5. Offline SVG fallback renders both Daily Collection and Successful vs. Rejected charts
+  const offlineHost = { innerHTML: "" };
+  const fallbackRes = await trendsMod.mountPaymentTrendsChart(offlineHost, {
+    payments: samplePayments,
+    days: 7,
+    now: anchor,
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k,
+    loaders: {
+      react: async () => {
+        throw new Error("Offline");
+      },
+      reactDomClient: async () => {
+        throw new Error("Offline");
+      },
+      recharts: async () => {
+        throw new Error("Offline");
+      }
+    }
+  });
+  assert.equal(fallbackRes.engine, "svg-fallback");
+  assert.ok(offlineHost.innerHTML.includes("payment-trends-fallback-svg"));
+  assert.ok(offlineHost.innerHTML.includes('data-payment-trend-chart="collection"'));
+  assert.ok(offlineHost.innerHTML.includes('data-payment-trend-chart="outcomes"'));
+
+  // 6. Admin Console HTML gating, app.js lifecycle guards, SW precache, i18n, and CSS
+  for (const token of [
+    'id="adminPaymentTrendsCard"',
+    'id="adminPaymentTrendsHeading"',
+    'id="adminPaymentTrendsMetrics"',
+    'id="adminPaymentTrendsChartMount"',
+    'data-payment-trends-days="7"',
+    'data-payment-trends-days="14"',
+    'data-payment-trends-days="30"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing Payment Trends token: ${token}`);
+  }
+  assert.ok(
+    html.indexOf('id="adminConsoleContent"') < html.indexOf('id="adminPaymentTrendsCard"'),
+    "Payment Trends card must live strictly inside the gated #adminConsoleContent container"
+  );
+  assert.ok(appJs.includes("renderAdminPaymentTrendsChart"));
+  assert.ok(appJs.includes("unmountPaymentTrendsChart"));
+  assert.ok(swJs.includes("/js/admin-payment-trends.js"));
+  assert.ok(i18nMod.TRANSLATIONS.en.adminPayTrendsTitle);
+  assert.ok(i18nMod.TRANSLATIONS.hi.adminPayTrendsTitle);
+  for (const selector of [
+    ".payment-trends-card",
+    ".payment-trends-kpis",
+    ".payment-trends-charts-grid",
+    ".payment-trends-chart-panel",
+    ".payment-trends-fallback-svg"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing Payment Trends rule for ${selector}`);
+  }
+});
+
+test("My Portal 'Scan QR to Pay' uses camera QR scanning to verify official UPI, extract amount, and pre-fill UPI payment details", async () => {
+  const scannerMod = await import(pathToFileURL(path.join(webDir, "js/qr-pay-scanner.js")).href);
+  const portalMod = await import(pathToFileURL(path.join(webDir, "js/customer-portal.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const swJs = fs.readFileSync(path.join(webDir, "sw.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+
+  // 1. Parse UPI QR payload with explicit amount (am), payee name (pn), note (tn), and ref (tr)
+  const validWithAmt = scannerMod.parseUpiPaymentQrDetails(
+    "upi://pay?pa=9812890081@ybl&pn=STAR%20ARTIST%20STUDIO&am=7500.50&cu=INR&tn=Wedding%20Advance&tr=SAS2026"
+  );
+  assert.equal(validWithAmt.valid, true);
+  assert.equal(validWithAmt.upiId, "9812890081@ybl");
+  assert.equal(validWithAmt.payeeName, "STAR ARTIST STUDIO");
+  assert.equal(validWithAmt.amount, 7500.5);
+  assert.equal(validWithAmt.hasExplicitAmount, true);
+  assert.equal(validWithAmt.note, "Wedding Advance");
+  assert.equal(validWithAmt.transactionRef, "SAS2026");
+  assert.equal(validWithAmt.isOfficialStudioUpi, true);
+
+  // Case-insensitive query keys & static QR (no am param)
+  const staticQr = scannerMod.parseUpiPaymentQrDetails("UPI://PAY?PA=9812890081@YBL&PN=CHANDER%20PRAKASH");
+  assert.equal(staticQr.valid, true);
+  assert.equal(staticQr.amount, 0);
+  assert.equal(staticQr.hasExplicitAmount, false);
+
+  // Security rejections: spoofed UPI, non-UPI URL, negative/invalid amount, non-INR currency
+  const spoofedQr = scannerMod.parseUpiPaymentQrDetails("upi://pay?pa=scammer@ybl&pn=Fake&am=5000&cu=INR");
+  assert.equal(spoofedQr.valid, false);
+  assert.match(spoofedQr.error, /9812890081@ybl/);
+
+  assert.equal(scannerMod.parseUpiPaymentQrDetails("javascript:alert(1)").valid, false);
+  assert.equal(scannerMod.parseUpiPaymentQrDetails("https://example.com/pay?am=500").valid, false);
+  assert.equal(scannerMod.parseUpiPaymentQrDetails("upi://pay?pa=9812890081@ybl&am=-100").valid, false);
+  assert.equal(scannerMod.parseUpiPaymentQrDetails("upi://pay?pa=9812890081@ybl&am=100&cu=USD").valid, false);
+
+  // 2. Pre-fill builder auto-matches pending booking and constructs safe upi://pay deep link
+  const customerPayments = [
+    {
+      id: "pay_wed_101",
+      customerUid: "cust_1",
+      paymentCategory: "wedding_booking",
+      eventType: "Wedding Photography",
+      shootDate: "2026-12-12",
+      totalPrice: 30000,
+      chargeMode: "percentage",
+      chargeValue: 25,
+      requiredAdvance: 7500,
+      paidAmount: 0,
+      remainingBalance: 30000,
+      priceSetByAdmin: true,
+      paymentStatus: "Payment Pending"
+    }
+  ];
+  const prefill = scannerMod.buildPrefilledUpiPaymentDetails(
+    scannerMod.parseUpiPaymentQrDetails("upi://pay?pa=9812890081@ybl&pn=STAR%20ARTIST%20STUDIO&am=7500&cu=INR"),
+    { customerPayments }
+  );
+  assert.equal(prefill.upiId, "9812890081@ybl");
+  assert.equal(prefill.amount, 7500);
+  assert.equal(prefill.amountSource, "qr");
+  assert.equal(prefill.matchedPaymentId, "pay_wed_101");
+  assert.ok(prefill.upiDeepLink.startsWith("upi://pay?"));
+  assert.ok(prefill.upiDeepLink.includes("pa=9812890081%40ybl"));
+  assert.ok(prefill.upiDeepLink.includes("am=7500"));
+
+  // Static QR falls back to active booking payable amount
+  const staticPrefill = scannerMod.buildPrefilledUpiPaymentDetails(staticQr, { customerPayments });
+  assert.equal(staticPrefill.amount, 7500);
+  assert.equal(staticPrefill.amountSource, "booking");
+
+  // 3. Camera QR scanner controller requests environment camera, scans frame, detects QR, and stops all tracks
+  let trackStopped = false;
+  let capturedConstraints = null;
+  let detectedPayload = "";
+  const fakeVideo = {
+    srcObject: null,
+    muted: false,
+    videoWidth: 640,
+    videoHeight: 480,
+    setAttribute: () => {},
+    play: async () => {},
+    pause: () => {}
+  };
+  const controller = scannerMod.createCameraQrScannerController({
+    videoEl: fakeVideo,
+    scanIntervalMs: 60,
+    getUserMedia: async (constraints) => {
+      capturedConstraints = constraints;
+      return {
+        getTracks: () => [
+          {
+            stop: () => {
+              trackStopped = true;
+            }
+          }
+        ]
+      };
+    },
+    barcodeDetector: {
+      detect: async () => [{ rawValue: "upi://pay?pa=9812890081@ybl&am=4500&cu=INR" }]
+    },
+    onDetected: (val) => {
+      detectedPayload = val;
+    }
+  });
+  const started = await controller.start();
+  assert.equal(started, true);
+  assert.equal(capturedConstraints?.video?.facingMode?.ideal, "environment");
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.equal(detectedPayload, "upi://pay?pa=9812890081@ybl&am=4500&cu=INR");
+  assert.equal(trackStopped, true, "Camera tracks must be stopped immediately after QR detection");
+  assert.equal(controller.isRunning(), false);
+
+  // 4. My Portal renders 'Scan QR to Pay' button and Pre-Filled UPI Payment Details card
+  const portalHtml = portalMod.renderCustomerPortalHtml({
+    user: { uid: "cust_1", email: "client@example.com", displayName: "Aarav" },
+    payments: customerPayments,
+    scannedUpiPayment: prefill,
+    activeTab: "my-payments",
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(portalHtml.includes('id="portalScanQrToPayBtn"'));
+  assert.ok(portalHtml.includes("Scan QR to Pay"));
+  assert.ok(portalHtml.includes('id="portalScannedUpiCard"'));
+  assert.ok(portalHtml.includes('value="9812890081@ybl"'));
+  assert.ok(portalHtml.includes('value="7500"'));
+  assert.ok(portalHtml.includes('id="portalScannedUpiPayLink"'));
+  assert.ok(portalHtml.includes('data-jump-utr-payment-id="pay_wed_101"'));
+
+  // 5. HTML modal, app.js hooks, SW precache, i18n, and CSS rules
+  for (const token of [
+    'id="portalQrScannerModal"',
+    'id="portalQrScannerVideo"',
+    'id="portalQrScannerCanvas"',
+    'id="portalQrFallbackFile"',
+    'id="closePortalQrScannerBtn"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing Scan QR modal token: ${token}`);
+  }
+  assert.ok(appJs.includes("openPortalQrScannerModal"));
+  assert.ok(appJs.includes("closePortalQrScannerModal"));
+  assert.ok(appJs.includes("applyScannedUpiPaymentDetails"));
+  assert.ok(swJs.includes("/js/qr-pay-scanner.js"));
+  assert.ok(i18nMod.TRANSLATIONS.en.portalScanQrToPayBtn);
+  assert.ok(i18nMod.TRANSLATIONS.hi.portalScanQrToPayBtn);
+  for (const selector of [
+    ".portal-scan-qr-btn",
+    ".portal-qr-viewfinder",
+    ".portal-qr-reticle",
+    ".portal-scanned-upi-card"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing Scan QR rule for ${selector}`);
+  }
+});
+
+test("First-time Scan QR to Pay camera permission request UI gates camera access and explains single-purpose usage", async () => {
+  const scannerMod = await import(pathToFileURL(path.join(webDir, "js/qr-pay-scanner.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const html = fs.readFileSync(path.join(webDir, "index.html"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+
+  // 1. Storage helpers start unacknowledged and persist acknowledgment cleanly
+  const store = new Map();
+  const mockStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => {
+      store.set(k, String(v));
+    }
+  };
+  assert.equal(scannerMod.hasAcknowledgedQrCameraPermission(mockStorage), false);
+  assert.equal(scannerMod.markQrCameraPermissionAcknowledged(mockStorage), true);
+  assert.equal(scannerMod.hasAcknowledgedQrCameraPermission(mockStorage), true);
+  assert.equal(store.get(scannerMod.CAMERA_PERMISSION_ACK_STORAGE_KEY), "1");
+
+  // Graceful fallback when storage throws (e.g., restricted private mode)
+  const throwingStorage = {
+    getItem: () => {
+      throw new Error("QuotaExceededError");
+    },
+    setItem: () => {
+      throw new Error("QuotaExceededError");
+    }
+  };
+  assert.equal(scannerMod.hasAcknowledgedQrCameraPermission(throwingStorage), false);
+  assert.equal(scannerMod.markQrCameraPermissionAcknowledged(throwingStorage), false);
+
+  // 2. Descriptive permission UI renders clear single-purpose studio QR explanation & controls
+  const noticeEn = scannerMod.renderCameraPermissionNoticeHtml({
+    t: (k) => i18nMod.TRANSLATIONS.en[k] || k
+  });
+  assert.ok(noticeEn.includes('data-qr-permission-notice="true"'));
+  assert.ok(noticeEn.includes('id="portalQrPermissionHeading"'));
+  assert.ok(noticeEn.includes("9812890081@ybl"));
+  assert.ok(noticeEn.includes("STAR ARTIST STUDIO"));
+  assert.ok(/no photos or video are ever recorded or uploaded/i.test(noticeEn));
+  assert.ok(noticeEn.includes('id="portalQrConfirmCameraBtn"'));
+  assert.ok(noticeEn.includes('data-confirm-qr-camera="true"'));
+  assert.ok(noticeEn.includes('for="portalQrFallbackFile"'));
+  assert.ok(noticeEn.includes('data-cancel-qr-camera="true"'));
+
+  // Hindi rendering uses matching translations without raw keys
+  const noticeHi = scannerMod.renderCameraPermissionNoticeHtml({
+    t: (k) => i18nMod.TRANSLATIONS.hi[k] || k
+  });
+  assert.ok(noticeHi.includes("9812890081@ybl"));
+  assert.ok(!noticeHi.includes("portalScanQrPermTitle"));
+  assert.ok(!noticeHi.includes("portalScanQrPermAllowBtn"));
+
+  // 3. index.html includes permission notice region, live scanner pane, and modal-level error alert
+  for (const token of [
+    'id="portalQrPermissionNotice"',
+    'aria-labelledby="portalQrPermissionHeading"',
+    'id="portalQrLiveScannerPane"',
+    'id="portalQrScannerError"',
+    'id="portalQrFallbackFile"'
+  ]) {
+    assert.ok(html.includes(token), `index.html missing camera permission UI token: ${token}`);
+  }
+  const livePaneCloseIdx = html.indexOf("</div>\n      <div id=\"portalQrScannerError\"");
+  assert.ok(
+    livePaneCloseIdx !== -1,
+    "portalQrScannerError should sit outside portalQrLiveScannerPane so upload errors show during permission notice too"
+  );
+
+  // 4. app.js gates first-time openPortalQrScannerModal before calling startPortalQrLiveCamera()
+  assert.ok(appJs.includes("hasAcknowledgedQrCameraPermission"));
+  assert.ok(appJs.includes("markQrCameraPermissionAcknowledged"));
+  assert.ok(appJs.includes("renderCameraPermissionNoticeHtml"));
+  assert.ok(appJs.includes("startPortalQrLiveCamera"));
+  assert.ok(appJs.includes("[data-confirm-qr-camera]"));
+  assert.ok(appJs.includes("[data-cancel-qr-camera]"));
+
+  const openFnStart = appJs.indexOf("function openPortalQrScannerModal");
+  const openFnEnd = appJs.indexOf("function renderCustomerPortalView", openFnStart);
+  assert.ok(openFnStart !== -1 && openFnEnd > openFnStart);
+  const openFnBody = appJs.slice(openFnStart, openFnEnd);
+  assert.ok(
+    openFnBody.includes("!hasAcknowledgedQrCameraPermission()"),
+    "openPortalQrScannerModal must check first-time camera rationale acknowledgment before starting camera"
+  );
+  assert.ok(
+    openFnBody.includes("portalQrPermissionNotice") &&
+      openFnBody.includes("return;") &&
+      openFnBody.indexOf("return;") < openFnBody.indexOf("startPortalQrLiveCamera()"),
+    "openPortalQrScannerModal must render permission notice and return without starting camera on first click"
+  );
+
+  // 5. i18n keys present in both EN and HI, and CSS styles present
+  for (const key of [
+    "portalScanQrPermTitle",
+    "portalScanQrPermDesc",
+    "portalScanQrPermPoint1",
+    "portalScanQrPermPoint2",
+    "portalScanQrPermPoint3",
+    "portalScanQrPermAllowBtn",
+    "portalScanQrPermCancelBtn"
+  ]) {
+    assert.ok(i18nMod.TRANSLATIONS.en[key], `Missing EN i18n key: ${key}`);
+    assert.ok(i18nMod.TRANSLATIONS.hi[key], `Missing HI i18n key: ${key}`);
+  }
+  for (const selector of [
+    ".portal-qr-permission-notice",
+    ".portal-qr-permission-card",
+    ".portal-qr-permission-points",
+    ".portal-qr-perm-allow-btn"
+  ]) {
+    assert.ok(css.includes(selector), `styles.css missing permission UI rule: ${selector}`);
+  }
+});
+
+test("My Portal 'Payment History' section fetches past UPI payments from Firestore and renders scrollable list with UTR, amount, date, and verification status", async () => {
+  const payMod = await import(pathToFileURL(path.join(webDir, "js/payment-system.js")).href);
+  const portalMod = await import(pathToFileURL(path.join(webDir, "js/customer-portal.js")).href);
+  const i18nMod = await import(pathToFileURL(path.join(webDir, "js/i18n.js")).href);
+  const firebaseJs = fs.readFileSync(path.join(webDir, "js/firebase.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(webDir, "js/app.js"), "utf8");
+  const css = fs.readFileSync(path.join(webDir, "styles.css"), "utf8");
+
+  // 1. Portal tab registration
+  assert.ok(
+    portalMod.CUSTOMER_PORTAL_TABS.includes("payment-history"),
+    "CUSTOMER_PORTAL_TABS must include payment-history"
+  );
+
+  // 2. Normalization enforces strict UID isolation, strips admin secrets, sorts newest-first, and extracts UTR/amount/date/status
+  const samplePayments = [
+    {
+      id: "pay_old_verified",
+      customerUid: "cust_hist_1",
+      paymentCategory: "model_booking",
+      modelName: "Ananya Verma",
+      serviceType: "Portfolio Shoot",
+      shootDate: "2026-10-12",
+      totalPrice: 12000,
+      requiredAdvance: 4000,
+      paidAmount: 4000,
+      verifiedAmount: 4000,
+      utrNumber: "UTR445566778899",
+      paymentStatus: "Payment Verified",
+      submittedAt: "2026-10-05T11:30:00Z",
+      verifiedAt: "2026-10-05T12:00:00Z",
+      adminNotes: "TOP_SECRET_ADMIN_BANK_NOTE",
+      verifiedByAdminEmail: "chanderstudio0@gmail.com"
+    },
+    {
+      id: "pay_new_pending",
+      customerUid: "cust_hist_1",
+      paymentCategory: "wedding_booking",
+      eventType: "Royal Wedding Film",
+      shootDate: "2026-12-20",
+      totalPrice: 85000,
+      requiredAdvance: 25000,
+      paidAmount: 0,
+      transactionAmount: 25000,
+      utrNumber: "UTR998877665544",
+      paymentStatus: "Submitted for Verification",
+      submittedAt: "2026-11-26T16:45:00Z"
+    },
+    {
+      id: "pay_mid_rejected",
+      customerUid: "cust_hist_1",
+      paymentCategory: "wedding_booking",
+      eventType: "Pre-Wedding Shoot",
+      shootDate: "2026-11-15",
+      totalPrice: 20000,
+      requiredAdvance: 5000,
+      paidAmount: 0,
+      utrNumber: "UTR112233445566",
+      paymentStatus: "Payment Rejected",
+      rejectionReason: "UTR mismatch with bank statement",
+      submittedAt: "2026-11-01T09:15:00Z"
+    },
+    {
+      id: "pay_other_user_leak",
+      customerUid: "cust_other_999",
+      paymentCategory: "wedding_booking",
+      eventType: "OTHER_CUSTOMER_PRIVATE_WEDDING",
+      utrNumber: "UTR_OTHER_USER_SECRET",
+      paidAmount: 99999,
+      paymentStatus: "Fully Paid",
+      submittedAt: "2026-11-27T10:00:00Z"
+    }
+  ];
+
+  const normalized = payMod.normalizeUpiPaymentHistoryItems(samplePayments, "cust_hist_1");
+  assert.equal(normalized.length, 3, "Must exclude payments belonging to other UIDs");
+  assert.equal(normalized[0].id, "pay_new_pending", "Newest transaction must appear first");
+  assert.equal(normalized[1].id, "pay_mid_rejected");
+  assert.equal(normalized[2].id, "pay_old_verified");
+  assert.equal(normalized[0].utrNumber, "UTR998877665544");
+  assert.equal(normalized[0].amount, 25000);
+  assert.equal(normalized[0].verificationBucket, "pending");
+  assert.equal(normalized[1].verificationBucket, "rejected");
+  assert.equal(normalized[2].verificationBucket, "verified");
+  assert.equal(normalized[2].amount, 4000);
+
+  // 3. Status filtering works cleanly
+  assert.equal(payMod.filterPaymentHistoryByStatus(normalized, "all").length, 3);
+  assert.equal(payMod.filterPaymentHistoryByStatus(normalized, "verified").length, 1);
+  assert.equal(payMod.filterPaymentHistoryByStatus(normalized, "pending").length, 1);
+  assert.equal(payMod.filterPaymentHistoryByStatus(normalized, "rejected").length, 1);
+
+  // 4. My Portal renders Payment History tab & scrollable list with UTR, amount, date, and verification status
+  const tEn = (k) => i18nMod.TRANSLATIONS.en[k] || k;
+  const portalHtml = portalMod.renderCustomerPortalHtml({
+    user: { uid: "cust_hist_1", email: "client@example.com", displayName: "Aarav" },
+    payments: samplePayments,
+    activeTab: "payment-history",
+    t: tEn
+  });
+
+  assert.ok(portalHtml.includes('data-portal-tab="payment-history"'));
+  assert.ok(portalHtml.includes('data-portal-panel="payment-history"'));
+  assert.ok(portalHtml.includes('id="portalPaymentHistoryList"'));
+  assert.ok(portalHtml.includes('class="portal-payment-history-scroll"'));
+  assert.ok(portalHtml.includes('role="list"'));
+  assert.ok(portalHtml.includes('data-payment-history-utr="UTR998877665544"'));
+  assert.ok(portalHtml.includes('data-payment-history-utr="UTR445566778899"'));
+  assert.ok(portalHtml.includes('data-payment-history-amount="25000"'));
+  assert.ok(portalHtml.includes('data-payment-history-amount="4000"'));
+  assert.ok(portalHtml.includes('data-payment-history-date='));
+  assert.ok(portalHtml.includes('data-payment-history-status="Payment Verified"'));
+  assert.ok(portalHtml.includes('data-payment-history-status="Submitted for Verification"'));
+  assert.ok(portalHtml.includes('data-payment-history-status="Payment Rejected"'));
+  assert.ok(portalHtml.includes("UTR mismatch with bank statement"));
+  assert.ok(portalHtml.includes('data-refresh-payment-history="true"'));
+  assert.ok(portalHtml.includes('data-copy-history-utr="UTR998877665544"'));
+
+  // Zero cross-customer or admin-secret leaks
+  assert.equal(portalHtml.includes("UTR_OTHER_USER_SECRET"), false);
+  assert.equal(portalHtml.includes("OTHER_CUSTOMER_PRIVATE_WEDDING"), false);
+  assert.equal(portalHtml.includes("TOP_SECRET_ADMIN_BANK_NOTE"), false);
+
+  // Loading & error states render properly
+  const loadingHtml = payMod.renderCustomerPaymentHistoryHtml({
+    payments: [],
+    currentUserUid: "cust_hist_1",
+    isLoading: true,
+    errorMessage: "Temporary network issue",
+    t: tEn
+  });
+  assert.ok(loadingHtml.includes("payment-history-loading-bar"));
+  assert.ok(loadingHtml.includes("Temporary network issue"));
+
+  // 5. Real Firestore fetch implementation in firebase.js & wiring in app.js
+  assert.ok(firebaseJs.includes("export async function fetchMyUpiPaymentHistory("));
+  assert.ok(firebaseJs.includes('fsMod.collection(db, "bookingPayments")'));
+  assert.ok(firebaseJs.includes('fsMod.where("customerUid", "==", targetUid)'));
+  assert.ok(firebaseJs.includes('fsMod.doc(db, "paymentTransactions", canonicalUtr)'));
+  assert.ok(appJs.includes("fetchMyUpiPaymentHistory"));
+  assert.ok(appJs.includes("loadCustomerPaymentHistory"));
+  assert.ok(appJs.includes("[data-payment-history-filter]"));
+  assert.ok(appJs.includes("[data-refresh-payment-history]"));
+  assert.ok(appJs.includes("[data-copy-history-utr]"));
+
+  // 6. EN & HI translations & scrollable CSS rules exist
+  for (const key of [
+    "portalTabPaymentHistory",
+    "portalPayHistorySubtitle",
+    "portalPayHistoryUtrCol",
+    "portalPayHistoryAmountCol",
+    "portalPayHistoryDateCol",
+    "portalPayHistoryStatusCol"
+  ]) {
+    assert.ok(i18nMod.TRANSLATIONS.en[key], `Missing EN key: ${key}`);
+    assert.ok(i18nMod.TRANSLATIONS.hi[key], `Missing HI key: ${key}`);
+  }
+  assert.ok(css.includes(".portal-payment-history-scroll"));
+  assert.ok(css.includes("overflow-y: auto;"));
+  assert.ok(css.includes(".payment-history-row"));
+});
 

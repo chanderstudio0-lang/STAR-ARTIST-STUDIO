@@ -43,6 +43,11 @@ import {
   unmountModelExperienceChart
 } from "./admin-model-experience.js";
 import {
+  PAYMENT_TRENDS_DEFAULT_DAYS,
+  mountPaymentTrendsChart,
+  unmountPaymentTrendsChart
+} from "./admin-payment-trends.js";
+import {
   exportBookingsToCsv,
   applyAdminCsvButtonState,
   runAdminBookingsCsvExport,
@@ -270,6 +275,7 @@ import {
   fetchPaymentSettings,
   adminSavePaymentSettings,
   fetchMyBookingPayments,
+  fetchMyUpiPaymentHistory,
   createModelAdvancePaymentRequest,
   createWeddingBookingPaymentRequest,
   submitCustomerPaymentUtr,
@@ -318,10 +324,24 @@ import {
   DEFAULT_PAYMENT_CONFIG,
   OFFICIAL_STUDIO_UPI_ID,
   buildPrintablePaymentReceiptHtml,
+  formatInrAmount,
   isAllowedPaymentImageFileMeta,
+  isDuplicateUtrError,
   isUploadedQrImageDataUrl,
-  renderAdminPaymentDashboardHtml
+  renderAdminPaymentDashboardHtml,
+  renderDuplicateUtrAlertHtml,
+  verifyQrCode
 } from "./payment-system.js";
+import {
+  buildPrefilledUpiPaymentDetails,
+  buildSafeUpiPayLink,
+  createCameraQrScannerController,
+  decodeQrImageFileForPayment,
+  hasAcknowledgedQrCameraPermission,
+  markQrCameraPermissionAcknowledged,
+  parseUpiPaymentQrDetails,
+  renderCameraPermissionNoticeHtml
+} from "./qr-pay-scanner.js";
 
 const state = {
   lang: localStorage.getItem("star_artist_lang") === "hi" ? "hi" : "en",
@@ -343,6 +363,7 @@ const state = {
   adminTab: "bookings",
   adminQrUploadState: { status: "idle", previewDataUrl: "", fileName: "", error: "", approxKb: 0 },
   adminGrowthChartType: "area",
+  adminPaymentTrendsDays: PAYMENT_TRENDS_DEFAULT_DAYS,
   adminModelExperienceScope: "all",
   adminModelFilter: "pending",
   adminModelSearch: "",
@@ -401,6 +422,10 @@ const state = {
   paymentConfig: { ...DEFAULT_PAYMENT_CONFIG },
   myBookingPayments: [],
   activePaymentForm: "model",
+  portalScannedUpiPayment: null,
+  portalPaymentHistoryFilter: "all",
+  portalPaymentHistoryLoading: false,
+  portalPaymentHistoryError: "",
   adminBookingPayments: [],
   adminPaymentFilter: "all",
   modelRegPortfolioPhotos: [],
@@ -562,6 +587,7 @@ function applyTranslations() {
   if (hasVerifiedAdminSession() && state.route === "admin") {
     renderAdminBookingTracker();
     renderAdminModelGrowthChart();
+    renderAdminPaymentTrendsChart();
     renderAdminConsole();
   }
 }
@@ -574,6 +600,7 @@ function applyTheme() {
   }
   if (hasVerifiedAdminSession() && state.route === "admin") {
     renderAdminModelGrowthChart();
+    renderAdminPaymentTrendsChart();
     if (state.adminTab === "models") {
       renderAdminModelExperienceChart();
     }
@@ -635,6 +662,9 @@ function closeAuthModal() {
 }
 
 function navigateTo(route, { silentBlock = false } = {}) {
+  if (route !== "portal") {
+    closePortalQrScannerModal();
+  }
   const validRoutes = ["home", "portal", "catalog", "booking", "models", "companies", "network", "gallery", "admin"];
   const authenticated = isAuthenticatedMember(state.user);
   const isAdminNow = hasVerifiedAdminSession();
@@ -1462,6 +1492,32 @@ function renderAdminModelGrowthChart() {
   });
 }
 
+function renderAdminPaymentTrendsChart() {
+  const chartHost = document.getElementById("adminPaymentTrendsChartMount");
+  if (!hasVerifiedAdminSession()) {
+    unmountPaymentTrendsChart(chartHost);
+    return;
+  }
+
+  const activeDays = Number(state.adminPaymentTrendsDays) || PAYMENT_TRENDS_DEFAULT_DAYS;
+  document.querySelectorAll("[data-payment-trends-days]").forEach((btn) => {
+    const isActive = Number(btn.getAttribute("data-payment-trends-days")) === activeDays;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  mountPaymentTrendsChart(chartHost, {
+    payments: state.adminBookingPayments || [],
+    metricsEl: document.getElementById("adminPaymentTrendsMetrics"),
+    statusEl: document.getElementById("adminPaymentTrendsStatus"),
+    days: activeDays,
+    theme: state.theme,
+    lang: state.lang,
+    t,
+    escapeHtml
+  });
+}
+
 function renderAdminModelExperienceChart() {
   const chartHost = document.getElementById("adminModelExperienceChartMount");
   if (!hasVerifiedAdminSession()) {
@@ -1702,6 +1758,7 @@ async function loadAdminConsole() {
     state.adminData = { bookings: [], models: [], gallery: [], announcements: [], companies: [], companyBookings: [] };
     state.adminEmailAlerts = [];
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountPaymentTrendsChart(document.getElementById("adminPaymentTrendsChartMount"));
     unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     if (state.route === "admin") {
@@ -1758,6 +1815,7 @@ function renderAdminConsole() {
   if (!hasVerifiedAdminSession()) {
     stopAdminRealtimeTracker();
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountPaymentTrendsChart(document.getElementById("adminPaymentTrendsChartMount"));
     unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
     syncAdminUiVisibility(document, { isAdmin: false });
     return;
@@ -1776,6 +1834,7 @@ function renderAdminConsole() {
 
   renderAdminBookingTracker();
   renderAdminModelGrowthChart();
+  renderAdminPaymentTrendsChart();
 
   const emailAlertSummary = summarizeAdminEmailAlerts({
     alerts: state.adminEmailAlerts,
@@ -2116,7 +2175,7 @@ async function refreshCloudData() {
         fetchMyCustomerSlots(state.user.uid),
         fetchStudioBookedSlots(),
         fetchPaymentSettings(),
-        fetchMyBookingPayments(state.user.uid)
+        fetchMyUpiPaymentHistory(state.user.uid).catch(() => fetchMyBookingPayments(state.user.uid))
       ]);
       if (bookingsRes.status === "fulfilled") state.myBookings = bookingsRes.value;
       if (modelsRes.status === "fulfilled") state.myModels = modelsRes.value;
@@ -2163,6 +2222,10 @@ async function refreshCloudData() {
       state.myCustomerSlots = [];
       state.portalDeniedNotice = "";
       state.portalHighlightedBookingId = "";
+      state.myBookingPayments = [];
+      state.portalPaymentHistoryFilter = "all";
+      state.portalPaymentHistoryLoading = false;
+      state.portalPaymentHistoryError = "";
       state.editingModelId = null;
       state.editModelDraftPhotos = [];
       state.myCompanyProfile = null;
@@ -2305,6 +2368,7 @@ function updateFirebaseUiStatus() {
   }
   if (!isAdminNow) {
     unmountModelGrowthChart(document.getElementById("adminModelGrowthChartMount"));
+    unmountPaymentTrendsChart(document.getElementById("adminPaymentTrendsChartMount"));
     unmountModelExperienceChart(document.getElementById("adminModelExperienceChartMount"));
   }
   syncAdminUiVisibility(document, {
@@ -2773,6 +2837,18 @@ function wireEvents() {
       const nextType = growthChartTypeBtn.getAttribute("data-growth-chart-type") === "bar" ? "bar" : "area";
       state.adminGrowthChartType = nextType;
       renderAdminModelGrowthChart();
+      return;
+    }
+
+    const payTrendsDaysBtn = e.target.closest("[data-payment-trends-days]");
+    if (payTrendsDaysBtn) {
+      if (!hasVerifiedAdminSession()) {
+        showToast(t("adminAccessDeniedToast"));
+        return;
+      }
+      const parsedDays = Number(payTrendsDaysBtn.getAttribute("data-payment-trends-days"));
+      state.adminPaymentTrendsDays = [7, 14, 30].includes(parsedDays) ? parsedDays : PAYMENT_TRENDS_DEFAULT_DAYS;
+      renderAdminPaymentTrendsChart();
       return;
     }
 
@@ -4217,6 +4293,14 @@ function wireEvents() {
   }
 
   window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const qrModal = document.getElementById("portalQrScannerModal");
+      if (qrModal && !qrModal.classList.contains("hidden")) {
+        e.preventDefault();
+        closePortalQrScannerModal();
+        return;
+      }
+    }
     if (e.key === "Escape" && state.activeProfileModelId) {
       const profileModal = document.getElementById("modelProfileModal");
       if (profileModal && !profileModal.classList.contains("hidden")) {
@@ -6733,6 +6817,39 @@ function wireProNetworkEvents() {
         state.portalTab = nextTab;
         state.portalDeniedNotice = "";
         renderCustomerPortalView();
+        if (nextTab === "payment-history") {
+          loadCustomerPaymentHistory();
+        }
+      }
+      return;
+    }
+
+    const payHistoryFilterBtn = e.target.closest("[data-payment-history-filter]");
+    if (payHistoryFilterBtn) {
+      state.portalPaymentHistoryFilter =
+        payHistoryFilterBtn.getAttribute("data-payment-history-filter") || "all";
+      renderCustomerPortalView();
+      return;
+    }
+
+    const refreshPayHistoryBtn = e.target.closest("[data-refresh-payment-history]");
+    if (refreshPayHistoryBtn) {
+      loadCustomerPaymentHistory({ showFeedback: true });
+      return;
+    }
+
+    const copyHistoryUtrBtn = e.target.closest("[data-copy-history-utr]");
+    if (copyHistoryUtrBtn) {
+      const utrValue = copyHistoryUtrBtn.getAttribute("data-copy-history-utr") || "";
+      if (utrValue) {
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(utrValue);
+          }
+          showToast(t("portalPayHistoryUtrCopiedToast"));
+        } catch {
+          showToast(utrValue);
+        }
       }
       return;
     }
@@ -6965,20 +7082,57 @@ function wireProNetworkEvents() {
       e.preventDefault();
       if (!isAuthenticatedMember(state.user)) return;
       const paymentId = utrForm.getAttribute("data-customer-utr-form") || "";
-      const utrNumber = utrForm.querySelector("[name='utrNumber']")?.value || "";
+      const utrInput = utrForm.querySelector("[name='utrNumber']");
+      const utrNumber = utrInput?.value || "";
       const fileInput = utrForm.querySelector("[name='screenshotFile']");
       const errBox = utrForm.querySelector("[data-utr-error-box]");
+      const dupAlertBox = utrForm.querySelector("[data-duplicate-utr-alert-box]");
+      const clearUtrAlerts = () => {
+        if (errBox) {
+          errBox.textContent = "";
+          errBox.classList.add("hidden");
+        }
+        if (dupAlertBox) {
+          dupAlertBox.innerHTML = "";
+          dupAlertBox.classList.add("hidden");
+        }
+        if (utrInput) {
+          utrInput.classList.remove("is-duplicate-utr-input");
+          utrInput.removeAttribute("aria-invalid");
+        }
+      };
       const showUtrError = (msg) => {
+        clearUtrAlerts();
         if (errBox) {
           errBox.textContent = msg;
           errBox.classList.remove("hidden");
         }
         showToast(msg);
       };
-      if (errBox) {
-        errBox.textContent = "";
-        errBox.classList.add("hidden");
-      }
+      const showDuplicateUtrAlert = (err) => {
+        clearUtrAlerts();
+        const alertMsg = err?.message || "This UTR has already been submitted. Please check your transaction reference number.";
+        if (dupAlertBox) {
+          dupAlertBox.innerHTML = renderDuplicateUtrAlertHtml({
+            utrNumber: err?.utrNumber || utrNumber,
+            message: alertMsg,
+            title: t("payDupUtrAlertTitle"),
+            hint: t("payDupUtrAlertHint"),
+            escapeHtml
+          });
+          dupAlertBox.classList.remove("hidden");
+        } else if (errBox) {
+          errBox.textContent = alertMsg;
+          errBox.classList.remove("hidden");
+        }
+        if (utrInput) {
+          utrInput.classList.add("is-duplicate-utr-input");
+          utrInput.setAttribute("aria-invalid", "true");
+          utrInput.focus();
+        }
+        showToast(`${t("payDupUtrAlertTitle")}: ${alertMsg}`);
+      };
+      clearUtrAlerts();
       let screenshotDataUrl = "";
       if (fileInput?.files?.[0]) {
         try {
@@ -6993,7 +7147,11 @@ function wireProNetworkEvents() {
         showToast(state.lang === "hi" ? "UTR सत्यापन हेतु जमा कर दिया गया!" : "UTR submitted for Admin verification!");
         await refreshCloudData();
       } catch (err) {
-        showUtrError(err?.message || "Unable to submit UTR.");
+        if (isDuplicateUtrError(err)) {
+          showDuplicateUtrAlert(err);
+        } else {
+          showUtrError(err?.message || "Unable to submit UTR.");
+        }
       }
       return;
     }
@@ -7018,6 +7176,7 @@ function wireProNetworkEvents() {
         if (errBox) {
           errBox.textContent = cleanMsg;
           errBox.classList.remove("hidden");
+          errBox.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
         }
         showToast(cleanMsg);
       };
@@ -7026,6 +7185,11 @@ function wireProNetworkEvents() {
       const qrFile = document.getElementById("adminUpiQrFile")?.files?.[0];
       let replacedQrInSubmit = false;
       if (qrFile) {
+        const rawQrCheck = await verifyQrCode(qrFile);
+        if (!rawQrCheck.valid) {
+          showQrFormError(rawQrCheck.error);
+          return;
+        }
         try {
           const compressed = await compressPaymentImageFile(qrFile);
           if (compressed !== qrImageDataUrl) {
@@ -7040,6 +7204,19 @@ function wireProNetworkEvents() {
 
       const hasValidSavedQr = isUploadedQrImageDataUrl(qrImageDataUrl);
       const nextUpiId = String(document.getElementById("adminUpiId")?.value || "").trim() || OFFICIAL_STUDIO_UPI_ID;
+      if (hasValidSavedQr) {
+        if (nextUpiId.toLowerCase() !== OFFICIAL_STUDIO_UPI_ID.toLowerCase()) {
+          showQrFormError(
+            `Official Studio UPI ID must remain "${OFFICIAL_STUDIO_UPI_ID}" to match the verified Studio QR code.`
+          );
+          return;
+        }
+        const savedQrCheck = await verifyQrCode(qrImageDataUrl);
+        if (!savedQrCheck.valid) {
+          showQrFormError(savedQrCheck.error);
+          return;
+        }
+      }
       const upiChanged =
         Boolean(state.paymentConfig?.upiId) &&
         nextUpiId.toLowerCase() !== String(state.paymentConfig.upiId).trim().toLowerCase();
@@ -7236,6 +7413,63 @@ function wireProNetworkEvents() {
       return;
     }
 
+    const openQrScanBtn = e.target.closest("[data-open-portal-qr-scanner]");
+    if (openQrScanBtn) {
+      if (!isAuthenticatedMember(state.user)) {
+        showToast(t("portalSignInRequired"));
+        return;
+      }
+      openPortalQrScannerModal();
+      return;
+    }
+
+    const closeQrScanBtn = e.target.closest("#closePortalQrScannerBtn");
+    if (closeQrScanBtn) {
+      closePortalQrScannerModal();
+      return;
+    }
+
+    if (e.target?.id === "portalQrScannerModal") {
+      closePortalQrScannerModal();
+      return;
+    }
+
+    const retryCamBtn = e.target.closest("#portalQrRetryCameraBtn");
+    if (retryCamBtn) {
+      openPortalQrScannerModal({ skipPermissionNotice: true });
+      return;
+    }
+
+    const confirmQrCameraBtn = e.target.closest("[data-confirm-qr-camera]");
+    if (confirmQrCameraBtn) {
+      markQrCameraPermissionAcknowledged();
+      startPortalQrLiveCamera();
+      return;
+    }
+
+    const cancelQrCameraBtn = e.target.closest("[data-cancel-qr-camera]");
+    if (cancelQrCameraBtn) {
+      closePortalQrScannerModal();
+      return;
+    }
+
+    const clearScannedBtn = e.target.closest("[data-clear-scanned-upi]");
+    if (clearScannedBtn) {
+      state.portalScannedUpiPayment = null;
+      renderCustomerPortalView();
+      return;
+    }
+
+    const jumpUtrBtn = e.target.closest("[data-jump-utr-payment-id]");
+    if (jumpUtrBtn) {
+      const payId = jumpUtrBtn.getAttribute("data-jump-utr-payment-id") || "";
+      const card = document.querySelector(`[data-payment-id="${CSS?.escape ? CSS.escape(payId) : payId}"]`);
+      const utrInput = card?.querySelector("input[name='utrNumber']");
+      card?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      utrInput?.focus?.();
+      return;
+    }
+
     const adminPayFilterBtn = e.target.closest("[data-admin-pay-filter]");
     if (adminPayFilterBtn && hasVerifiedAdminSession()) {
       state.adminPaymentFilter = adminPayFilterBtn.getAttribute("data-admin-pay-filter") || "all";
@@ -7358,6 +7592,7 @@ function wireProNetworkEvents() {
       }
       showToast(cleanMsg);
       renderAdminConsole();
+      document.getElementById("adminUpiQrErrorBox")?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
     };
 
     try {
@@ -7372,7 +7607,19 @@ function wireProNetworkEvents() {
         statusBadge.classList.add("is-uploading");
       }
 
+      // Verify original uploaded QR Blob resolves to exact mandated official UPI ID (9812890081@ybl) before compressing/saving
+      const sourceQrCheck = await verifyQrCode(pickedFile);
+      if (!sourceQrCheck.valid) {
+        showQrUploadError(sourceQrCheck.error);
+        return;
+      }
+
       const compressedDataUrl = await compressPaymentImageFile(pickedFile);
+      const compressedQrCheck = await verifyQrCode(compressedDataUrl);
+      if (!compressedQrCheck.valid) {
+        showQrUploadError(compressedQrCheck.error);
+        return;
+      }
       const approxKb = Math.max(1, Math.round((compressedDataUrl.length * 0.75) / 1024));
 
       // Immediately reflect uploaded preview in state & DOM so the "No QR uploaded" warning disappears immediately
@@ -7399,9 +7646,7 @@ function wireProNetworkEvents() {
 
       // Auto-save compressed QR image to Firestore (paymentConfig/paymentSettings) while keeping official UPI ID & existing settings intact
       const currentCfg = state.paymentConfig || DEFAULT_PAYMENT_CONFIG;
-      const preservedUpiId =
-        String(document.getElementById("adminUpiId")?.value || currentCfg.upiId || OFFICIAL_STUDIO_UPI_ID).trim() ||
-        OFFICIAL_STUDIO_UPI_ID;
+      const preservedUpiId = OFFICIAL_STUDIO_UPI_ID;
       const savedConfig = await adminSavePaymentSettings({
         enabled: false,
         upiId: preservedUpiId,
@@ -7437,6 +7682,71 @@ function wireProNetworkEvents() {
       showToast(t("adminPayQrUploadSuccessToast"));
     } catch (err) {
       showQrUploadError(err?.message || "Could not upload selected QR image.");
+    }
+  });
+
+  // Fallback QR Image Picker inside My Portal 'Scan QR to Pay' Modal
+  document.addEventListener("change", async (e) => {
+    const fallbackInput = e.target.closest("#portalQrFallbackFile");
+    if (!fallbackInput) return;
+    const pickedFile = fallbackInput.files?.[0];
+    fallbackInput.value = "";
+    if (!pickedFile) return;
+
+    const statusEl = document.getElementById("portalQrScannerStatus");
+    const errEl = document.getElementById("portalQrScannerError");
+    if (errEl) {
+      errEl.textContent = "";
+      errEl.classList.add("hidden");
+    }
+    if (statusEl) statusEl.textContent = t("portalScanQrDecodingImage");
+
+    const parsed = await decodeQrImageFileForPayment(pickedFile, {
+      expectedUpiId: OFFICIAL_STUDIO_UPI_ID,
+      requireOfficialUpi: true
+    });
+    if (!parsed.valid) {
+      if (errEl) {
+        errEl.textContent = parsed.error;
+        errEl.classList.remove("hidden");
+      }
+      if (statusEl) statusEl.textContent = t("portalScanQrTryAgainHint");
+      showToast(parsed.error);
+      return;
+    }
+    applyScannedUpiPaymentDetails(parsed);
+  });
+
+  // Live sync when customer edits pre-filled Amount or Note inside Scanned UPI Card
+  document.addEventListener("input", (e) => {
+    const amountEl = e.target.closest("#portalScannedPayAmount");
+    const noteEl = e.target.closest("#portalScannedPayNote");
+    if (!amountEl && !noteEl) return;
+    if (!state.portalScannedUpiPayment) return;
+
+    const nextAmtInput = document.getElementById("portalScannedPayAmount");
+    const nextNoteInput = document.getElementById("portalScannedPayNote");
+    const parsedAmt = Math.max(0, Number(nextAmtInput?.value || 0) || 0);
+    const nextNote = String(nextNoteInput?.value || "").trim().slice(0, 120);
+
+    state.portalScannedUpiPayment = {
+      ...state.portalScannedUpiPayment,
+      amount: parsedAmt,
+      note: nextNote,
+      upiDeepLink: buildSafeUpiPayLink({
+        upiId: state.portalScannedUpiPayment.upiId,
+        payeeName: state.portalScannedUpiPayment.payeeName,
+        amount: parsedAmt,
+        note: nextNote,
+        transactionRef: state.portalScannedUpiPayment.transactionRef
+      })
+    };
+
+    const payLinkEl = document.getElementById("portalScannedUpiPayLink");
+    if (payLinkEl) {
+      payLinkEl.setAttribute("href", state.portalScannedUpiPayment.upiDeepLink || "#");
+      const amtSuffix = parsedAmt > 0 ? ` (${formatInrAmount(parsedAmt)})` : "";
+      payLinkEl.textContent = `⚡ ${t("portalScanQrOpenUpiAppBtn")}${amtSuffix}`;
     }
   });
 
@@ -7549,6 +7859,136 @@ function renderBookingSlotCalendar() {
   });
 }
 
+let portalQrScannerController = null;
+
+function closePortalQrScannerModal() {
+  if (portalQrScannerController) {
+    portalQrScannerController.stop();
+    portalQrScannerController = null;
+  }
+  const modal = document.getElementById("portalQrScannerModal");
+  if (modal) {
+    modal.classList.add("hidden");
+  }
+}
+
+function applyScannedUpiPaymentDetails(parsedQr) {
+  const prefilled = buildPrefilledUpiPaymentDetails(parsedQr, {
+    customerPayments: state.myBookingPayments || [],
+    fallbackConfig: state.paymentConfig || DEFAULT_PAYMENT_CONFIG
+  });
+  if (!prefilled) return;
+
+  closePortalQrScannerModal();
+  state.portalScannedUpiPayment = prefilled;
+  state.portalTab = "my-payments";
+  renderCustomerPortalView();
+
+  const toastMsg =
+    prefilled.amount > 0
+      ? t("portalScanQrSuccessAmountToast").replace("{amount}", prefilled.amount.toLocaleString("en-IN"))
+      : t("portalScanQrSuccessToast");
+  showToast(toastMsg);
+
+  setTimeout(() => {
+    const card = document.getElementById("portalScannedUpiCard");
+    card?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, 60);
+}
+
+function startPortalQrLiveCamera() {
+  const permissionEl = document.getElementById("portalQrPermissionNotice");
+  const livePaneEl = document.getElementById("portalQrLiveScannerPane");
+  const videoEl = document.getElementById("portalQrScannerVideo");
+  const canvasEl = document.getElementById("portalQrScannerCanvas");
+  const statusEl = document.getElementById("portalQrScannerStatus");
+  const errEl = document.getElementById("portalQrScannerError");
+
+  if (permissionEl) {
+    permissionEl.classList.add("hidden");
+    permissionEl.innerHTML = "";
+  }
+  if (livePaneEl) {
+    livePaneEl.classList.remove("hidden");
+  }
+  if (errEl) {
+    errEl.textContent = "";
+    errEl.classList.add("hidden");
+  }
+  if (statusEl) {
+    statusEl.textContent = t("portalScanQrStartingCamera");
+  }
+
+  if (portalQrScannerController) {
+    portalQrScannerController.stop();
+    portalQrScannerController = null;
+  }
+
+  portalQrScannerController = createCameraQrScannerController({
+    videoEl,
+    canvasEl,
+    onStatus: (msg) => {
+      if (statusEl) statusEl.textContent = String(msg || "");
+    },
+    onError: (msg) => {
+      const cleanMsg = String(msg || "Unable to access camera.");
+      if (errEl) {
+        errEl.textContent = cleanMsg;
+        errEl.classList.remove("hidden");
+      }
+      if (statusEl) statusEl.textContent = t("portalScanQrTryAgainHint");
+    },
+    onDetected: (rawPayload) => {
+      const parsed = parseUpiPaymentQrDetails(rawPayload, {
+        expectedUpiId: OFFICIAL_STUDIO_UPI_ID,
+        requireOfficialUpi: true
+      });
+      if (!parsed.valid) {
+        if (errEl) {
+          errEl.textContent = parsed.error;
+          errEl.classList.remove("hidden");
+        }
+        if (statusEl) statusEl.textContent = t("portalScanQrTryAgainHint");
+        showToast(parsed.error);
+        return;
+      }
+      applyScannedUpiPaymentDetails(parsed);
+    }
+  });
+
+  portalQrScannerController.start();
+}
+
+function openPortalQrScannerModal({ skipPermissionNotice = false } = {}) {
+  const modal = document.getElementById("portalQrScannerModal");
+  const permissionEl = document.getElementById("portalQrPermissionNotice");
+  const livePaneEl = document.getElementById("portalQrLiveScannerPane");
+  if (!modal) return;
+
+  if (portalQrScannerController) {
+    portalQrScannerController.stop();
+    portalQrScannerController = null;
+  }
+
+  const errorEl = document.getElementById("portalQrScannerError");
+  if (errorEl) {
+    errorEl.textContent = "";
+    errorEl.classList.add("hidden");
+  }
+
+  modal.classList.remove("hidden");
+
+  if (!skipPermissionNotice && !hasAcknowledgedQrCameraPermission() && permissionEl) {
+    permissionEl.innerHTML = renderCameraPermissionNoticeHtml({ t, escapeHtml });
+    permissionEl.classList.remove("hidden");
+    livePaneEl?.classList.add("hidden");
+    document.getElementById("portalQrConfirmCameraBtn")?.focus?.();
+    return;
+  }
+
+  startPortalQrLiveCamera();
+}
+
 function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
   const host = document.getElementById("customerPortalBody");
   if (!host) return;
@@ -7565,6 +8005,9 @@ function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
     });
     if (qp.tab) {
       state.portalTab = qp.tab;
+      if (qp.tab === "payment-history") {
+        queueMicrotask(() => loadCustomerPaymentHistory());
+      }
     }
     state.portalDeniedNotice = "";
     state.portalHighlightedBookingId = "";
@@ -7625,6 +8068,10 @@ function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
     paymentConfig: state.paymentConfig || DEFAULT_PAYMENT_CONFIG,
     publicModels: state.publicModels || [],
     activePaymentForm: state.activePaymentForm || "model",
+    scannedUpiPayment: state.portalScannedUpiPayment,
+    paymentHistoryFilter: state.portalPaymentHistoryFilter || "all",
+    isPaymentHistoryLoading: Boolean(state.portalPaymentHistoryLoading),
+    paymentHistoryError: state.portalPaymentHistoryError || "",
     activeTab: state.portalTab,
     deniedResourceNotice: state.portalDeniedNotice,
     highlightedBookingId: state.portalHighlightedBookingId,
@@ -7637,6 +8084,34 @@ function renderCustomerPortalView({ checkUrlDeepLink = false } = {}) {
     const timeline = document.getElementById("userPrivateChatTimeline");
     if (timeline) timeline.scrollTop = timeline.scrollHeight;
     syncVisibleChatReadReceipts({ asAdmin: false });
+  }
+}
+
+async function loadCustomerPaymentHistory({ showFeedback = false } = {}) {
+  if (!isAuthenticatedMember(state.user)) return;
+  if (state.portalPaymentHistoryLoading) return;
+  state.portalPaymentHistoryLoading = true;
+  state.portalPaymentHistoryError = "";
+  if (state.route === "portal" && state.portalTab === "payment-history") {
+    renderCustomerPortalView();
+  }
+  try {
+    const freshPayments = await fetchMyUpiPaymentHistory(state.user.uid);
+    state.myBookingPayments = Array.isArray(freshPayments) ? freshPayments : [];
+    state.portalPaymentHistoryError = "";
+    if (showFeedback) {
+      showToast(t("portalPayHistoryRefreshedToast"));
+    }
+  } catch (err) {
+    state.portalPaymentHistoryError = err?.message || t("portalPayHistoryLoadError");
+    if (showFeedback) {
+      showToast(state.portalPaymentHistoryError);
+    }
+  } finally {
+    state.portalPaymentHistoryLoading = false;
+    if (state.route === "portal") {
+      renderCustomerPortalView();
+    }
   }
 }
 
@@ -7665,6 +8140,8 @@ async function connectFirebaseCloud() {
       }
 
       if (!authenticated) {
+        state.portalScannedUpiPayment = null;
+        closePortalQrScannerModal();
         clearProtectedStudioViews();
         closeModelProfileModal();
         const openLightbox = document.getElementById("lightboxModal");

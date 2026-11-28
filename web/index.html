@@ -1499,6 +1499,28 @@
           <div id="adminModelGrowthChartMount" class="model-growth-chart-host" role="region" aria-label="Model Growth Recharts visualization"></div>
           <div id="adminModelGrowthStatus" class="model-growth-status"></div>
         </section>
+        <section id="adminPaymentTrendsCard" class="studio-card payment-trends-card" aria-labelledby="adminPaymentTrendsHeading">
+          <div class="model-growth-header">
+            <div>
+              <span class="eyebrow" data-i18n="adminPayTrendsEyebrow">PAYMENT ANALYTICS • DAILY TRENDS</span>
+              <h3 id="adminPaymentTrendsHeading" class="model-growth-title" data-i18n="adminPayTrendsTitle">Payment Trends</h3>
+              <p class="model-growth-subtitle" data-i18n="adminPayTrendsSubtitle">Daily total UPI collection (₹) and successful vs. rejected transaction counts.</p>
+            </div>
+            <div class="model-growth-controls" role="group" aria-label="Payment Trends date range">
+              <button type="button" class="chip-btn" data-payment-trends-days="7" aria-pressed="false" data-i18n="adminPayTrendsRange7d">7D</button>
+              <button type="button" class="chip-btn" data-payment-trends-days="14" aria-pressed="false" data-i18n="adminPayTrendsRange14d">14D</button>
+              <button type="button" class="chip-btn active" data-payment-trends-days="30" aria-pressed="true" data-i18n="adminPayTrendsRange30d">30D</button>
+            </div>
+          </div>
+          <div id="adminPaymentTrendsMetrics" class="payment-trends-kpis"></div>
+          <div class="model-growth-legend" aria-hidden="true">
+            <span class="model-growth-legend-item"><span class="model-growth-dot is-gold"></span><span data-i18n="adminPayTrendsSeriesCollection">Daily Collection (₹)</span></span>
+            <span class="model-growth-legend-item"><span class="model-growth-dot is-emerald"></span><span data-i18n="adminPayTrendsSeriesSuccess">Successful</span></span>
+            <span class="model-growth-legend-item"><span class="model-growth-dot is-crimson"></span><span data-i18n="adminPayTrendsSeriesRejected">Rejected</span></span>
+          </div>
+          <div id="adminPaymentTrendsChartMount" class="payment-trends-chart-host" role="region" aria-label="Payment Trends Recharts visualization"></div>
+          <div id="adminPaymentTrendsStatus" class="model-growth-status"></div>
+        </section>
         <div class="filter-bar">
           <button type="button" class="chip-btn active" data-admin-tab="bookings">
             <span data-i18n="adminTabBookings">Bookings</span>
@@ -1845,6 +1867,52 @@
         <button id="closeModelProfileBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
       </div>
       <div id="modelProfileModalBody"></div>
+    </div>
+  </div>
+
+  <!-- PORTAL CAMERA QR SCANNER MODAL (SCAN QR TO PAY) -->
+  <div id="portalQrScannerModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="portalQrScannerTitle">
+    <div class="modal-card portal-qr-scanner-modal-card">
+      <div class="portal-qr-scanner-head">
+        <div>
+          <span class="eyebrow" data-i18n="portalScanQrModalEyebrow">VERIFIED UPI QR SCANNER</span>
+          <h3 id="portalQrScannerTitle" style="margin: 4px 0 0; color: var(--gold);" data-i18n="portalScanQrModalTitle">Scan QR to Pay</h3>
+        </div>
+        <button id="closePortalQrScannerBtn" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p class="portal-qr-scanner-sub" data-i18n="portalScanQrModalSub">
+        Point your camera at the STAR ARTIST STUDIO UPI QR code (9812890081@ybl) to automatically extract the amount and pre-fill your UPI payment details.
+      </p>
+      <div
+        id="portalQrPermissionNotice"
+        class="portal-qr-permission-notice hidden"
+        role="region"
+        aria-labelledby="portalQrPermissionHeading"
+      ></div>
+      <div id="portalQrLiveScannerPane" class="portal-qr-live-pane">
+        <div class="portal-qr-viewfinder" id="portalQrViewfinder">
+          <video id="portalQrScannerVideo" class="portal-qr-video" autoplay playsinline muted></video>
+          <canvas id="portalQrScannerCanvas" class="hidden" aria-hidden="true"></canvas>
+          <div class="portal-qr-reticle" aria-hidden="true">
+            <span class="portal-qr-scanline"></span>
+          </div>
+        </div>
+        <div id="portalQrScannerStatus" class="portal-qr-status" role="status" aria-live="polite" data-i18n="portalScanQrStartingCamera">
+          Starting camera...
+        </div>
+        <div class="portal-qr-fallback-row">
+          <label class="btn-outline btn-sm portal-qr-upload-label" for="portalQrFallbackFile">
+            <span aria-hidden="true">🖼</span>
+            <span data-i18n="portalScanQrUploadFallbackBtn">Upload QR Image Instead</span>
+          </label>
+          <button id="portalQrRetryCameraBtn" type="button" class="btn-outline btn-sm" data-i18n="portalScanQrRetryCameraBtn">Retry Camera</button>
+        </div>
+      </div>
+      <div id="portalQrScannerError" class="payment-utr-error hidden" role="alert" aria-live="assertive"></div>
+      <input id="portalQrFallbackFile" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" class="hidden" />
+      <p class="upi-security-note" style="margin: 0;" data-i18n="portalScanQrOfficialGuardNote">
+        🔒 Security Check: Only QR codes resolving to official Studio UPI ID (9812890081@ybl) are accepted.
+      </p>
     </div>
   </div>
 
